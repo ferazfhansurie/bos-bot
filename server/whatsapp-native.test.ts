@@ -786,20 +786,55 @@ describe("resolveWhatsAppBrowser", () => {
   const chrome = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
   const base = { platform: "darwin" as const, arch: "arm64", home: "/Users/x", listDir: () => [] as string[] };
 
-  it("prefers the env override, then Google Chrome, then the bundled headless shell, then puppeteer", () => {
+  it("on macOS prefers the env override, then the bundled headless shell, then puppeteer, then Google Chrome", () => {
     expect(resolveWhatsAppBrowser({ ...base, env: { OMB_WHATSAPP_CHROME_PATH: "/opt/chrome" }, exists: () => true }))
       .toEqual({ path: "/opt/chrome", source: "env" });
-    expect(resolveWhatsAppBrowser({ ...base, env: {}, exists: (path) => path === chrome }))
-      .toEqual({ path: chrome, source: "google-chrome" });
-    const bundled = resolveWhatsAppBrowser({ ...base, env: { OMB_RESOURCES_PATH: "/R" }, exists: (path) => path.startsWith("/R/browser-engine") });
+    // Google Chrome is there too, but running it headless locks the person out of their own Chrome
+    const bundled = resolveWhatsAppBrowser({ ...base, env: { OMB_RESOURCES_PATH: "/R" }, exists: (path) => path === chrome || path.startsWith("/R/browser-engine") });
     expect(bundled?.source).toBe("bundled-headless-shell");
     const puppeteer = resolveWhatsAppBrowser({
       ...base,
       env: { PUPPETEER_CACHE_DIR: "/cache" },
-      listDir: () => ["mac_arm-140.0.0.0"],
-      exists: (path) => path.startsWith("/cache/chrome/mac_arm-140.0.0.0/chrome-mac-arm64"),
+      listDir: (dir) => (dir === "/cache/chrome" ? ["mac_arm-140.0.0.0"] : []),
+      exists: (path) => path === chrome || path.startsWith("/cache/chrome/mac_arm-140.0.0.0/chrome-mac-arm64"),
     });
     expect(puppeteer?.source).toBe("puppeteer");
+    expect(resolveWhatsAppBrowser({ ...base, env: {}, exists: (path) => path === chrome }))
+      .toEqual({ path: chrome, source: "google-chrome" });
+  });
+
+  it("keeps Google Chrome first off macOS", () => {
+    const linuxChrome = "/usr/bin/google-chrome";
+    expect(resolveWhatsAppBrowser({ ...base, platform: "linux", arch: "x64", env: { OMB_RESOURCES_PATH: "/R" }, exists: (path) => path === linuxChrome || path.startsWith("/R/") }))
+      .toEqual({ path: linuxChrome, source: "google-chrome" });
+  });
+
+  it("never opens a session profile with a browser a major version older than the one that wrote it", () => {
+    const shell = "/cache/chrome-headless-shell/mac_arm-155.0.8059.84/chrome-headless-shell-mac-arm64/chrome-headless-shell";
+    const lookup = {
+      ...base,
+      env: { OMB_RESOURCES_PATH: "/R", PUPPETEER_CACHE_DIR: "/cache" },
+      profileDir: "/auth/session-bos",
+      readText: (path: string) =>
+        path === "/auth/session-bos/Last Version" ? "155.0.8059.80"
+        : path === "/R/browser-engine/manifest.json" ? JSON.stringify({ chrome: { version: "153.0.8010.47" } })
+        : null,
+    };
+    // the bundled 153 shell is too old for a 155 profile; the cached 155 shell is fine
+    expect(resolveWhatsAppBrowser({
+      ...lookup,
+      listDir: (dir) => (dir === "/cache/chrome-headless-shell" ? ["mac_arm-155.0.8059.84"] : dir === "/cache/chrome" ? ["mac_arm-146.0.7680.153"] : []),
+      exists: (path) => path === chrome || path === shell || path.startsWith("/R/browser-engine") || path.includes("146.0.7680.153/chrome-mac-arm64"),
+    })).toEqual({ path: shell, source: "puppeteer" });
+    // with only older browsers around it stays on Google Chrome, as before
+    expect(resolveWhatsAppBrowser({
+      ...lookup,
+      listDir: (dir) => (dir === "/cache/chrome" ? ["mac_arm-146.0.7680.153"] : []),
+      exists: (path) => path === chrome || path.startsWith("/R/browser-engine") || path.includes("146.0.7680.153/chrome-mac-arm64"),
+    })).toEqual({ path: chrome, source: "google-chrome" });
+    // a fresh session (no Last Version yet) takes the bundled shell
+    expect(resolveWhatsAppBrowser({ ...lookup, readText: () => null, exists: (path) => path === chrome || path.startsWith("/R/browser-engine") })?.source)
+      .toBe("bundled-headless-shell");
   });
 
   it("returns null when nothing exists, including a broken override", () => {

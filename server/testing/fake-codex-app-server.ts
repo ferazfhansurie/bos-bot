@@ -31,6 +31,9 @@
 //   FAKE_CODEX_ACCOUNT_MODE   chatgpt (default) | api-key | none | unsupported | error | hang
 //   FAKE_CODEX_RESUME_ERROR   JSON-RPC error object to reject thread/resume
 //   FAKE_CODEX_START_ERROR    JSON-RPC error object to reject thread/start
+//   FAKE_CODEX_REFUSE_MODEL   model id this "account" cannot use: turns on it fail the way
+//                               a free ChatGPT plan refuses Sol (error notification, then a
+//                               failed turn/completed), and model/list leaves it out
 //   FAKE_CODEX_RESTORED_USAGE report 100/50/10 tokens already used before turn/start, as a resumed thread can
 //   FAKE_CODEX_STEER_ERROR  JSON-RPC error object to reject turn/steer (queue fallback)
 //   FAKE_CODEX_STEER_ERROR_FILE  gate file path: reject turn/steer only while the file exists
@@ -87,6 +90,7 @@ if (process.argv[2] === "login" && process.argv[3] === "status") {
 }
 const calls: Array<{ method: string; params: unknown }> = [];
 let developerInstructions = "";
+let threadModel: string | null = null;
 let resumedThread: string | null = null;
 let decision: unknown = null;
 let experimentalApi = false;
@@ -343,6 +347,7 @@ process.stdin.on("data", (chunk) => {
         break;
       case "thread/resume":
         dump();
+        threadModel = msg.params?.model ?? null;
         developerInstructions = msg.params?.developerInstructions ?? "";
         resumedThread = msg.params?.threadId ?? null;
         if (process.env.FAKE_CODEX_RESUME_ERROR) {
@@ -401,6 +406,7 @@ process.stdin.on("data", (chunk) => {
         break;
       case "thread/start":
         dump();
+        threadModel = msg.params?.model ?? null;
         developerInstructions = msg.params?.developerInstructions ?? "";
         if (process.env.FAKE_CODEX_START_ERROR) {
           out({ jsonrpc: "2.0", id: msg.id, error: JSON.parse(process.env.FAKE_CODEX_START_ERROR) });
@@ -462,6 +468,13 @@ process.stdin.on("data", (chunk) => {
             // digging into the lifetime stderr buffer for a retry excuse.
             process.exit(1);
           }
+        }
+        if (process.env.FAKE_CODEX_REFUSE_MODEL && threadModel === process.env.FAKE_CODEX_REFUSE_MODEL) {
+          out({ jsonrpc: "2.0", id: msg.id, result: { turn: { id: nativeTurnId } } });
+          const message = `{"type":"error","status":400,"error":{"type":"invalid_request_error","message":"The '${threadModel}' model is not supported when using Codex with a ChatGPT account."}}`;
+          notify("error", { error: { message } });
+          notify("turn/completed", { turn: { status: "failed", error: { message } } });
+          break;
         }
         if (mode === "safety-rpc") {
           out({ jsonrpc: "2.0", id: msg.id, error: { code: -32603, message: "HTTP 503: This task was blocked by our safety systems." } });

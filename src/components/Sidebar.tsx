@@ -1,6 +1,7 @@
 import { startResizeDrag } from "@/lib/resize-drag";
 import { Skeleton } from "./Skeleton";
 import { CompactBotThreads } from "./CompactBotThreads";
+import { useRailThreads } from "./RailThreads";
 import { botAvatarProfile } from "../../shared/bot-avatar";
 import { track } from "@/lib/analytics";
 import { OrganizationIdentity } from "./OrganizationIdentity";
@@ -1080,6 +1081,7 @@ export function BotThreadList({ bot, selected, density = "comfortable", query = 
       splitId={canSplitThreads ? threadPaneId(bot.id, task.threadId) : undefined}
       onOpenBeside={canSplitThreads && !(selected && task.threadId === bot.threadId) ? () => openSplit(threadPaneId(bot.id, task.threadId)) : undefined}
       onSelect={() => { if (task.threadId !== bot.threadId) dispatch({ type: "switchTask", botId: bot.id, threadId: task.threadId }); else dispatch({ type: "select", id: bot.id }); }}
+      onPrefetch={bot.remote || bot.homeLink ? undefined : () => dispatch({ type: "prefetchThread", threadId: task.threadId })}
       onRename={(title) => dispatch({ type: "renameTask", botId: bot.id, threadId: task.threadId, title })}
       onDelete={() => dispatch({ type: "deleteTask", botId: bot.id, threadId: task.threadId })}
       onMove={(projectId) => dispatch({ type: "updateTask", botId: bot.id, threadId: task.threadId, patch: { projectId } })}
@@ -1234,6 +1236,8 @@ export function BotListItem({
   const live = useBotActivity(bot);
   const iconOnly = density === "icons";
   const expanded = showThreads && !iconOnly && selected;
+  // icons density: the bot's threads slide out beside its avatar instead
+  const rail = useRailThreads(bot, showThreads && iconOnly && !deleting && !renaming);
   useEffect(() => {
     if (iconOnly) setRenaming(false);
   }, [iconOnly]);
@@ -1380,7 +1384,7 @@ export function BotListItem({
 
   return (
     <>
-    <div className="group relative" title={iconOnly ? bot.name : undefined}>
+    <div className="group relative" title={iconOnly && !showThreads ? bot.name : undefined} {...rail.rowProps}>
       {/* Keep this wrapper mounted while RenameTitle swaps its label for an
           input. Replacing the wrapper tree remounts RenameTitle, loses its
           editing state, and leaves the row stuck in rename mode. Omitting
@@ -1432,6 +1436,7 @@ export function BotListItem({
     </div>
     {/* Keep folder expansion state mounted while the preference is off. The
         hidden list omits its children, including any thread-menu portals. */}
+    {rail.flyout}
     {expanded && <CompactBotThreads key={bot.id} bot={bot} />}
     {showThreads && creatingProject && <BotProjectDialog bot={bot} onClose={() => setCreatingProject(false)} />}
     </>

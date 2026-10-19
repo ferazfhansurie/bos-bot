@@ -123,7 +123,10 @@ it("requests both code palettes for skin-aware highlighting", async () => {
     for (const callback of effects) cleanup.push(callback());
     await vi.waitFor(() => expect(codeToHtml).toHaveBeenCalledWith("Palette regression sample", {
       lang: "text",
-      themes: { light: "github-light-default", dark: "github-dark-default" },
+      themes: {
+        light: expect.objectContaining({ name: "bos-code-light", type: "light" }),
+        dark: expect.objectContaining({ name: "bos-code-dark", type: "dark" }),
+      },
       defaultColor: "light-dark()",
     }));
   } finally {
@@ -251,7 +254,7 @@ describe("ChatMarkdown attachments", () => {
       text: "[macOS](file:///Users/milind/report.md) [Windows](C:/Users/Maus/report.md)",
       message: { threadId: "thread-1", messageId: "message-1" },
     }));
-    expect(html).toContain('title="Save a copy"');
+    expect(html).toContain('title="open file"');
     expect(html).not.toContain("/Users/milind/report.md");
     expect(html).not.toContain("C:/Users/Maus/report.md");
   });
@@ -264,7 +267,7 @@ describe("ChatMarkdown attachments", () => {
         text: "[Report](C:\\Users\\Maus\\.openmausbot\\report.md)\n\n![Chart](C:\\Users\\Maus\\.openmausbot\\chart.png)",
         message: { threadId: "thread-1", messageId: "message-1" },
       }));
-      expect(html).toContain('title="Save a copy"');
+      expect(html).toContain('title="open file"');
       expect(html).not.toContain('href=""');
       expect(html).not.toContain("Image unavailable");
       expect(save.mock.calls[0]?.[0]).toBe("C:\\Users\\Maus\\.openmausbot\\report.md");
@@ -286,12 +289,12 @@ describe("ChatMarkdown attachments", () => {
     expect(html).not.toContain("type=\"button\"");
   });
 
-  it("makes a message-authorized file link downloadable", () => {
+  it("makes a message-authorized file link open in the file viewer", () => {
     const html = renderToStaticMarkup(createElement(ChatMarkdown, {
       text: "[Download the report](/workspace/final-report.pdf)",
       message: { threadId: "thread-1", messageId: "message-1" },
     }));
-    expect(html).toContain('title="Save a copy"');
+    expect(html).toContain('title="open file"');
     expect(html).not.toContain("/workspace/final-report.pdf");
     expect(html).toContain("type=\"button\"");
   });
@@ -322,18 +325,16 @@ describe("ChatMarkdown code blocks", () => {
   it.each([
     ["tsx", "TypeScript (TSX)"],
     ["averylongunknownlanguageidentifier", "Averylongunknownlanguageidentifier"],
-  ])("lets the %s badge shrink without wrapping the count or controls", (lang, label) => {
+  ])("lets the %s label shrink without wrapping the controls", (lang, label) => {
     const html = renderToStaticMarkup(createElement(CodeBlock, {
       code: "first\nsecond", lang, streaming: false,
     }));
     const badge = html.match(/<span[^>]*title="[^"]*"[^>]*>/)?.[0];
-    expect(badge).toContain(`title="${label}"`);
+    expect(badge).toContain(`title="${label} · 2 lines"`);
     expect(badge).toContain("min-w-0 truncate");
-    expect(html).toContain("flex min-w-0 flex-1 items-center gap-2");
-    expect(html).toMatch(/<span class="[^"]*shrink-0 whitespace-nowrap[^"]*">2 lines<\/span>/);
-    expect(html).toContain("flex shrink-0 items-center gap-1 whitespace-nowrap");
+    expect(html).toContain("ms-auto flex shrink-0 items-center");
     expect(html).toContain('aria-label="Copy code to clipboard"');
-    expect(html).toContain('aria-label="Wrap long lines"');
+    expect(html).toContain('aria-label="Enable word wrap"');
   });
 
   it.each([["c++", "C++"], ["c#", "C#"]])("preserves punctuation in the %s fence label", (lang, label) => {
@@ -359,7 +360,7 @@ describe("ChatMarkdown code blocks", () => {
     expect(html).toContain("TypeScript");
     expect(html).toContain("2 lines");
     expect(html).toContain('aria-label="Copy code to clipboard"');
-    expect(html).toContain('aria-label="Wrap long lines"');
+    expect(html).toContain('aria-label="Enable word wrap"');
     expect(html).toContain('aria-label="Download snippet as file"');
     expect(html).toContain('title="Copy code"');
     expect(html).toContain('title="Download snippet as file"');
@@ -390,7 +391,7 @@ describe("ChatMarkdown code blocks", () => {
     expect(html).toContain("Python");
     expect(html).toContain("4 lines");
     expect(html).toContain('aria-label="Copy code to clipboard"');
-    expect(html).toContain('aria-label="Wrap long lines"');
+    expect(html).toContain('aria-label="Enable word wrap"');
     expect(html).toContain('aria-label="Download snippet as file"');
     expect(html).toContain("line1\nline2\nline3");
   });
@@ -442,11 +443,11 @@ describe("bidi: message content carries its own direction", () => {
       ].join("\n"),
     }));
 
-    expect(html).toContain('<div dir="rtl" class="mt-2 text-[16px] font-semibold">');
-    expect(html).toContain('<p dir="rtl">');
-    expect(html).toContain('<p dir="ltr">An English paragraph');
+    expect(html).toContain('<div data-md="h1" role="heading" aria-level="1" dir="rtl" class="mt-2 text-[16px] font-semibold">');
+    expect(html).toContain('<p data-md="p" dir="rtl">');
+    expect(html).toContain('<p data-md="p" dir="ltr">An English paragraph');
     expect(html).toContain('<blockquote dir="rtl"');
-    expect(html).toContain('<ul dir="rtl"');
+    expect(html).toContain('<ul data-md="ul" dir="rtl"');
     expect(html).toContain('<table dir="rtl"');
   });
 
@@ -465,7 +466,7 @@ describe("bidi: message content carries its own direction", () => {
     const html = renderToStaticMarkup(createElement(ChatMarkdown, {
       text: `\`fs.readFileSync\` ${ARABIC} داخل الحلقة`,
     }));
-    expect(html).toContain('<p dir="rtl">');
+    expect(html).toContain('<p data-md="p" dir="rtl">');
   });
 
   it("uses logical box properties so indents and rules follow the text", () => {
@@ -562,7 +563,7 @@ describe("streamed word fade", () => {
     const html = renderToStaticMarkup(createElement(ChatMarkdown, {
       text: "first block here\n\nsecond @Atlas `code bit` end", streaming: true, mentionPeers: [{ name: "Atlas" }],
     }));
-    expect(html).toContain("<p dir=\"ltr\">first block here</p>");
+    expect(html).toContain(`<p data-md="p" dir="ltr">first block here</p>`);
     expect(html.match(/class="stream-word"/g)).toHaveLength(2);
     expect(html).toContain('<span class="mention-highlight">@Atlas</span>');
     expect(html).toContain(">code bit</code>");
@@ -573,3 +574,22 @@ describe("streamed word fade", () => {
   });
 });
 // branding compatibility (electron/branding-compat.json): data-home: existing desktop and companion homes, backups and lease recovery must open the same data; pairing: old QR codes remain readable; server emission stays old until both native apps have shipped support
+
+describe("chatgpt-style links and maths", () => {
+  it("shows footnote and bare-domain links as domain pills, keeps real links", () => {
+    const html = renderToStaticMarkup(createElement(ChatMarkdown, {
+      text: "per the docs [1](https://www.example.com/a) and [example.com](https://example.com/b), see [the guide](https://example.com/c) or https://example.com/d",
+    }));
+    expect(html.match(/data-testid="citation-pill"/g)).toHaveLength(2);
+    expect(html).toContain(">example.com</span></a>");
+    expect(html).toContain(">the guide</a>");
+    expect(html).toContain(">https://example.com/d</a>");
+  });
+
+  it("renders backslash and double-dollar maths, never single dollars", () => {
+    const html = renderToStaticMarkup(createElement(ChatMarkdown, { text: "area \\(\\pi r^2\\) costs $5 and $10\n\n$$\nE = mc^2\n$$" }));
+    expect(html.match(/class="katex"/g)?.length).toBe(2);
+    expect(html).toContain("katex-display");
+    expect(html).toContain("costs $5 and $10");
+  });
+});

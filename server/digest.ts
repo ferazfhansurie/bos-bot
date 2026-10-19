@@ -106,7 +106,16 @@ function boundFiles(files: DigestFiles): DigestFiles {
   const changed = take(files.changed);
   const added = take(files.added);
   const deleted = take(files.deleted);
-  return { changed, added, deleted, ...(truncated > 0 ? { truncated } : {}) };
+  const kept = new Set([...changed, ...added, ...deleted]);
+  const lines = files.lines
+    ? Object.fromEntries(Object.entries(files.lines).filter(([path]) => kept.has(path)))
+    : undefined;
+  return {
+    changed, added, deleted,
+    ...(truncated > 0 ? { truncated } : {}),
+    ...(lines && Object.keys(lines).length ? { lines } : {}),
+    ...(files.checkpoint ? { checkpoint: files.checkpoint } : {}),
+  };
 }
 
 function firstSentence(reply: string): string {

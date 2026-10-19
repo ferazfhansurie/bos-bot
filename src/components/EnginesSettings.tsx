@@ -202,6 +202,24 @@ function CustomPicker({ instance, cliDefault, onClose, onSaved }: {
   );
 }
 
+/** The Codex CLI BOS Bot installed itself: which version runs, and that it
+ * keeps itself current. */
+function ManagedRuntimeLine({ runtime }: { runtime: NonNullable<InstanceInfo["managedRuntime"]> }) {
+  return (
+    <div className="mt-2 text-[12px] leading-relaxed text-ink-secondary">
+      <p className="flex items-center gap-1.5">
+        <RefreshCw size={12} className="shrink-0" />
+        {runtime.version
+          ? t("engines.managedRuntime", { version: runtime.version })
+          : t("engines.managedRuntimeInstalling")}
+      </p>
+      {runtime.pending && runtime.pending !== runtime.version && (
+        <p className="mt-0.5 text-[11.5px] text-ink-secondary/80">{t("engines.managedRuntimePending", { version: runtime.pending })}</p>
+      )}
+    </div>
+  );
+}
+
 function EngineRow({ instance }: { instance: InstanceInfo }) {
   const { refreshInstances } = useStore();
   const [open, setOpen] = useState(false);
@@ -276,6 +294,7 @@ function EngineRow({ instance }: { instance: InstanceInfo }) {
       {instance.snapshot.update && <EngineUpdateNotice update={instance.snapshot.update} instance={instance} className="mt-3" />}
       {instance.snapshot.warning && <EngineWarningNotice warning={instance.snapshot.warning} className="mt-3" />}
       {instance.claudeAccount && <ClaudeAccountSettings instance={instance} />}
+      {instance.managedRuntime && <ManagedRuntimeLine runtime={instance.managedRuntime} />}
       {engineReady(instance) && instance.snapshot.authenticated === true && (
         instance.authentication?.method === "device-code"
           ? <CodexAccountSettings instance={instance} />

@@ -20,9 +20,12 @@ import { parseChartSpec } from "./rich-chart";
 import { parseStats, StatCards } from "./RichStats";
 import { ARTIFACT_LANGS, HtmlArtifact } from "./HtmlArtifact";
 import { rehypeNumericColumns } from "../lib/rich-table";
-import { memo, useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { lazy, memo, Suspense, useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import Markdown, { defaultUrlTransform } from "react-markdown";
 import remarkGfm from "remark-gfm";
+import remarkMath from "remark-math";
+import rehypeKatex from "rehype-katex";
+import "katex/dist/katex.min.css";
 import { Check, Copy, Download, FolderTree, LoaderCircle, RotateCcw, WrapText } from "lucide-react";
 import { remarkMentions, type MentionPeer } from "@/lib/mentions";
 
@@ -34,6 +37,7 @@ import {
   getSnippetFileName,
 } from "../lib/code-block";
 import { repairMarkdownTables } from "../lib/markdown-tables";
+import { normalizeMathDelimiters } from "../lib/math-delimiters";
 import { windowsPathDestinations } from "../../shared/markdown-windows-paths";
 import { looksLikeThreadRefUrl, parseThreadRefUrl, resolveThreadRefAddress, remarkThreadRefs } from "../lib/thread-refs";
 import { MarkdownImagePreview, useLocalFileSave, type MessageAttachmentContext } from "./AttachmentPreview";
@@ -41,6 +45,7 @@ import { ThreadLink, threadLinkFromProps, useThreadRefs } from "./ThreadRefs";
 import { RowContextMenu, openRowMenu, type RowMenuAt } from "./RowContextMenu";
 import { openInItems } from "./workspace/open-in";
 import { useWorkspace } from "./workspace/WorkspaceContext";
+import { linkedFilePath } from "@/lib/file-preview";
 
 // tiny highlight cache so revisiting a thread doesn't re-tokenize settled
 // blocks; keys are content-hashed and capped. Streamed partials may land here
@@ -53,6 +58,33 @@ const CACHE_MAX = 200;
 // tokenize on it — long enough to skip per-token churn mid-fence, short
 // enough that the highlight lands before the stream settles
 const STREAM_SETTLE_MS = 250;
+
+// Our own two-colour-scheme code palette. It matches the token colours of
+// chatgpt desktop's code blocks (comment grey, green strings, blue numbers,
+// orange variables, red keywords, purple functions); the scope lists are ours.
+function codeTheme(type: "dark" | "light", c: Record<"bg" | "fg" | "comment" | "string" | "number" | "variable" | "keyword" | "fn", string>) {
+  return {
+    name: `bos-code-${type}`,
+    type,
+    colors: { "editor.background": c.bg, "editor.foreground": c.fg },
+    tokenColors: [
+      { settings: { foreground: c.fg } },
+      { scope: ["comment", "punctuation.definition.comment"], settings: { foreground: c.comment } },
+      { scope: ["keyword.operator", "punctuation.separator", "punctuation.terminator"], settings: { foreground: c.comment } },
+      { scope: ["string", "string.template", "punctuation.definition.string", "markup.inline.raw"], settings: { foreground: c.string } },
+      { scope: ["constant.numeric", "constant.language", "constant.language.boolean", "support.constant"], settings: { foreground: c.number } },
+      { scope: ["variable", "variable.other", "variable.parameter", "variable.other.property", "support.variable", "meta.object-literal.key", "constant", "entity.name.namespace", "entity.other.attribute-name"], settings: { foreground: c.variable } },
+      { scope: ["keyword", "storage", "storage.type", "storage.modifier", "keyword.control", "entity.name.tag"], settings: { foreground: c.keyword } },
+      { scope: ["entity.name.function", "support.function", "meta.function-call", "entity.name.type", "entity.name.class", "support.type", "support.class", "entity.other.inherited-class"], settings: { foreground: c.fn } },
+      { scope: ["markup.heading", "markup.bold"], settings: { fontStyle: "bold" } },
+      { scope: ["markup.italic"], settings: { fontStyle: "italic" } },
+      { scope: ["markup.inserted"], settings: { foreground: c.string } },
+      { scope: ["markup.deleted"], settings: { foreground: c.keyword } },
+    ],
+  };
+}
+const CODE_THEME_DARK = codeTheme("dark", { bg: "#111111", fg: "#fcfcfc", comment: "#999999", string: "#85df7b", number: "#6dcbf4", variable: "#fa994c", keyword: "#f67576", fn: "#b06dff" });
+const CODE_THEME_LIGHT = codeTheme("light", { bg: "#ffffff", fg: "#0d0d0d", comment: "#666666", string: "#008809", number: "#0071ea", variable: "#bd5800", keyword: "#d53538", fn: "#751ed9" });
 const hash = (s: string) => {
   let h = 0x811c9dc5;
   for (let i = 0; i < s.length; i++) {
@@ -233,10 +265,7 @@ export function CodeBlock({ code, lang, streaming }: CodeBlockProps) {
         .then((shiki) =>
           shiki.codeToHtml(code, {
             lang: lang || "text",
-            themes: {
-              light: "github-light-default",
-              dark: "github-dark-default",
-            },
+            themes: { light: CODE_THEME_LIGHT, dark: CODE_THEME_DARK },
             defaultColor: "light-dark()",
           }),
         )
@@ -295,78 +324,57 @@ export function CodeBlock({ code, lang, streaming }: CodeBlockProps) {
 
   // Code reads left-to-right whatever language surrounds it, so the block pins
   // its own direction rather than inheriting the message's.
+  const action = "chat-ghost inline-flex size-7 items-center justify-center rounded-lg";
   return (
-    <div dir="ltr" className="my-2 overflow-hidden rounded-lg border border-hairline/40 bg-inset">
-      <div className="flex items-center justify-between gap-2 border-b border-hairline/30 bg-raised/30 px-3 py-1.5 text-xs">
-        <div className="flex min-w-0 flex-1 items-center gap-2">
-          <span title={displayLanguage} className="min-w-0 truncate rounded border border-hairline/40 bg-raised px-1.5 py-0.5 text-[11px] font-medium tracking-wide text-ink select-none">
-            {displayLanguage}
-          </span>
-          {lineCount > 0 && (
-            <span className="shrink-0 whitespace-nowrap text-[11px] text-ink-secondary select-none">
-              {formatLineCount(lineCount)}
-            </span>
-          )}
-        </div>
-        <div className="flex shrink-0 items-center gap-1 whitespace-nowrap">
+    <div dir="ltr" data-md="code" className="chat-code">
+      <div className="flex min-h-12 items-center gap-2 py-1.5 ps-4 pe-1.5 text-sm font-medium select-none">
+        <span title={lineCount > 0 ? `${displayLanguage} · ${formatLineCount(lineCount)}` : displayLanguage} className="min-w-0 truncate text-ink">
+          {displayLanguage}
+        </span>
+        <div className="ms-auto flex shrink-0 items-center gap-0.5">
+          <button
+            type="button"
+            onClick={copy}
+            className={action}
+            title={copied ? "Copied" : "Copy code"}
+            aria-label={copied ? "Code copied to clipboard" : "Copy code to clipboard"}
+          >
+            {copied ? <Check size={14} aria-hidden="true" /> : <Copy size={14} aria-hidden="true" />}
+          </button>
           <button
             type="button"
             onClick={() => setWrapLines((w) => !w)}
-            className={`inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] transition-colors ${
-              wrapLines
-                ? "bg-accent/15 text-accent font-medium"
-                : "text-ink-secondary hover:bg-raised hover:text-ink"
-            }`}
-            title={wrapLines ? "Disable line wrapping" : "Wrap long lines"}
-            aria-label={wrapLines ? "Disable line wrapping" : "Wrap long lines"}
+            className={action}
+            data-active={wrapLines || undefined}
+            title={wrapLines ? "Disable word wrap" : "Enable word wrap"}
+            aria-label={wrapLines ? "Disable word wrap" : "Enable word wrap"}
             aria-pressed={wrapLines}
           >
-            <WrapText size={12} aria-hidden="true" />
-            <span className="hidden sm:inline">{wrapLines ? "Unwrap" : "Wrap"}</span>
+            <WrapText size={14} aria-hidden="true" />
           </button>
           <button
             type="button"
             onClick={download}
-            className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] text-ink-secondary hover:bg-raised hover:text-ink transition-colors"
+            className={action}
             title="Download snippet as file"
             aria-label="Download snippet as file"
           >
-            <Download size={12} aria-hidden="true" />
-            <span className="hidden sm:inline">Save</span>
-          </button>
-          <button
-            type="button"
-            onClick={copy}
-            className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] text-ink-secondary hover:bg-raised hover:text-ink transition-colors"
-            title={copied ? "Copied to clipboard" : "Copy code"}
-            aria-label={copied ? "Code copied to clipboard" : "Copy code to clipboard"}
-          >
-            {copied ? (
-              <>
-                <Check size={12} className="text-success" aria-hidden="true" />
-                <span className="text-success font-medium hidden sm:inline">Copied!</span>
-              </>
-            ) : (
-              <>
-                <Copy size={12} aria-hidden="true" />
-                <span className="hidden sm:inline">Copy</span>
-              </>
-            )}
+            <Download size={14} aria-hidden="true" />
           </button>
         </div>
       </div>
       {html ? (
         <div
-          className={`text-[13px] leading-relaxed [&_pre]:!bg-transparent [&_pre]:m-0 [&_pre]:p-3 ${
+          className={`px-4 pt-0 pb-3 [&_pre]:m-0 [&_pre]:p-0 ${
             wrapLines
-              ? "whitespace-pre-wrap break-words overflow-x-hidden [&_pre]:!whitespace-pre-wrap [&_pre]:!break-words [&_code]:!whitespace-pre-wrap [&_code]:!break-words"
+              ? "overflow-x-hidden [&_pre]:!whitespace-pre-wrap [&_pre]:!break-words [&_code]:!whitespace-pre-wrap [&_code]:!break-words"
               : "overflow-x-auto"
           }`}
           dangerouslySetInnerHTML={{ __html: html }}
         />
       ) : (
         <pre
-          className={`p-3 text-[13px] leading-relaxed text-ink ${
+          className={`m-0 px-4 pt-0 pb-3 text-ink ${
             wrapLines
               ? "whitespace-pre-wrap break-words overflow-x-hidden"
               : "overflow-x-auto"
@@ -385,14 +393,20 @@ export function CodeBlock({ code, lang, streaming }: CodeBlockProps) {
 const PATH_LIKE = /^(?:~?\/|\.{1,2}\/)?(?:[\w@.+-]+\/)*[\w@+-][\w@.+-]*\.(?:md|mdx|txt|json|ya?ml|toml|csv|sql|html?|css|scss|[cm]?[jt]sx?|py|go|rs|rb|php|java|kt|swift|c|h|cpp|sh|pdf|png|jpe?g|gif|svg|webp)$/i;
 function CodePath({ path, threadId }: { path: string; threadId: string }) {
   const workspace = useWorkspace();
+  const [viewing, setViewing] = useState(false);
   const className = "rounded bg-inset px-1 py-px text-[13px] break-words [unicode-bidi:isolate]";
   if (!workspace.available) return <code dir="ltr" className={className}>{path}</code>;
   return (
-    <code dir="ltr" role="link" tabIndex={0} title="open in files" className={`${className} cursor-pointer decoration-ink-secondary/50 underline-offset-2 hover:underline`}
-      onClick={() => void workspace.openFile(path, threadId)}
-      onKeyDown={(event) => { if (event.key === "Enter") void workspace.openFile(path, threadId); }}>{path}</code>
+    <>
+      <code dir="ltr" role="link" tabIndex={0} title="open file" className={`${className} cursor-pointer decoration-ink-secondary/50 underline-offset-2 hover:underline`}
+        onClick={() => setViewing(true)}
+        onKeyDown={(event) => { if (event.key === "Enter") setViewing(true); }}>{path}</code>
+      {viewing && <Suspense fallback={null}><FileViewerDialog path={path} threadId={threadId} onClose={() => setViewing(false)} /></Suspense>}
+    </>
   );
 }
+
+const FileViewerDialog = lazy(() => import("./FileViewerDialog"));
 
 // Two reasons the href is dropped rather than merely preventDefault()ed:
 // an absolute path in an href resolves against the page origin, so the link
@@ -404,6 +418,7 @@ function LocalFileLink({ filePath, children, message }: { filePath: string; chil
   const save = useLocalFileSave(filePath, undefined, message);
   const workspace = useWorkspace();
   const [menuAt, setMenuAt] = useState<RowMenuAt | null>(null);
+  const [viewing, setViewing] = useState(false);
   const closeMenu = useCallback(() => setMenuAt(null), []);
   if (!message) {
     return <span title="Unavailable legacy file reference" className="break-words text-ink-secondary">{children}</span>;
@@ -420,15 +435,12 @@ function LocalFileLink({ filePath, children, message }: { filePath: string; chil
     <span dir="ltr" className="inline-flex flex-wrap items-center gap-x-1.5 [unicode-bidi:isolate]">
       <button
         type="button"
-        onClick={() => {
-          // inside the thread's working folder it opens in the files tab;
-          // anything else is saved as before
-          if (!workspace.available) { void save.save(); return; }
-          void workspace.openFile(filePath, message.threadId).then((opened) => { if (!opened) void save.save(); });
-        }}
-        onContextMenu={workspace.available ? (event) => openRowMenu(event, setMenuAt) : undefined}
+        // the file opens in a viewer over the chat, on desktop and web; the
+        // files tab, the default app and saving are one click away in it
+        onClick={() => setViewing(true)}
+        onContextMenu={(event) => openRowMenu(event, setMenuAt)}
         disabled={save.state === "saving"}
-        title={workspace.available ? "open in files" : "Save a copy"}
+        title="open file"
         className="inline-flex items-center gap-1 break-words text-start text-accent underline decoration-accent/40 hover:decoration-accent disabled:cursor-wait"
       >
         {children}
@@ -438,14 +450,13 @@ function LocalFileLink({ filePath, children, message }: { filePath: string; chil
           <Check size={12} className="shrink-0 text-success" aria-hidden="true" />
         ) : save.state === "failed" ? (
           <RotateCcw size={12} className="shrink-0" aria-hidden="true" />
-        ) : workspace.available ? null : (
-          <Download size={12} className="shrink-0" aria-hidden="true" />
-        )}
+        ) : null}
       </button>
+      {viewing && <Suspense fallback={null}><FileViewerDialog path={filePath} message={message} threadId={message.threadId} onClose={() => setViewing(false)} /></Suspense>}
       {menuAt && (
         <RowContextMenu at={menuAt} label="file" onClose={closeMenu} items={[
-          { key: "files", label: "open in files", icon: <FolderTree size={15} />, onSelect: () => void workspace.openFile(filePath, message.threadId) },
-          ...(filePath.startsWith("/") || /^[a-z]:[\\/]/i.test(filePath) ? openInItems(filePath) : []),
+          ...(workspace.available ? [{ key: "files", label: "open in files", icon: <FolderTree size={15} />, onSelect: () => void workspace.openFile(linkedFilePath(filePath), message.threadId) }] : []),
+          ...(filePath.startsWith("/") || /^[a-z]:[\\/]/i.test(filePath) ? openInItems(linkedFilePath(filePath)) : []),
           { key: "save", label: "save a copy", icon: <Download size={15} />, onSelect: () => void save.save() },
         ]} />
       )}
@@ -556,6 +567,8 @@ function wrapWords(node: StreamHastNode) {
   });
 }
 const STREAM_REHYPE = [rehypeStreamWords];
+const MATH_REMARK: [typeof remarkMath, { singleDollarTextMath: boolean }] = [remarkMath, { singleDollarTextMath: false }];
+const KATEX_REHYPE: [typeof rehypeKatex, { throwOnError: boolean; strict: "ignore" }] = [rehypeKatex, { throwOnError: false, strict: "ignore" }];
 
 // Words that mount in the same frame are one streamed chunk; each lands
 // 50ms after the one before it. Capped so a long first paint never lags
@@ -577,6 +590,20 @@ function StreamWord({ children }: { children?: ReactNode }) {
   return <span className="stream-word" style={delay ? { animationDelay: `${delay}ms` } : undefined}>{children}</span>;
 }
 
+/** A link whose text is only a footnote number, its own url or its own
+ * domain is a citation: chatgpt shows those as a small domain pill instead of
+ * a raw link. Anything with real link text stays a link. */
+export function citationLabel(href: string | undefined, children: ReactNode): string | null {
+  if (!href || !/^https?:\/\//i.test(href)) return null;
+  const text = (Array.isArray(children) ? children : [children]).map((child) => typeof child === "string" || typeof child === "number" ? String(child) : "\0").join("").trim();
+  if (!text || text.includes("\0")) return null;
+  let host: string;
+  try { host = new URL(href).hostname.replace(/^www\./, ""); } catch { return null; }
+  const bare = (value: string) => value.replace(/^https?:\/\//i, "").replace(/^www\./, "").replace(/\/$/, "").toLowerCase();
+  if (/^\[?\d{1,3}\]?$/.test(text) || bare(text) === host.toLowerCase()) return host;
+  return null;
+}
+
 function ChatMarkdownComponent({ text, streaming = false, message, mentionPeers = NO_MENTION_PEERS, everyone = false }: {
   text: string; streaming?: boolean; message?: MessageAttachmentContext;
   mentionPeers?: readonly MentionPeer[]; everyone?: boolean;
@@ -587,12 +614,12 @@ function ChatMarkdownComponent({ text, streaming = false, message, mentionPeers 
   // A near-miss table from a model renders as an unreadable run of pipes
   // unless it is repaired before parsing. The repair moves source offsets, so
   // a message carrying an image opts out and keeps its text verbatim.
-  const source = text.includes(MARKDOWN_IMAGE) ? text : repairMarkdownTables(text);
+  const source = text.includes(MARKDOWN_IMAGE) ? text : normalizeMathDelimiters(repairMarkdownTables(text));
   return (
     <div className="chat-md min-w-0 [&>*+*]:mt-2">
       <Markdown
-        remarkPlugins={[remarkGfm, remarkWindowsPathDestinations, unwrapLinkedImages, [remarkMentions, { peers: mentionPeers, everyone }], remarkThreadRefs(threads, currentBotId)]}
-        rehypePlugins={streaming ? [rehypeNumericColumns, ...STREAM_REHYPE] : [rehypeNumericColumns]}
+        remarkPlugins={[remarkGfm, MATH_REMARK, remarkWindowsPathDestinations, unwrapLinkedImages, [remarkMentions, { peers: mentionPeers, everyone }], remarkThreadRefs(threads, currentBotId)]}
+        rehypePlugins={streaming ? [rehypeNumericColumns, ...STREAM_REHYPE, KATEX_REHYPE] : [rehypeNumericColumns, KATEX_REHYPE]}
         urlTransform={chatUrlTransform}
         components={{
           pre({ children }: { children?: ReactNode }) {
@@ -643,7 +670,7 @@ function ChatMarkdownComponent({ text, streaming = false, message, mentionPeers 
             // where the line ends.
             if (typeof children === "string" && message && PATH_LIKE.test(children)) return <CodePath path={children} threadId={message.threadId} />;
             return (
-              <code dir="ltr" className="rounded bg-inset px-1 py-px text-[13px] break-words [unicode-bidi:isolate]">{children}</code>
+              <code dir="ltr" className="chat-inline-code rounded bg-inset px-1 py-px text-[13px] break-words [unicode-bidi:isolate]">{children}</code>
             );
           },
           // markdown never emits a span itself (no raw HTML); the only
@@ -667,13 +694,21 @@ function ChatMarkdownComponent({ text, streaming = false, message, mentionPeers 
             if (address || (href && looksLikeThreadRefUrl(href))) return <span className="break-words">{children}</span>;
             const localPath = localFilePath(href);
             if (localPath) return <LocalFileLink filePath={localPath} message={message}>{children}</LocalFileLink>;
+            const citation = citationLabel(href, children);
+            if (citation) {
+              return (
+                <a href={href} target="_blank" rel="noreferrer" title={href} dir="auto" data-testid="citation-pill" className="chat-citation">
+                  <span className="max-w-[15ch] truncate">{citation}</span>
+                </a>
+              );
+            }
             return (
               <a
                 href={href}
                 target="_blank"
                 rel="noreferrer"
                 dir="auto"
-                className="break-words text-accent underline decoration-accent/40 hover:decoration-accent [unicode-bidi:isolate]"
+                className="chat-link break-words text-accent underline decoration-accent/40 hover:decoration-accent [unicode-bidi:isolate]"
               >
                 {children}
               </a>
@@ -681,7 +716,7 @@ function ChatMarkdownComponent({ text, streaming = false, message, mentionPeers 
           },
           table({ node, children }: BlockProps) {
             return (
-              <div className="overflow-x-auto">
+              <div data-md="table" className="overflow-x-auto">
                 <table dir={blockDirection(node)} className="w-full border-collapse text-[13.5px]">{children}</table>
               </div>
             );
@@ -695,31 +730,31 @@ function ChatMarkdownComponent({ text, streaming = false, message, mentionPeers 
             return <td className={`border-b border-hairline/20 px-2 py-1.5 align-top ${className?.includes("num") ? "text-right tabular-nums whitespace-nowrap" : ""}`}>{children}</td>;
           },
           p({ node, children }: BlockProps) {
-            return <p dir={blockDirection(node)}>{children}</p>;
+            return <p data-md="p" dir={blockDirection(node)}>{children}</p>;
           },
           ul({ node, children }: BlockProps) {
-            return <ul dir={blockDirection(node)} className="list-disc space-y-1 ps-5">{children}</ul>;
+            return <ul data-md="ul" dir={blockDirection(node)} className="list-disc space-y-1 ps-5">{children}</ul>;
           },
           ol({ node, children }: BlockProps) {
-            return <ol dir={blockDirection(node)} className="list-decimal space-y-1 ps-5">{children}</ol>;
+            return <ol data-md="ol" dir={blockDirection(node)} className="list-decimal space-y-1 ps-5">{children}</ol>;
           },
           h1({ node, children }: BlockProps) {
-            return <div dir={blockDirection(node)} className="mt-2 text-[16px] font-semibold">{children}</div>;
+            return <div data-md="h1" role="heading" aria-level={1} dir={blockDirection(node)} className="mt-2 text-[16px] font-semibold">{children}</div>;
           },
           h2({ node, children }: BlockProps) {
-            return <div dir={blockDirection(node)} className="mt-2 text-[15.5px] font-semibold">{children}</div>;
+            return <div data-md="h2" role="heading" aria-level={2} dir={blockDirection(node)} className="mt-2 text-[15.5px] font-semibold">{children}</div>;
           },
           h3({ node, children }: BlockProps) {
-            return <div dir={blockDirection(node)} className="mt-1.5 font-semibold">{children}</div>;
+            return <div data-md="h3" role="heading" aria-level={3} dir={blockDirection(node)} className="mt-1.5 font-semibold">{children}</div>;
           },
           h4({ node, children }: BlockProps) {
-            return <div dir={blockDirection(node)} className="mt-1.5 font-semibold">{children}</div>;
+            return <div data-md="h4" role="heading" aria-level={4} dir={blockDirection(node)} className="mt-1.5 font-semibold">{children}</div>;
           },
           h5({ node, children }: BlockProps) {
-            return <div dir={blockDirection(node)} className="mt-1.5 text-[14px] font-semibold">{children}</div>;
+            return <div data-md="h5" role="heading" aria-level={5} dir={blockDirection(node)} className="mt-1.5 text-[14px] font-semibold">{children}</div>;
           },
           h6({ node, children }: BlockProps) {
-            return <div dir={blockDirection(node)} className="mt-1.5 text-[13.5px] font-semibold text-ink-secondary">{children}</div>;
+            return <div data-md="h6" role="heading" aria-level={6} dir={blockDirection(node)} className="mt-1.5 text-[13.5px] font-semibold text-ink-secondary">{children}</div>;
           },
           blockquote({ node, children }: BlockProps) {
             return (

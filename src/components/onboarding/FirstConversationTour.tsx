@@ -5,7 +5,7 @@
 // It stays quiet until the welcome tour is done, and never shows on a
 // paired remote client.
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { hintSeenPatch, welcomeDue } from "@/lib/onboarding";
+import { chatOnboardingOpen, hintSeenPatch, welcomeDue } from "@/lib/onboarding";
 import { emailGateDone } from "@/lib/analytics";
 import { currentStep } from "@/lib/guided-tour";
 import { anchorFor, nextSpotlight, placementFor, tourComplete, type ChatObservation, type SpotlightId } from "@/lib/first-conversation";
@@ -47,6 +47,7 @@ export function FirstConversationTour() {
     !remoteClient &&
     record?.marketerAssignment?.botId !== state.selectedId &&
     !state.welcomeOpen &&
+    !chatOnboardingOpen(record) &&
     Boolean(record?.completedAt) &&
     currentStep(record) === null &&
     !welcomeDue(state.config, { remoteClient, legacyDone: emailGateDone() }) &&

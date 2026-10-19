@@ -44,6 +44,7 @@ invitations, real server restarts, cancellation and per-device revocation.
 
 Use only mapped, tested commands:
 
+- [Steering and paused follow-ups](steering.md)
 - [Chat turns](chat-turns.md)
 - [Conversation context compaction](context-compaction.md)
 - [Work summaries and engine hooks](digests.md)
@@ -55,6 +56,11 @@ Use only mapped, tested commands:
 - [Owner-confirmed remote Full access](remote-full-access.md)
 - [Waiting for an occupied desktop](computer-wait.md)
 - [Chat UI, driven headlessly](chat-ui.md)
+- [Output working copies and comments](output-drafts.md)
+- [Document pages, comments, history and bot tools](pages.md)
+- [Videos: timeline editor, media, renders and bot tools](videos.md)
+- [Imported voice memos](voice-memos.md)
+- [Exact outbound message review](outbound-reviews.md)
 - [Welcome flow and guided tour](onboarding.md)
 - [Channels](channels.md)
 - [In-chat team coordination](room-coordination.md)
@@ -155,6 +161,8 @@ and per-line direction in sent turns, with code pinned left-to-right.
 The [routines fixture](routines.md) checks confirmed proposals, manual and
 scheduled runs, central run logs, List/Calendar views, and bot-scoped routines
 using the real renderer and an isolated fake-engine server.
+
+The [notification choices and named app events fixture](routine-events.md) checks saved per-routine reporting policies and authenticated, source-filtered webhook relays without installing provider subscriptions.
 
 The [interval restrictions recipe](interval-restrictions.md) checks weekday and
 time-window limits on scheduled routines in that same disposable fixture.

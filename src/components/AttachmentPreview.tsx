@@ -8,6 +8,10 @@ import {
   useMemo,
   useRef,
   useState,
+  type CSSProperties,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type ReactNode,
+  type SyntheticEvent,
 } from "react";
 import { createPortal } from "react-dom";
 import {
@@ -16,10 +20,8 @@ import {
   ChevronRight,
   Download,
   ExternalLink,
-  FileText,
   ImageOff,
   LoaderCircle,
-  Maximize2,
   RotateCcw,
   X,
 } from "lucide-react";
@@ -31,7 +33,21 @@ import {
   type TranscriptImageAttachment,
 } from "@/lib/composer-attachments";
 import { cn } from "@/lib/cn";
+import { ZoomableImage } from "./ZoomableImage";
 import { t } from "@/lib/i18n";
+import {
+  FileKindIcon,
+  fileTypeLabel,
+  MEDIA_BORDER,
+  MEDIA_BORDER_STRONG,
+  MEDIA_ENTER,
+  MEDIA_OVERLAY_CONTROL,
+  MEDIA_PLACEHOLDER,
+  MEDIA_RING,
+  MEDIA_TEXT_SECONDARY,
+  MEDIA_TEXT_TERTIARY,
+  MediaKeyframes,
+} from "./MediaTokens";
 
 export interface PreviewImage {
   src: string;
@@ -323,52 +339,63 @@ export function useLocalFileSave(filePath: string, name?: string, message?: Mess
   return { state, reason, savedTo, save };
 }
 
-export function AttachmentPreviewDialog({
-  image,
-  images,
-  initialIndex = 0,
+
+/** Frosted round control used on the black media viewer. */
+export const LIGHTBOX_BUTTON = "flex size-9 shrink-0 items-center justify-center rounded-full bg-white/[0.12] text-white backdrop-blur-md transition-colors hover:bg-white/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/60 disabled:text-white/45 disabled:hover:bg-white/[0.12]";
+
+/** Full-window black viewer shared by images and videos: a header with the
+ * title and frosted actions, centred media, previous/next, Escape to close,
+ * arrow keys to page, and a focus trap that returns focus on close. */
+export function MediaLightbox({
+  label,
+  title,
+  subtitle,
+  actions,
+  count = 1,
+  onNavigate,
   onClose,
+  closeLabel = t("attach.close"),
+  previousLabel = t("attach.previous"),
+  nextLabel = t("attach.next"),
+  children,
 }: {
-  image: PreviewImage;
-  images?: PreviewImage[];
-  initialIndex?: number;
+  label: string;
+  title: string;
+  subtitle?: string;
+  actions?: ReactNode;
+  count?: number;
+  onNavigate?: (step: -1 | 1) => void;
   onClose: () => void;
+  closeLabel?: string;
+  previousLabel?: string;
+  nextLabel?: string;
+  children: ReactNode;
 }) {
-  const items = images?.length ? images : [image];
-  const [index, setIndex] = useState(() => Math.min(Math.max(initialIndex, 0), items.length - 1));
-  const current = items[index] ?? image;
   const dialogRef = useRef<HTMLDivElement>(null);
   const closeRef = useRef(onClose);
-  const [loadedSources, setLoadedSources] = useState<Set<string>>(() => new Set());
-  const [failedSource, setFailedSource] = useState<string | null>(null);
-  const [attempt, setAttempt] = useState(0);
-
+  const navigateRef = useRef(onNavigate);
   useLayoutEffect(() => {
     closeRef.current = onClose;
-  }, [onClose]);
-
-  const navigate = useCallback((step: -1 | 1) => {
-    setIndex((value) => wrappedImageIndex(value, step, items.length));
-    setFailedSource(null);
-  }, [items.length]);
+    navigateRef.current = onNavigate;
+  }, [onClose, onNavigate]);
 
   useEffect(() => {
     const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     dialogRef.current?.focus();
     const onKey = (event: KeyboardEvent) => {
-      const action = previewKeyAction(event.key, items.length);
+      const action = previewKeyAction(event.key, navigateRef.current ? count : 1);
       if (action) {
         event.preventDefault();
         event.stopPropagation();
         if (action === "close") closeRef.current();
-        else navigate(action === "previous" ? -1 : 1);
+        else navigateRef.current?.(action === "previous" ? -1 : 1);
         return;
       }
       if (event.key !== "Tab") return;
       const dialog = dialogRef.current;
       if (!dialog) return;
       const focusable = [...dialog.querySelectorAll<HTMLElement>(
-        'button:not([disabled]), [href], [tabindex]:not([tabindex="-1"])',
+        'button:not([disabled]), [href], video[controls], [tabindex]:not([tabindex="-1"])',
       )];
       if (focusable.length === 0) {
         event.preventDefault();
@@ -390,7 +417,73 @@ export function AttachmentPreviewDialog({
       window.removeEventListener("keydown", onKey);
       previousFocus?.focus();
     };
-  }, [items.length, navigate]);
+  }, [count]);
+
+  return createPortal(
+    <div
+      ref={dialogRef}
+      role="dialog"
+      aria-modal="true"
+      aria-label={label}
+      tabIndex={-1}
+      className="fixed inset-0 z-[70] flex flex-col bg-[#0d0d0d] text-white outline-none"
+    >
+      <MediaKeyframes />
+      <header className="relative z-10 flex h-14 shrink-0 items-center justify-between gap-4 ps-5 pe-3">
+        <div className="min-w-0">
+          <div className="truncate text-[13px] leading-[18px] font-medium text-white">{title}</div>
+          {subtitle && <div className="text-[12px] leading-4 text-white/60 tabular-nums">{subtitle}</div>}
+        </div>
+        <div className="flex shrink-0 items-center gap-2">
+          {actions}
+          <button type="button" onClick={onClose} className={LIGHTBOX_BUTTON} aria-label={closeLabel} title={closeLabel}>
+            <X size={18} />
+          </button>
+        </div>
+      </header>
+      <div
+        className="relative flex min-h-0 flex-1 items-center justify-center overflow-hidden px-16 pt-2 pb-14"
+        onMouseDown={(event) => event.target === event.currentTarget && onClose()}
+      >
+        {children}
+        {count > 1 && onNavigate && (
+          <>
+            <button type="button" onClick={() => onNavigate(-1)} aria-label={previousLabel} className={cn(LIGHTBOX_BUTTON, "absolute start-4 top-1/2 -translate-y-1/2")}>
+              <ChevronLeft size={20} />
+            </button>
+            <button type="button" onClick={() => onNavigate(1)} aria-label={nextLabel} className={cn(LIGHTBOX_BUTTON, "absolute end-4 top-1/2 -translate-y-1/2")}>
+              <ChevronRight size={20} />
+            </button>
+          </>
+        )}
+      </div>
+    </div>,
+    document.body,
+  );
+}
+
+export function AttachmentPreviewDialog({
+  image,
+  images,
+  initialIndex = 0,
+  onClose,
+}: {
+  image: PreviewImage;
+  images?: PreviewImage[];
+  initialIndex?: number;
+  onClose: () => void;
+}) {
+  const items = images?.length ? images : [image];
+  const [index, setIndex] = useState(() => Math.min(Math.max(initialIndex, 0), items.length - 1));
+  const current = items[index] ?? image;
+  const [loadedSources, setLoadedSources] = useState<Set<string>>(() => new Set());
+  const [failedSource, setFailedSource] = useState<string | null>(null);
+  const [attempt, setAttempt] = useState(0);
+
+  const navigate = useCallback((step: -1 | 1) => {
+    setIndex((value) => wrappedImageIndex(value, step, items.length));
+    setFailedSource(null);
+  }, [items.length]);
 
   const loaded = loadedSources.has(current.src);
   const failed = failedSource === current.src;
@@ -404,173 +497,180 @@ export function AttachmentPreviewDialog({
     setAttempt((value) => value + 1);
   };
 
-  return createPortal(
-    <div
-      className="fixed inset-0 z-[70] flex items-center justify-center bg-black/80 p-3 backdrop-blur-sm sm:p-6"
-      onMouseDown={(event) => event.target === event.currentTarget && onClose()}
-    >
-      <div
-        ref={dialogRef}
-        role="dialog"
-        aria-modal="true"
-        aria-label={t("attach.previewAria", { name: current.name })}
-        tabIndex={-1}
-        className="animate-pop-in flex h-full max-h-[900px] w-full max-w-[1200px] flex-col overflow-hidden rounded-2xl border border-white/15 bg-black/70 shadow-2xl outline-none"
-      >
-        <header className="flex shrink-0 items-center justify-between gap-4 border-b border-white/10 bg-black/45 px-4 py-3">
-          <div className="min-w-0">
-            <div className="truncate text-[13px] font-medium text-white">{current.name}</div>
-            <div className="text-[10.5px] text-white/50">
-              {items.length > 1
-                ? t("attach.position", { index: index + 1, count: items.length })
-                : t("attach.imagePreview")}
-            </div>
-          </div>
-          <div className="flex shrink-0 items-center gap-1">
-            {current.downloadUrl && (
-              <a
-                href={current.downloadUrl}
-                download={current.downloadName ?? canonicalDownloadFilename({
-                  fallback: current.name,
-                  source: current.downloadUrl,
-                })}
-                className="flex size-9 items-center justify-center rounded-lg text-white/65 hover:bg-white/10 hover:text-white"
-                aria-label={t("attach.downloadAria", { name: current.name })}
-                title={t("attach.download")}
-              >
-                <Download size={17} />
-              </a>
-            )}
-            {current.openUrl && (
-              <a
-                href={current.openUrl}
-                target="_blank"
-                rel="noreferrer"
-                className="flex size-9 items-center justify-center rounded-lg text-white/65 hover:bg-white/10 hover:text-white"
-                aria-label={t("attach.openOriginalAria", { name: current.name })}
-                title={t("attach.openOriginal")}
-              >
-                <ExternalLink size={17} />
-              </a>
-            )}
-            <button
-              onClick={onClose}
-              className="flex size-9 items-center justify-center rounded-lg text-white/65 hover:bg-white/10 hover:text-white"
-              aria-label={t("attach.close")}
+  return (
+    <MediaLightbox
+      label={t("attach.previewAria", { name: current.name })}
+      title={current.name}
+      subtitle={items.length > 1 ? t("attach.position", { index: index + 1, count: items.length }) : undefined}
+      count={items.length}
+      onNavigate={items.length > 1 ? navigate : undefined}
+      onClose={onClose}
+      actions={(
+        <>
+          {current.openUrl && (
+            <a
+              href={current.openUrl}
+              target="_blank"
+              rel="noreferrer"
+              className={LIGHTBOX_BUTTON}
+              aria-label={t("attach.openOriginalAria", { name: current.name })}
+              title={t("attach.openOriginal")}
             >
-              <X size={19} />
-            </button>
-          </div>
-        </header>
-        <div className="relative flex min-h-0 flex-1 items-center justify-center overflow-hidden p-4 sm:p-8">
-          {!loaded && !failed && (
-            <div className="absolute inset-4 flex animate-pulse items-center justify-center rounded-xl bg-white/[0.055] sm:inset-8" role="status">
-              <span className="flex items-center gap-2 text-[13px] text-white/55">
-                <LoaderCircle size={17} className="animate-spin" /> Loading image…
-              </span>
-            </div>
+              <ExternalLink size={17} />
+            </a>
           )}
-          {failed ? (
-            <div className="flex flex-col items-center gap-3 text-white/60" role="alert">
-              <ImageOff size={34} />
-              <span className="text-[13px]">This image could not be loaded.</span>
-              <button
-                type="button"
-                onClick={retry}
-                className="flex items-center gap-1.5 rounded-lg border border-white/15 bg-white/10 px-3 py-1.5 text-[12px] text-white hover:bg-white/15"
-              >
-                <RotateCcw size={13} /> Retry
-              </button>
-            </div>
-          ) : (
-            <img
-              key={`${current.src}:${attempt}`}
-              src={current.src}
-              alt={current.name}
-              onLoad={() => setLoadedSources((sources) => new Set(sources).add(current.src))}
-              onError={() => setFailedSource(current.src)}
-              className={cn(
-                "block max-h-full max-w-full rounded-lg object-contain shadow-2xl transition-opacity duration-150",
-                loaded ? "opacity-100" : "opacity-0",
-              )}
-            />
+          {current.downloadUrl && (
+            <a
+              href={current.downloadUrl}
+              download={current.downloadName ?? canonicalDownloadFilename({
+                fallback: current.name,
+                source: current.downloadUrl,
+              })}
+              className={LIGHTBOX_BUTTON}
+              aria-label={t("attach.downloadAria", { name: current.name })}
+              title={t("attach.download")}
+            >
+              <Download size={17} />
+            </a>
           )}
-          {items.length > 1 && (
-            <>
-              <button
-                type="button"
-                onClick={() => navigate(-1)}
-                aria-label={t("attach.previous")}
-                className="absolute left-2 top-1/2 flex size-10 -translate-y-1/2 items-center justify-center rounded-full bg-black/55 text-white/80 backdrop-blur-sm hover:bg-black/75 hover:text-white sm:left-4"
-              >
-                <ChevronLeft size={21} />
-              </button>
-              <button
-                type="button"
-                onClick={() => navigate(1)}
-                aria-label={t("attach.next")}
-                className="absolute right-2 top-1/2 flex size-10 -translate-y-1/2 items-center justify-center rounded-full bg-black/55 text-white/80 backdrop-blur-sm hover:bg-black/75 hover:text-white sm:right-4"
-              >
-                <ChevronRight size={21} />
-              </button>
-            </>
-          )}
+        </>
+      )}
+    >
+      {!loaded && !failed && (
+        <div className="pointer-events-none absolute inset-0 flex items-center justify-center" role="status">
+          <LoaderCircle size={20} className="animate-spin text-white/55" />
+          <span className="sr-only">Loading {current.name}</span>
         </div>
-      </div>
-    </div>,
-    document.body,
+      )}
+      {failed ? (
+        <div className="flex flex-col items-center gap-3 text-white/60" role="alert">
+          <ImageOff size={28} />
+          <span className="text-[13px]">Couldn&apos;t load this image</span>
+          <button
+            type="button"
+            onClick={retry}
+            className="flex h-7 items-center gap-1.5 rounded-full bg-white/[0.12] px-3 text-[12px] font-medium text-white hover:bg-white/20"
+          >
+            <RotateCcw size={13} /> Try again
+          </button>
+        </div>
+      ) : (
+        <ZoomableImage
+          key={`${current.src}:${attempt}`}
+          src={current.src}
+          alt={current.name}
+          ready={loaded}
+          onLoad={() => setLoadedSources((sources) => new Set(sources).add(current.src))}
+          onError={() => setFailedSource(current.src)}
+          className={cn(
+            "block max-h-full max-w-full object-contain select-none transition-opacity duration-150",
+            loaded ? cn("opacity-100", MEDIA_ENTER) : "opacity-0",
+          )}
+        />
+      )}
+    </MediaLightbox>
   );
 }
+
+/** Width cap for a lone image, from its natural aspect (width / height). */
+export function singleImageMaxWidth(aspect: number | null | undefined): string {
+  if (!aspect || !Number.isFinite(aspect)) return "max-w-[30rem]";
+  if (aspect < 1) return "max-w-[25rem]";
+  if (aspect < 2) return "max-w-[30rem]";
+  return "max-w-full";
+}
+
+export type ThumbnailVariant = "tile" | "user";
 
 export function AttachmentThumbnail({
   image,
   onPreview,
   className,
   eager = false,
+  variant = "tile",
+  style,
+  onAspect,
+  downloadable = false,
 }: {
   image: PreviewImage;
   onPreview: () => void;
   className?: string;
   eager?: boolean;
+  /** `user`: an 80px square above a person's message. `tile`: assistant media. */
+  variant?: ThumbnailVariant;
+  style?: CSSProperties;
+  /** Reports the natural width/height once pixels arrive. */
+  onAspect?: (aspect: number) => void;
+  /** Shows a hover download action when the image has a download URL. */
+  downloadable?: boolean;
 }) {
   // Every caller keys this component by src. Resetting in an effect races a
   // cached/blob image's onLoad: it can become ready before the effect runs,
   // then be put back into a permanent loading state.
   const [state, setState] = useState<"loading" | "ready" | "failed">("loading");
   const [attempt, setAttempt] = useState(0);
+  const user = variant === "user";
+  const retry = (event: SyntheticEvent) => {
+    event.preventDefault();
+    event.stopPropagation();
+    setState("loading");
+    setAttempt((value) => value + 1);
+  };
+  const retryKey = (event: ReactKeyboardEvent) => {
+    if (event.key === "Enter" || event.key === " ") retry(event);
+  };
+
+  if (user && state === "failed") {
+    return (
+      <span role="alert" className={cn("flex size-16 shrink-0 items-center justify-center rounded-[12.5px] border border-danger/20 bg-danger/[0.08] px-1 text-center text-[10px] leading-3 text-danger", className)}>
+        <span
+          role="button"
+          tabIndex={0}
+          onClick={retry}
+          onKeyDown={retryKey}
+          className="cursor-pointer rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-danger/50"
+          aria-label={t("attach.retryAria", { name: image.name })}
+          title={t("attach.retryAria", { name: image.name })}
+        >
+          Failed
+        </span>
+      </span>
+    );
+  }
 
   return (
-    <span className={cn("group/image relative block aspect-[4/3] min-w-0 overflow-hidden rounded-xl border border-hairline/40 bg-inset", className)}>
+    <span
+      style={style}
+      className={cn(
+        "group/image relative block min-w-0 overflow-hidden",
+        user
+          ? cn("size-20 shrink-0 rounded-[12.5px] border", MEDIA_BORDER_STRONG)
+          : "aspect-[4/3] rounded-[16px]",
+        className,
+      )}
+    >
       {state === "loading" && (
-        <span className="absolute inset-0 flex animate-pulse items-center justify-center bg-raised/65" role="status">
-          <LoaderCircle size={17} className="animate-spin text-ink-secondary/65" />
+        <span
+          className={cn("absolute inset-0 flex items-center justify-center", !user && MEDIA_PLACEHOLDER)}
+          role="status"
+        >
+          {user && <LoaderCircle size={16} className={cn("animate-spin", MEDIA_TEXT_TERTIARY)} />}
           <span className="sr-only">Loading {image.name}</span>
         </span>
       )}
       {state === "failed" ? (
-        <span className="absolute inset-0 flex flex-col items-center justify-center gap-2 px-3 text-center text-ink-secondary" role="alert">
-          <ImageOff size={22} />
-          <span className="max-w-full truncate text-[11.5px]">Image unavailable</span>
+        <span className={cn("absolute inset-0 flex flex-col items-center justify-center gap-2 bg-[color-mix(in_srgb,var(--color-ink)_5%,transparent)] px-3 text-center", MEDIA_TEXT_SECONDARY)} role="alert">
+          <ImageOff size={20} aria-hidden="true" />
+          <span className="max-w-full truncate text-[13px]">Couldn&apos;t load this image</span>
           <span
             role="button"
             tabIndex={0}
-            onClick={(event) => {
-              event.preventDefault();
-              event.stopPropagation();
-              setState("loading");
-              setAttempt((value) => value + 1);
-            }}
-            onKeyDown={(event) => {
-              if (event.key !== "Enter" && event.key !== " ") return;
-              event.preventDefault();
-              event.stopPropagation();
-              setState("loading");
-              setAttempt((value) => value + 1);
-            }}
-            className="flex items-center gap-1 rounded-md border border-hairline/50 bg-panel px-2 py-1 text-[11px] text-ink hover:bg-raised"
+            onClick={retry}
+            onKeyDown={retryKey}
+            className={cn("flex h-7 cursor-pointer items-center gap-1 rounded-[12.5px] border px-2.5 text-[12px] text-ink transition-colors hover:bg-[color-mix(in_srgb,var(--color-ink)_7.8%,transparent)]", MEDIA_BORDER_STRONG)}
             aria-label={t("attach.retryAria", { name: image.name })}
           >
-            <RotateCcw size={11} /> {t("chat.retry")}
+            <RotateCcw size={12} aria-hidden="true" /> Try again
           </span>
         </span>
       ) : (
@@ -597,24 +697,48 @@ export function AttachmentThumbnail({
             key={`${image.src}:${attempt}`}
             src={image.src}
             alt={image.name}
+            referrerPolicy="no-referrer"
+            draggable={false}
             loading={eager ? "eager" : "lazy"}
             fetchPriority={eager ? "high" : undefined}
-            onLoad={() => setState("ready")}
+            onLoad={(event) => {
+              setState("ready");
+              const { naturalWidth, naturalHeight } = event.currentTarget;
+              if (onAspect && naturalWidth > 0 && naturalHeight > 0) onAspect(naturalWidth / naturalHeight);
+            }}
             onError={() => setState("failed")}
             className={cn(
-              "block size-full object-cover transition duration-200 group-hover/image:scale-[1.015]",
-              state === "ready" ? "opacity-100" : "opacity-0",
+              "block size-full object-cover",
+              user && "rounded-[10px]",
+              state === "ready" ? cn("opacity-100", !user && MEDIA_ENTER) : "opacity-0",
             )}
           />
-          <span className="absolute right-2 top-2 flex size-7 items-center justify-center rounded-full bg-black/55 text-white opacity-0 backdrop-blur-sm transition-opacity group-hover/image:opacity-100 group-focus-within/image:opacity-100">
-            <Maximize2 size={13} />
-          </span>
+          {!user && state === "ready" && (
+            <span className="pointer-events-none absolute inset-x-0 bottom-0 h-20 rounded-b-[16px] bg-linear-to-b from-transparent to-black/30 opacity-0 transition-opacity duration-150 group-hover/image:opacity-100 group-focus-within/image:opacity-100" />
+          )}
         </span>
+      )}
+      {!user && downloadable && state === "ready" && image.downloadUrl && (
+        <a
+          href={image.downloadUrl}
+          download={image.downloadName ?? canonicalDownloadFilename({ fallback: image.name, source: image.downloadUrl })}
+          onClick={(event) => event.stopPropagation()}
+          className={cn(
+            "absolute end-3 top-3 z-10 flex size-8 items-center justify-center rounded-full backdrop-blur-sm transition-opacity duration-150 focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/70",
+            MEDIA_OVERLAY_CONTROL,
+            "opacity-0 group-hover/image:opacity-100 group-focus-within/image:opacity-100 [@media(hover:none)]:opacity-100",
+          )}
+          aria-label={t("attach.downloadAria", { name: image.name })}
+          title={t("attach.download")}
+        >
+          <Download size={16} />
+        </a>
       )}
     </span>
   );
 }
 
+/** A person's attached images: 80px squares, right-aligned above the bubble. */
 export function AttachedImageGallery({
   paths,
   className,
@@ -635,9 +759,9 @@ export function AttachedImageGallery({
   if (images.length === 0) return null;
   return (
     <>
-      <div className={cn("mb-2 grid max-w-full gap-2", imageGalleryLayout(images.length), className)}>
+      <div className={cn("mb-2 flex max-w-full flex-wrap items-end justify-end gap-2 self-end", className)}>
         {images.map((image, index) => (
-          <AttachmentThumbnail key={`${image.src}:${index}`} image={image} onPreview={() => setSelectedIndex(index)} eager={eager} />
+          <AttachmentThumbnail key={`${image.src}:${index}`} image={image} variant="user" onPreview={() => setSelectedIndex(index)} eager={eager} />
         ))}
       </div>
       {selectedIndex !== null && images[selectedIndex] && (
@@ -651,6 +775,11 @@ export function AttachedImageGallery({
     </>
   );
 }
+
+const MEDIA_NOTICE = cn(
+  "flex aspect-[4/3] w-full flex-col items-center justify-center gap-2 rounded-[16px] bg-[color-mix(in_srgb,var(--color-ink)_5%,transparent)] px-4 text-center text-[13px]",
+  MEDIA_TEXT_SECONDARY,
+);
 
 /** A Markdown image keeps its remote source, but receives the same stable
  * loading/error surface and full-screen viewer as an attached image. */
@@ -670,6 +799,7 @@ export function MarkdownImagePreview({
   sourceOffset?: number;
 }) {
   const [open, setOpen] = useState(false);
+  const [aspect, setAspect] = useState<number | null>(null);
   const containerRef = useRef<HTMLSpanElement>(null);
   const threadId = message?.threadId;
   const messageId = message?.messageId;
@@ -721,28 +851,42 @@ export function MarkdownImagePreview({
   };
   return (
     <>
-      <span ref={containerRef} className="my-2 block w-[min(36rem,70vw)] max-w-full">
+      <span ref={containerRef} className={cn("my-2 block w-full", singleImageMaxWidth(aspect))}>
+        <MediaKeyframes />
         {external && !externalAllowed ? (
-          <span className="flex aspect-[4/3] max-h-96 flex-col items-center justify-center gap-2 rounded-xl border border-hairline/40 bg-inset px-4 text-center text-[12px] text-ink-secondary">
-            <ImageOff size={20} />
+          <span className={MEDIA_NOTICE}>
+            <ImageOff size={20} aria-hidden="true" />
             <span>{t("attach.externalHidden")}</span>
-            <button type="button" className="rounded-md border border-hairline/50 bg-panel px-2.5 py-1 text-ink hover:bg-raised" onClick={(event) => { event.preventDefault(); event.stopPropagation(); setApprovedExternalSource(src); }}>{t("attach.loadImage")}</button>
+            <button
+              type="button"
+              className={cn("flex h-7 items-center rounded-[12.5px] border px-2.5 text-[12px] leading-[18px] text-ink transition-colors hover:bg-[color-mix(in_srgb,var(--color-ink)_7.8%,transparent)]", MEDIA_BORDER_STRONG)}
+              onClick={(event) => { event.preventDefault(); event.stopPropagation(); setApprovedExternalSource(src); }}
+            >
+              {t("attach.loadImage")}
+            </button>
           </span>
         ) : filePath && (!threadId || !messageId || localSourceOffset === null) ? (
-          <span className="flex aspect-[4/3] max-h-96 items-center justify-center gap-2 rounded-xl border border-hairline/40 bg-inset text-[12px] text-ink-secondary" role="alert">
-            <ImageOff size={17} /> {t("attach.oldImage")}
+          <span className={MEDIA_NOTICE} role="alert">
+            <ImageOff size={20} aria-hidden="true" /> {t("attach.oldImage")}
           </span>
         ) : visibleSource ? (
-          <AttachmentThumbnail key={image.src} image={image} onPreview={() => setOpen(true)} className="max-h-96" eager />
+          <AttachmentThumbnail
+            key={image.src}
+            image={image}
+            onPreview={() => setOpen(true)}
+            onAspect={setAspect}
+            style={aspect ? { aspectRatio: String(aspect) } : undefined}
+            downloadable
+            eager
+          />
         ) : (
-          <span className="flex aspect-[4/3] max-h-96 animate-pulse items-center justify-center rounded-xl border border-hairline/40 bg-inset" role="status">
-            <LoaderCircle size={17} className="animate-spin text-ink-secondary/65" />
+          <span className={cn("block aspect-[4/3] w-full rounded-[16px]", MEDIA_PLACEHOLDER)} role="status">
             <span className="sr-only">Loading {name}</span>
           </span>
         )}
         {openUrl && (
-          <a href={openUrl} target="_blank" rel="noreferrer" className="mt-1 inline-flex text-[11px] text-accent hover:underline">
-            Open original
+          <a href={openUrl} target="_blank" rel="noreferrer" className={cn("mt-1.5 inline-flex items-center gap-1 text-[12px] hover:underline", MEDIA_TEXT_TERTIARY)}>
+            <ExternalLink size={12} aria-hidden="true" /> {t("attach.openOriginal")}
           </a>
         )}
       </span>
@@ -751,28 +895,49 @@ export function MarkdownImagePreview({
   );
 }
 
-export function AttachedFileChip({ file, message, linked = false, className }: {
+export type FileChipVariant = "tile" | "user";
+
+/** ChatGPT's resource card. `tile` is an assistant file (320px, elevated, inset
+ * ring); `user` is a thread attachment above a person's message (200px). */
+export function AttachedFileChip({ file, message, linked = false, className, variant = "tile" }: {
   file: TranscriptFileAttachment;
   message?: MessageAttachmentContext;
   /** A rendered bot-authored Markdown link, still checked by the server on click. */
   linked?: boolean;
   className?: string;
+  variant?: FileChipVariant;
 }) {
   const save = useLocalFileSave(file.path, file.name, message);
   const failed = save.state === "failed";
+  const user = variant === "user";
+  const shell = cn(
+    "group/resource-card relative max-w-full shrink-0 overflow-hidden rounded-[20px] bg-raised text-left",
+    user ? "w-[200px]" : cn("w-[320px]", MEDIA_RING),
+    className,
+  );
+  const header = cn("flex w-full items-center text-left", user ? "gap-2.5 p-1.5 pe-10" : "gap-2 p-2.5 pe-10");
+  const body = (subtitle: string) => (
+    <>
+      <span className={cn("flex size-10 shrink-0 items-center justify-center rounded-[12.5px] bg-inset", MEDIA_TEXT_SECONDARY)}>
+        <FileKindIcon name={file.name} size={20} />
+      </span>
+      <span className="min-w-0 flex-1">
+        <span className={cn("block truncate text-ink", user ? "max-w-32 text-[14px] leading-5 font-medium" : "text-[12px] leading-[18px] font-semibold")}>{file.name}</span>
+        <span className={cn("block truncate", MEDIA_TEXT_SECONDARY, user ? "text-[13px] leading-[18px]" : "text-[12px] leading-[18px]")}>{subtitle}</span>
+      </span>
+    </>
+  );
   if (!message || (!file.private && !linked)) {
     return (
-      <div title={t("attach.legacyFile", { name: file.name })} className={cn("flex max-w-[280px] items-center gap-2 overflow-hidden rounded-lg border border-hairline/40 bg-inset/70 px-2.5 py-2 text-[12px] text-ink-secondary", className)}>
-        <FileText size={14} className="shrink-0" aria-hidden="true" />
-        <span className="min-w-0 flex-1 truncate text-ink">{file.name}</span>
-        <span className="text-[10.5px]">{t("attach.unavailable")}</span>
+      <div title={t("attach.legacyFile", { name: file.name })} className={shell}>
+        <div className={header}>{body(t("attach.unavailable"))}</div>
       </div>
     );
   }
   return (
     <div
       title={save.state === "saved" && save.savedTo ? t("attach.savedTo", { path: save.savedTo }) : file.name}
-      className={cn("max-w-[280px] overflow-hidden rounded-lg border border-hairline/40 bg-inset/70 text-[12px] text-ink-secondary", className)}
+      className={shell}
     >
       <button
         type="button"
@@ -783,26 +948,36 @@ export function AttachedFileChip({ file, message, linked = false, className }: {
             ? t("attach.retrySaveAria", { name: file.name })
             : t("attach.saveAria", { name: file.name })
         }
-        className="flex min-h-10 w-full items-center gap-2 px-2.5 py-2 text-left transition-colors hover:bg-raised/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/60 disabled:cursor-wait disabled:hover:bg-transparent"
+        className={cn(header, "transition-colors hover:bg-[color-mix(in_srgb,var(--color-ink)_3%,transparent)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/60 disabled:cursor-wait")}
       >
-        <FileText size={14} className="shrink-0" aria-hidden="true" />
-        <span className="min-w-0 flex-1 truncate text-ink">{file.name}</span>
-        {save.state === "saving" ? (
-          <LoaderCircle size={13} className="shrink-0 animate-spin" />
-        ) : save.state === "saved" ? (
-          <Check size={13} className="shrink-0 text-success" />
-        ) : save.state === "failed" ? (
-          <RotateCcw size={13} className="shrink-0 text-danger" />
-        ) : (
-          <Download size={13} className="shrink-0" />
-        )}
+        {body(fileTypeLabel(file.name))}
+        <span
+          className={cn(
+            "pointer-events-none absolute end-3 top-1/2 flex size-6 -translate-y-1/2 items-center justify-center",
+            save.state === "idle"
+              ? cn("opacity-0 transition-opacity group-hover/resource-card:opacity-100 group-focus-within/resource-card:opacity-100 [@media(hover:none)]:opacity-100", MEDIA_TEXT_SECONDARY)
+              : save.state === "saved" ? "text-success" : save.state === "failed" ? "text-danger" : MEDIA_TEXT_SECONDARY,
+          )}
+          aria-hidden="true"
+        >
+          {save.state === "saving" ? (
+            <LoaderCircle size={16} className="animate-spin" />
+          ) : save.state === "saved" ? (
+            <Check size={16} />
+          ) : save.state === "failed" ? (
+            <RotateCcw size={16} />
+          ) : (
+            <Download size={16} />
+          )}
+        </span>
       </button>
       {save.state !== "idle" && (
         <div
           role={failed ? "alert" : "status"}
           className={cn(
-            "border-t border-hairline/30 px-2.5 py-1.5 text-[10.5px]",
-            failed ? "text-danger" : save.state === "saved" ? "text-success" : "text-ink-secondary",
+            "border-t px-3 py-1.5 text-[11px] leading-4",
+            MEDIA_BORDER,
+            failed ? "text-danger" : save.state === "saved" ? "text-success" : MEDIA_TEXT_SECONDARY,
           )}
         >
           {save.state === "saving"
@@ -818,12 +993,12 @@ export function AttachedFileChip({ file, message, linked = false, className }: {
 
 /** Transcript file paths stay inert until the person explicitly asks the
  * desktop shell to validate and save a copy. */
-export function AttachedFileChips({ files, className, message }: { files: TranscriptFileAttachment[]; className?: string; message?: MessageAttachmentContext }) {
+export function AttachedFileChips({ files, className, message, variant = "user" }: { files: TranscriptFileAttachment[]; className?: string; message?: MessageAttachmentContext; variant?: FileChipVariant }) {
   if (files.length === 0) return null;
   return (
-    <div className={cn("mb-2 flex max-w-full flex-wrap justify-end gap-1.5", className)}>
+    <div className={cn("mb-2 flex max-w-full flex-wrap justify-end gap-2 self-end", className)}>
       {files.map((file, index) => (
-        <AttachedFileChip key={`${file.path}:${index}`} file={file} message={message} />
+        <AttachedFileChip key={`${file.path}:${index}`} file={file} message={message} variant={variant} />
       ))}
     </div>
   );

@@ -30,6 +30,7 @@ import {
   type UpdateView,
 } from "@/lib/bos-update";
 import { useStore, type Bot } from "@/state/store";
+import { useUpdaterState, type UpdaterState } from "@/lib/updater";
 import { BotAvatar } from "./Avatar";
 
 export interface BusyEntry {
@@ -401,9 +402,58 @@ export function SidebarVersionFooter({ compact, showUpdate }: { compact?: boolea
   );
 }
 
+/** The build-from-source updater has no checkout to build from: an installed
+ * app (a client's mac) updates from the download feed instead. */
+export function sourceMissing(view: UpdateView): boolean {
+  return /update source not configured/i.test(`${view.error ?? ""} ${view.status?.reason ?? ""}`);
+}
+
+const FEED_LINE: Record<UpdaterState["status"], string> = {
+  idle: "Up to date",
+  checking: "Checking for updates…",
+  available: "A newer version is ready to download.",
+  downloading: "Downloading…",
+  preparing: "Preparing update…",
+  downloaded: "Ready to install. The app restarts.",
+  installing: "Restarting to update…",
+  "handed-off": "Finish in the terminal that opened.",
+  error: "Update failed",
+};
+
+export function FeedUpdatesPanel({ feed, current }: { feed: UpdaterState; current: string }) {
+  const updater = typeof window === "undefined" ? undefined : window.ogb?.updater;
+  const busy = feed.status === "checking" || feed.status === "downloading" || feed.status === "preparing" || feed.status === "installing";
+  const line = feed.status === "downloading" && feed.percent != null ? `Downloading ${feed.version ?? "update"}… ${Math.round(feed.percent)}%`
+    : feed.status === "available" && feed.version ? `BOS ${feed.version} is available.`
+    : feed.status === "error" ? (feed.message ?? FEED_LINE.error).split("\n")[0].slice(0, 160)
+    : FEED_LINE[feed.status];
+  return (
+    <div className="rounded-xl bg-card p-4">
+      <div className="flex items-center gap-3">
+        <img src="/app-icon.png" alt="" width={40} height={40} className="size-10 shrink-0" />
+        <div className="min-w-0 flex-1 text-[15px] font-medium text-ink">BOS {current}</div>
+      </div>
+      <div role="status" className={cn("mt-3 text-[13px]", feed.status === "error" ? "text-red-500" : "text-ink-secondary")}>{line}</div>
+      <div className="mt-3 flex gap-2">
+        {feed.status === "available" ? (
+          <button type="button" className={settingsButton} onClick={() => void updater?.download()}>Download</button>
+        ) : feed.status === "downloaded" ? (
+          <button type="button" className={settingsButton} onClick={() => void updater?.install()}>Restart to update</button>
+        ) : (
+          <button type="button" className={settingsButton} disabled={busy} onClick={() => void updater?.check()}>Check for updates</button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+const settingsButton = "rounded-full border border-line px-3.5 py-1.5 text-[13px] text-ink hover:bg-control disabled:cursor-default disabled:opacity-50";
+
 export function UpdatesSettings() {
   const view = useBosUpdate();
   const { state } = useStore();
+  const feed = useUpdaterState();
+  if (feed && sourceMissing(view)) return <FeedUpdatesPanel feed={feed} current={shortVersion(appVersion())} />;
   return (
     <UpdatesPanel
       view={view}

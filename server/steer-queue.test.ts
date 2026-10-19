@@ -19,6 +19,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 import {
+  setSteeredQueuePaused,
   cancelSteeredMessage,
   drainSteeredMessages,
   hasQueuedSteeredMessages,
@@ -79,6 +80,34 @@ function fakeStore(bots: BotRecord[]): SteerStore & { messages: Message[] } {
 }
 
 describe("steer-queue module", () => {
+  it("Stop holds pending words across restore until explicit resume", () => {
+    const bot = fakeBot("pause-owner", "pause-thread", false);
+    const store = fakeStore([bot]);
+    const queued = queueSteeredMessage(bot.id, bot.threadId, "after this");
+    setSteeredQueuePaused(bot.id, bot.threadId, true);
+    restoreSteeredMessages();
+    const run = vi.fn();
+    drainSteeredMessages(store, run);
+    expect(run).not.toHaveBeenCalled();
+    expect(queuedSteerSnapshot(() => true)[bot.threadId]).toEqual([{ queueId: queued.id, text: "after this", paused: true }]);
+    setSteeredQueuePaused(bot.id, bot.threadId, false);
+    drainSteeredMessages(store, run);
+    expect(run).toHaveBeenCalledOnce();
+  });
+
+  it("steers only the correction and restores its original queue position on refusal", () => {
+    const bot = fakeBot("single-owner", "single-thread", true);
+    const first = queueSteeredMessage(bot.id, bot.threadId, "later task");
+    const correction = queueSteeredMessage(bot.id, bot.threadId, "change direction");
+    const held = holdSteeredQueue(bot.id, bot.threadId, correction.id, true)!;
+    expect(held.items.map(item => item.text)).toEqual(["change direction"]);
+    expect(queuedSteerSnapshot(() => true)[bot.threadId]?.map(item => item.queueId)).toEqual([first.id]);
+    restoreHeldSteeredQueue(held);
+    expect(queuedSteerSnapshot(() => true)[bot.threadId]?.map(item => item.queueId)).toEqual([first.id, correction.id]);
+    cancelSteeredMessage(bot.id, first.id, bot.threadId);
+    cancelSteeredMessage(bot.id, correction.id, bot.threadId);
+  });
+
   it("keeps one item for one image send even when a re-send collapses its blank lines", () => {
     // Live rows 21/22: same words and image, second copy's "\n\n" became " ".
     const tag = '<attached-image path="/tmp/042c.png" name="image.png" />';
@@ -758,7 +787,7 @@ describe("steer-queue e2e (fake ACP fleet)", () => {
   );
 
   it(
-    "drains the queue after an interrupt — stop-then-steer",
+    "pauses the queue after Stop until the owner resumes",
     async () => {
       const bot = await newBot("steerStop", "Stoppable");
 
@@ -779,9 +808,11 @@ describe("steer-queue e2e (fake ACP fleet)", () => {
       }, "the hung prompt");
       expect((await api("POST", `/api/bots/${bot.id}/interrupt`)).status).toBe(200);
 
-      // the interrupt settles the hung turn (ACP cancel grace), and the
-      // drain consumes the queue: its message loses the queued flag while
-      // the steered turn waits on the still-missing gate
+      await until(async () => !(await botById(bot.id)).busy, "the interrupted turn to stop");
+      expect((await botById(bot.id)).messages.some((m: any) => m.text === "after stop please")).toBe(false);
+      const paused = (await api("GET", "/api/bots?messages=0")).body.botQueuedMessages[bot.threadId];
+      expect(paused).toEqual([{ queueId: queued.body.queueId, text: "after stop please", paused: true }]);
+      expect((await api("POST", `/api/bots/${bot.id}/queue/resume`, { threadId: bot.threadId })).status).toBe(200);
       await until(async () => {
         const snapshot = await botById(bot.id);
         const message = snapshot.messages.find((m: any) => m.text === "after stop please");

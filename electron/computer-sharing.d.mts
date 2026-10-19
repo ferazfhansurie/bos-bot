@@ -21,6 +21,7 @@ export function createComputerSharing(options: {
 }): {
   state(id: string): SharingState;
   identity(env: Workspace): Promise<Identity>;
+  inspectIdentity(env: Workspace): Promise<Identity>;
   observe(env: Workspace): Promise<Identity | null>;
   decline(env: Workspace, identity: Identity): void;
   save(env: Workspace, input: Pick<SharingState, "folders" | "terminal" | "computer">, identity: Identity): Promise<SharingState>;

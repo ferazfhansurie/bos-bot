@@ -1255,6 +1255,10 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
         mcpServers.phone = { ...turn.integrations.phone };
         allowed.push("mcp__phone");
       }
+      if (turn.integrations?.sandbox) {
+        mcpServers.sandbox = { ...turn.integrations.sandbox };
+        allowed.push("mcp__sandbox");
+      }
       if (turn.integrations?.browser) {
         mcpServers.browser = { ...turn.integrations.browser };
         allowed.push("mcp__browser");
@@ -2127,6 +2131,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
           computerMcp: true,
           composioMcp: true,
           phoneMcp: true,
+          sandboxMcp: true,
           browserMcp: true,
           images: true,
           nativeImageInput: true,

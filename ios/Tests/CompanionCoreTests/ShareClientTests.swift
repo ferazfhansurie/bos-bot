@@ -345,6 +345,7 @@ final class ShareClientTests: XCTestCase {
         XCTAssertEqual(body, [
             "text": "Review this",
             "threadId": "task_1",
+            "priority": "steer",
             "sendId": "8E50CD29-DBB2-4D76-971B-112DD962C9FA",
         ])
     }

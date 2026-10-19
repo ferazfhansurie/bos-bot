@@ -3,6 +3,8 @@
 .browser-address:focus-within { outline:2px solid color-mix(in srgb,var(--color-accent) 65%,transparent); }
 .browser-address input { width:100%; min-width:0; background:transparent; outline:none; padding:0 10px; text-align:center; font-size:12px; }
 .browser-address input:focus { text-align:left; }
+.browser-zoom-chip { display:flex; flex-shrink:0; align-items:center; gap:3px; height:22px; margin-right:5px; padding:0 7px; border-radius:6px; font-size:11px; font-variant-numeric:tabular-nums; color:var(--color-ink-secondary); background:color-mix(in srgb,var(--color-ink) 7%,transparent); }
+.browser-zoom-chip:hover { color:var(--color-ink); background:color-mix(in srgb,var(--color-ink) 12%,transparent); }
 .browser-tabs { display:flex; gap:3px; padding:0 8px 5px; height:34px; flex-shrink:0; border-bottom:1px solid var(--color-hairline); overflow-x:auto; scrollbar-width:none; }
 .browser-tab { display:flex; position:relative; flex:1; min-width:90px; max-width:240px; align-items:center; border-radius:6px; color:var(--color-ink-secondary); }
 .browser-tab.is-active { background:var(--color-raised); color:var(--color-ink); }
@@ -51,6 +53,7 @@
    visibility:hidden so Chromium throttles them. */
 .browser-parked { position:absolute; inset:0; opacity:.001; pointer-events:none; z-index:0; }
 .browser-parked.browser-idle { visibility:hidden; }
+.browser-agent-guard { position:absolute; inset:0; z-index:4; cursor:default; }
 .browser-agent-driving::after { content:""; position:absolute; inset:0; z-index:5; pointer-events:none; box-shadow:inset 0 0 0 2px color-mix(in srgb,var(--color-accent) 55%,transparent); }
 .browser-agent-strip { position:absolute; left:50%; bottom:14px; z-index:20; transform:translateX(-50%); display:flex; align-items:center; gap:8px; max-width:calc(100% - 24px); padding:5px 6px 5px 12px; border:1px solid var(--color-hairline); border-radius:999px; background:var(--color-card); box-shadow:0 8px 24px #0003; font-size:12px; white-space:nowrap; }
 .browser-agent-strip > button { padding:4px 10px; border-radius:999px; color:var(--color-ink-secondary); }
@@ -62,3 +65,25 @@
 @keyframes browser-agent-pulse { 0%,100% { opacity:1; } 50% { opacity:.35; } }
 @keyframes browser-agent-click { from { transform:scale(2.2); opacity:.2; } to { transform:scale(1); opacity:1; } }
 @media(prefers-reduced-motion:reduce){.browser-agent-dot.is-busy,.browser-agent-cursor { animation:none; }}
+
+/* Conversation workbench: the host owns the tab strip above this nav row. */
+.workbench-browser-toolbar { height:44px; padding:0 8px; gap:2px; }
+.workbench-browser-toolbar > button { padding:6px; border-radius:8px; }
+.workbench-browser-toolbar .browser-address { height:30px; max-width:none; margin:0 3px; background:color-mix(in srgb,var(--color-ink) 4%,transparent); border:1px solid color-mix(in srgb,var(--color-ink) 8%,transparent); border-radius:8px; }
+.workbench-browser-toolbar .browser-address input { font-size:13px; text-align:left; }
+[data-workspace-browser] .browser-sheet { top:46px; }
+/* profiles: chrome-style avatar chip in the toolbar, list in the profiles sheet */
+.browser-toolbar { container-type:inline-size; }
+.browser-profile-avatar { display:inline-flex; flex-shrink:0; align-items:center; justify-content:center; border-radius:999px; color:#fff; font-weight:600; line-height:1; }
+.browser-profile-chip { display:flex; flex-shrink:0; align-items:center; gap:6px; height:28px; max-width:132px; margin-left:4px; padding:0 9px 0 5px; border-radius:999px; background:var(--color-raised); color:var(--color-ink-secondary); font-size:12px; }
+.browser-profile-chip:hover, .browser-profile-chip[aria-expanded="true"] { color:var(--color-ink); background:color-mix(in srgb,var(--color-ink) 9%,var(--color-raised)); }
+.browser-profile-chip:focus-visible { outline:2px solid color-mix(in srgb,var(--color-accent) 65%,transparent); }
+.browser-profile-chip-name { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+@container (max-width: 560px) { .browser-profile-chip { padding:0 5px; } .browser-profile-chip-name { display:none; } }
+.browser-profile-list { display:flex; flex-direction:column; gap:2px; }
+.browser-profile-list li { display:flex; align-items:center; gap:2px; min-height:36px; border-radius:8px; }
+.browser-profile-list li.is-current { background:var(--color-raised); }
+.browser-profile-pick { display:flex; flex:1; min-width:0; align-items:center; gap:10px; padding:6px 8px; text-align:left; font-size:14px; border-radius:8px; }
+.browser-profile-pick:hover { background:var(--color-raised); }
+/* The workspace pane, closed in this thread while it holds the browser. */
+.workspace-dock-parked { position:absolute; top:0; right:0; bottom:0; opacity:.001; pointer-events:none; z-index:0; }

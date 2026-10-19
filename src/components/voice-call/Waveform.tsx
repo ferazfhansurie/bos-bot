@@ -53,6 +53,7 @@ export function Waveform({
     if (stream && stream.getAudioTracks().length > 0 && !reducedMotion) {
       try {
         audio = new AudioContext();
+        void audio.resume().catch(() => undefined);
         analyser = audio.createAnalyser();
         analyser.fftSize = FFT_SIZE;
         analyser.smoothingTimeConstant = ANALYSER_SMOOTHING;

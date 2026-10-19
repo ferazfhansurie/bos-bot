@@ -11,6 +11,7 @@ export const WORKSPACE_CREDENTIALS = [
   { section: "xai", field: "key", name: "xaiApiKey", env: "XAI_API_KEY" },
   { section: "xai", field: "managementKey", name: "xaiManagementKey", env: "OMB_XAI_MANAGEMENT_KEY" },
   { section: "box", field: "token", name: "boxToken", env: "BOX_TOKEN" },
+  { section: "boxCompute", field: "token", name: "boxComputeApiKey", env: "BOXCOMPUTE_API_KEY" },
   { section: "tts", field: "key", name: "ttsKey", env: "OMB_TTS_KEY" },
   { section: "tts", field: "fishKey", name: "fishAudioKey", env: "OMB_FISH_AUDIO_API_KEY" },
   { section: "imageGen", field: "key", name: "openaiImageApiKey", env: "OMB_OPENAI_IMAGE_KEY" },

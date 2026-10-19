@@ -14,8 +14,10 @@ import {
   previewImage,
   previewKeyAction,
   safeDownloadFilename,
+  singleImageMaxWidth,
   wrappedImageIndex,
 } from "./AttachmentPreview";
+import { fileTypeLabel } from "./MediaTokens";
 
 describe("attachment image navigation", () => {
   it("wraps previous and next navigation", () => {
@@ -85,6 +87,25 @@ describe("external image privacy", () => {
   });
 });
 
+describe("chatgpt media sizing", () => {
+  it("caps a lone image by its natural aspect", () => {
+    expect(singleImageMaxWidth(null)).toBe("max-w-[30rem]");
+    expect(singleImageMaxWidth(0.75)).toBe("max-w-[25rem]");
+    expect(singleImageMaxWidth(1)).toBe("max-w-[30rem]");
+    expect(singleImageMaxWidth(1.99)).toBe("max-w-[30rem]");
+    expect(singleImageMaxWidth(2.4)).toBe("max-w-full");
+  });
+
+  it("labels file tiles by type", () => {
+    expect(fileTypeLabel("Q3 report.PDF")).toBe("PDF");
+    expect(fileTypeLabel("notes.docx")).toBe("Document");
+    expect(fileTypeLabel("data.csv")).toBe("Spreadsheet");
+    expect(fileTypeLabel("main.ts")).toBe("TS");
+    expect(fileTypeLabel("blob.xyz")).toBe("XYZ");
+    expect(fileTypeLabel("README")).toBe("File");
+  });
+});
+
 describe("attachment preview surfaces", () => {
   it("keeps a stable loading tile and the original image name", () => {
     const html = renderToStaticMarkup(createElement(AttachedImageGallery, {
@@ -95,7 +116,8 @@ describe("attachment preview surfaces", () => {
       }],
     }));
 
-    expect(html).toContain("aspect-[4/3]");
+    // A person's attached images are 80px squares, as on ChatGPT desktop.
+    expect(html).toContain("size-20");
     expect(html).toContain("Loading Launch artwork.png");
     expect(html).toContain("Preview attached image Launch artwork.png");
     expect(html).toContain("/api/attachments/123e4567-e89b-12d3-a456-426614174000.png");

@@ -19,6 +19,7 @@ import { LocalComputerAutoWarning } from "../LocalComputerAutoWarning";
 import { Switch } from "../SettingsPrimitives";
 import { preloadConnectedApps, type ConnectorInventory } from "../PluginsPanel";
 import { inputCls } from "./field";
+import { BoxComputeMark } from "../BoxComputeMark";
 import type { useBotSettingsDerived } from "./useBotSettingsDerived";
 
 /** Where a bot's shell tools run. Set per bot; each task pins its own copy
@@ -236,6 +237,8 @@ export function AccessSection({
     localDisabledReason,
   } = derived;
   const browserInstallable = state.config?.browserEngine?.installable === true;
+  // The bot's BoxCompute sandbox (with its cloud desktop), once its key is in Connections.
+  const boxComputeSelectable = state.config?.boxCompute?.configured === true;
   const [localAutoWarning, setLocalAutoWarning] = useState<string | null>(null);
   const [inventory, setInventory] = useState<ConnectorInventory | null>(null);
 
@@ -243,6 +246,8 @@ export function AccessSection({
     let cancelled = false;
     void preloadConnectedApps().then((result) => {
       if (!cancelled) setInventory(result);
+    }).catch(() => {
+      if (!cancelled) setInventory(null);
     });
     return () => {
       cancelled = true;
@@ -269,6 +274,7 @@ export function AccessSection({
           {([
             [null, "Auto"],
             ["cloud", "Cloud"],
+            ["boxcompute", "BoxCompute"],
             ["vm", "Local VM"],
             ["local", "This computer"],
             ["browser", "Browser"],
@@ -276,7 +282,7 @@ export function AccessSection({
           ] as const).map(([mode, label], i) => (
             <button
               key={mode ?? "auto"}
-              disabled={Boolean(bot.sharedWorkComputer) || (mode === "local" && !localSelectable) || (mode === "browser" && !browserSelectable)}
+              disabled={Boolean(bot.sharedWorkComputer) || (mode === "local" && !localSelectable) || (mode === "browser" && !browserSelectable) || (mode === "boxcompute" && !boxComputeSelectable)}
               title={
                 mode === "local" && !localSelectable
                   ? localDisabledReason ?? undefined
@@ -284,7 +290,9 @@ export function AccessSection({
                     ? browserSelectable ? "The built-in browser tab only; no desktop" : browserDisabledReason
                     : mode === "off"
                       ? "No computer and no built-in browser"
-                      : undefined
+                      : mode === "boxcompute"
+                        ? boxComputeSelectable ? "Its own cloud Linux sandbox with a Chrome desktop, hosted in Malaysia" : "Add a BoxCompute API key in Settings → Connections to use BoxCompute."
+                        : undefined
               }
               onClick={() => {
                 if ((mode === null && bot.computer === undefined) || mode === bot.computer) return;
@@ -297,16 +305,25 @@ export function AccessSection({
               className={cn(
                 "flex-1 py-1.5 text-[13px] capitalize",
                 i > 0 && "border-l border-hairline/40",
-                ((mode === "local" && !localSelectable) || (mode === "browser" && !browserSelectable)) && "cursor-not-allowed opacity-40",
+                mode === "boxcompute" ? "inline-flex items-center justify-center gap-1.5 normal-case" : "",
+                ((mode === "local" && !localSelectable) || (mode === "browser" && !browserSelectable) || (mode === "boxcompute" && !boxComputeSelectable)) && "cursor-not-allowed opacity-40",
                 (mode === null ? bot.computer === undefined : bot.computer === mode)
                   ? "bg-control text-ink"
                   : "text-ink-secondary hover:bg-control/60 hover:text-ink",
               )}
             >
+              {mode === "boxcompute" && <BoxComputeMark size={13} aria-hidden="true" />}
               {label}
             </button>
           ))}
         </div>
+        {bot.computer === "boxcompute" && (
+          <div className="mt-3 rounded-lg bg-inset px-3 py-2.5 text-[11.5px] leading-relaxed text-ink-secondary">
+            <span className="font-medium text-ink">BoxCompute sandbox.</span>{" "}
+            This bot runs code, keeps files and shares live previews on its own cloud Linux machine, hosted in Malaysia.
+            It also gets a desktop with Chrome there, and shares a live link when you need to watch or sign in yourself. No built-in browser.
+          </div>
+        )}
         {bot.computer === "off" && (
           <div className="mt-3 rounded-lg bg-inset px-3 py-2.5 text-[11.5px] leading-relaxed text-ink-secondary">
             <span className="font-medium text-ink">Off means no screen.</span>{" "}

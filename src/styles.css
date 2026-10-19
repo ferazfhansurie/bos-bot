@@ -1717,6 +1717,229 @@ button:disabled.bg-danger {
   overflow-wrap: anywhere;
 }
 .conversation-header { min-height: 64px; gap: 12px; }
+/* ChatGPT-desktop conversation scope. Skins still own the palette: every
+   token here is a mix of the skin's ink, so a custom skin keeps working.
+   `color-scheme` follows the skin so `light-dark()` picks the right diff
+   colours and user bubble. */
+.chat-thread {
+  color-scheme: var(--code-color-scheme);
+  --chat-font: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --chat-mono: ui-monospace, "SFMono-Regular", "SF Mono", Menlo, Consolas,
+    "Liberation Mono", monospace;
+  --chat-size: 14px;
+  --chat-line: 22.75px;
+  --chat-small: 12.25px;
+  --chat-s: 3.5px;
+  --chat-border: color-mix(in srgb, var(--color-ink) 8.4%, transparent);
+  --chat-border-strong: color-mix(in srgb, var(--color-ink) 15.6%, transparent);
+  --chat-border-subtle: color-mix(in srgb, var(--color-ink) 4.2%, transparent);
+  --chat-text-secondary: color-mix(in srgb, var(--color-ink) 71%, transparent);
+  --chat-text-tertiary: color-mix(in srgb, var(--color-ink) 51%, transparent);
+  --chat-ghost-hover: color-mix(in srgb, var(--color-ink) 7.8%, transparent);
+  --chat-soft: color-mix(in srgb, var(--color-ink) 5.2%, transparent);
+  --chat-elevated: color-mix(in srgb, var(--color-ink) 3.2%, var(--color-app));
+  --chat-git-added: light-dark(#00a240, #40c977);
+  --chat-git-deleted: light-dark(#ba2623, #fa423e);
+  --chat-user-bubble: light-dark(rgb(233 233 233 / 50%), rgb(50 50 50 / 85%));
+  font-family: var(--chat-font);
+  font-size: var(--chat-size);
+  line-height: var(--chat-line);
+}
+.chat-thread .chat-text { font-size: var(--chat-size); line-height: var(--chat-line); }
+.chat-user-bubble {
+  max-width: 70%;
+  border-radius: 22px;
+  corner-shape: superellipse(1.5);
+  padding: 10px 16px;
+  background: var(--chat-user-bubble);
+  color: var(--color-ink);
+  overflow-wrap: anywhere;
+}
+.chat-ghost {
+  color: var(--chat-text-tertiary);
+  border-radius: 10px;
+  transition: background-color .15s, color .15s;
+}
+.chat-ghost:hover,
+.chat-ghost[aria-expanded="true"]:hover,
+.chat-ghost[data-active="true"] {
+  background: var(--chat-ghost-hover);
+  color: var(--color-ink);
+}
+.chat-text-secondary { color: var(--chat-text-secondary); }
+.chat-text-tertiary { color: var(--chat-text-tertiary); }
+.chat-git-added { color: var(--chat-git-added); }
+.chat-git-deleted { color: var(--chat-git-deleted); }
+.chat-stroke { box-shadow: 0 0 0 .5px var(--chat-border-strong); }
+.chat-hairline { border-color: var(--chat-border); }
+
+/* Activity rows inside a turn: label at ink/40, icon at ink/60, both brighten
+   on hover. */
+.chat-step {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 6px;
+  color: color-mix(in srgb, var(--color-ink) 40%, transparent);
+  transition: color .15s;
+}
+.chat-step > svg,
+.chat-step > .chat-step-icon { color: color-mix(in srgb, var(--color-ink) 60%, transparent); flex: none; }
+.chat-step:hover,
+.chat-step:hover > svg,
+.chat-step:hover > .chat-step-icon { color: var(--color-ink); }
+.chat-enter { animation: chat-enter .28s cubic-bezier(.23, 1, .32, 1) both; }
+@keyframes chat-enter { from { opacity: 0; transform: translateY(2px); } }
+.chat-shimmer {
+  background: linear-gradient(90deg,
+    color-mix(in srgb, var(--color-ink) 40%, transparent) 0%,
+    var(--color-ink) 50%,
+    color-mix(in srgb, var(--color-ink) 40%, transparent) 100%);
+  background-size: 200% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: chat-shimmer 2s steps(24) infinite;
+}
+@keyframes chat-shimmer { from { background-position: 100% 0; } to { background-position: -100% 0; } }
+@media (prefers-reduced-motion: reduce) {
+  .chat-enter, .chat-shimmer { animation: none; }
+  .chat-shimmer { color: var(--chat-text-tertiary); }
+}
+
+/* Assistant prose: chatgpt desktop's markdown rhythm, all multiples of
+   s = font/4. */
+.chat-thread .chat-md {
+  overflow-wrap: anywhere;
+}
+.chat-thread :where(.chat-md > * + *) { margin-top: 0; }
+.chat-thread .chat-md :where([data-md="p"]) { margin: 0 0 var(--chat-s); }
+.chat-thread .chat-md :where([data-md="p"]):not(:first-child) { margin-top: calc(var(--chat-s) * 2); }
+.chat-thread .chat-md :where([data-md="p"] + [data-md="p"]) { margin-block: calc(var(--chat-s) * 4); }
+.chat-thread .chat-md :where([data-md="p"]:last-child) { margin-bottom: 0; }
+.chat-thread .chat-md :where([data-md="h1"], [data-md="h2"], [data-md="h3"], [data-md="h4"]) { font-weight: 600; }
+.chat-thread .chat-md :where([data-md="h1"]) { font-size: 21px; line-height: 28px; margin: calc(var(--chat-s) * 4) 0 calc(var(--chat-s) * 2); }
+.chat-thread .chat-md :where([data-md="h2"]) { font-size: 17.5px; line-height: 24.5px; margin: calc(var(--chat-s) * 4) 0 var(--chat-s); }
+.chat-thread .chat-md :where([data-md="h3"]) { font-size: 15.75px; line-height: 24.5px; margin: calc(var(--chat-s) * 4) 0 var(--chat-s); }
+.chat-thread .chat-md :where([data-md="h4"]) { line-height: 21px; margin: calc(var(--chat-s) * 4) 0 0; }
+.chat-thread .chat-md :where([data-md="h5"], [data-md="h6"]) { font-weight: 600; margin: 0; }
+.chat-thread .chat-md :where([data-md^="h"]):first-child { margin-top: 0; }
+.chat-thread .chat-md :where([data-md="h1"], [data-md="h2"], [data-md="h3"]) + :where([data-md="p"]) { margin-top: 0; }
+.chat-thread .chat-md :where([data-md="ul"], [data-md="ol"]) { padding-inline-start: var(--chat-line); margin-block: calc(var(--chat-s) * 2); }
+.chat-thread .chat-md :where([data-md="p"]) + :where([data-md="ul"], [data-md="ol"]) { margin-top: 0; }
+.chat-thread .chat-md :where([data-md="ul"], [data-md="ol"]) + :where([data-md^="h"]) { margin-top: calc(var(--chat-s) * 4); }
+.chat-thread .chat-md :where([data-md="ul"], [data-md="ol"]):first-child { margin-top: 0; }
+.chat-thread .chat-md :where([data-md="ul"], [data-md="ol"]):last-child { margin-bottom: 0; }
+.chat-thread .chat-md :where([data-md="ul"]) { list-style: disc; }
+.chat-thread .chat-md :where([data-md="ul"] [data-md="ul"]) { list-style: circle; }
+.chat-thread .chat-md :where([data-md="ul"] [data-md="ul"] [data-md="ul"]) { list-style: square; }
+.chat-thread .chat-md :where([data-md="ol"]) { list-style: decimal; }
+.chat-thread .chat-md :where(li) { padding-inline-start: calc(var(--chat-s) * 1.5); }
+.chat-thread .chat-md :where(li)::marker { color: currentColor; font-weight: 600; }
+.chat-thread .chat-md :where(li > * + *) { margin-top: calc(var(--chat-s) * 2); }
+.chat-thread .chat-md :where(blockquote) {
+  position: relative;
+  margin-block: calc(var(--chat-s) * 2);
+  padding-block: calc(var(--chat-s) * 2);
+  padding-inline-start: calc(var(--chat-s) * 6);
+  line-height: calc(var(--chat-s) * 6);
+  border: 0;
+  color: inherit;
+}
+.chat-thread .chat-md :where(blockquote)::after {
+  content: "";
+  position: absolute;
+  inset-inline-start: 0;
+  top: calc(var(--chat-s) * 2);
+  bottom: calc(var(--chat-s) * 2);
+  width: var(--chat-s);
+  border-radius: calc(var(--chat-s) / 2);
+  background: var(--chat-border-strong);
+}
+.chat-thread .chat-md :where(hr) { margin: calc(var(--chat-s) * 7) 0; border: 0; border-top: 1px solid var(--chat-border-strong); }
+.chat-thread .chat-md :where([data-md="table"]) { margin-top: calc(var(--chat-s) * 4); }
+.chat-thread .chat-md :where(table) { font-size: var(--chat-small); font-variant-numeric: tabular-nums; border-collapse: collapse; width: 100%; }
+.chat-thread .chat-md :where(th) {
+  font-weight: 600;
+  text-align: start;
+  border-bottom: 1px solid var(--chat-border-strong);
+  padding-block: calc(var(--chat-s) * 2);
+  padding-inline: 0 calc(var(--chat-s) * 6);
+  line-height: calc(var(--chat-s) * 4);
+}
+.chat-thread .chat-md :where(td) {
+  border-bottom: 1px solid var(--chat-border-subtle);
+  padding-block: calc(var(--chat-s) * 2.5);
+  padding-inline: 0 calc(var(--chat-s) * 6);
+  vertical-align: top;
+}
+.chat-thread .chat-md :where(th:last-child, td:last-child) { padding-inline-end: calc(var(--chat-s) * 10); }
+.chat-thread .chat-md :where(tr:last-child > td) { border-bottom: 0; padding-bottom: calc(var(--chat-s) * 6); }
+.chat-thread .chat-md :where(code.chat-inline-code) {
+  background: color-mix(in srgb, var(--chat-ghost-hover) 60%, color-mix(in srgb, var(--color-ink) 6%, transparent));
+  border: 0;
+  border-radius: 6px;
+  padding: 1px 6px;
+  font-family: var(--chat-mono);
+  font-size: .92em;
+}
+.chat-thread .chat-md :where(a.chat-link) {
+  color: inherit;
+  text-decoration: underline dotted 1px var(--chat-text-tertiary);
+  text-underline-offset: 2px;
+}
+.chat-thread .chat-md :where(a.chat-link):hover {
+  color: var(--color-accent-text, var(--color-accent));
+  text-decoration-color: currentColor;
+}
+.chat-thread .chat-md :where([data-md="code"]) { margin-block: calc(var(--chat-s) * 5); }
+.chat-thread .chat-md :where([data-md="code"]):first-child { margin-top: 0; }
+.chat-thread .chat-md :where([data-md="code"]):last-child { margin-bottom: 0; }
+.chat-thread .chat-md :where(li) { margin: 0; }
+.chat-citation {
+  position: relative;
+  display: inline-flex;
+  height: 25px;
+  max-width: 15rem;
+  vertical-align: middle;
+  align-items: center;
+  gap: 4px;
+  margin-inline: 2px;
+  padding-inline: 8px;
+  border-radius: 12px;
+  corner-shape: superellipse(1.1);
+  background: color-mix(in srgb, var(--color-ink) 7.8%, transparent);
+  color: color-mix(in srgb, var(--color-ink) 71%, transparent);
+  font-size: 10px;
+  line-height: 13px;
+  text-decoration: none;
+  transition: background-color .15s, color .15s;
+}
+.chat-citation:hover { background: color-mix(in srgb, var(--color-ink) 12%, transparent); color: var(--color-ink); }
+.chat-thread .chat-md .katex { font-size: 1.21em; }
+.chat-thread .chat-md .katex-display { margin-block: calc(var(--chat-s) * 4); overflow-x: auto; overflow-y: hidden; }
+
+/* Code block: 20px card with a 48px header, 12px mono body. */
+.chat-code {
+  position: relative;
+  width: 100%;
+  min-width: 0;
+  overflow: clip;
+  border-radius: 20px;
+  corner-shape: superellipse(1.1);
+  border: 1px solid var(--chat-border-subtle, color-mix(in srgb, var(--color-ink) 5%, transparent));
+  background:
+    linear-gradient(var(--chat-soft, color-mix(in srgb, var(--color-ink) 5%, transparent)), var(--chat-soft, color-mix(in srgb, var(--color-ink) 5%, transparent))),
+    var(--color-app);
+}
+.chat-code pre,
+.chat-code code {
+  font-family: var(--chat-mono, ui-monospace, monospace);
+  font-size: 12px;
+  line-height: max(1.5em, 20px);
+  background: transparent !important;
+}
+
 .conversation-composer { border-radius: 26px; }
 .conversation-tools > summary::-webkit-details-marker { display: none; }
 .conversation-tools[open] > summary { background: var(--color-raised); color: var(--color-ink); }
@@ -1846,3 +2069,60 @@ button:disabled.bg-danger {
 .conversation-advanced > summary::after { content:'›'; float:right; }
 .conversation-advanced[open] > summary::after { content:'⌄'; }
 .conversation-advanced > button { display:flex; align-items:center; gap:10px; width:100%; padding:8px 10px; border-radius:7px; font-size:12px; text-align:left; }
+
+/* The composer keeps model and access choices visible, outside scroll menus. */
+.composer-context-strip + .conversation-composer { margin-top: -12px; }
+.conversation-composer { border-radius: 24px; padding: 12px 12px 8px; }
+.composer-layout { display: grid; grid-template-columns: auto auto minmax(0,1fr); align-items: center; gap: 8px; }
+.composer-layout > .mention-editor { grid-column: 1 / -1; grid-row: 1; width: 100%; margin-bottom: 10px; }
+.composer-layout > .composer-tools { grid-column: 1; grid-row: 2; }
+.composer-access { grid-column: 2; grid-row: 2; min-width: 0; }
+.composer-end { grid-column: 3; grid-row: 2; }
+.conversation-composer .composer-plus { border: 0; background: transparent; }
+.composer-model > button { max-width: 100%; background: var(--color-raised); }
+.composer-model > button > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+@media (max-width: 600px) {
+  .composer-layout { gap: 4px; }
+  .composer-access > div > button { max-width: 120px; }
+  .composer-model > button { max-width: 150px; }
+}
+
+.composer-access > div > button { width: auto; height: 32px; border: 0; background: transparent; padding: 0 6px; gap: 6px; }
+.composer-access > div > button > span:first-child { gap: 6px; }
+
+.composer-access[data-access-mode="full"] > div > button { color: #ff9b51; }
+
+/* Compact voice composer: a quiet two-line shell and a measured mic waveform. */
+.conversation-composer { border-radius: 20px; padding: 8px 10px 6px; }
+.composer-layout { gap: 5px; }
+.composer-layout > .mention-editor { margin-bottom: 2px; }
+.composer-context-strip { padding-top: 6px; padding-bottom: 16px; font-size: 12px; }
+.composer-layout[data-recording] > .composer-tools,
+.composer-layout[data-recording] > .composer-access,
+.composer-layout[data-recording] > .composer-end { display: none; }
+.composer-dictation { padding: 2px 0 0; }
+
+/* The composer answers to its own width, not the window's: a side pane can
+   squeeze the chat column on a wide screen. Above 600px nothing changes. */
+.composer-dock { container: composer / inline-size; }
+.composer-context-strip > * { min-width: 0; }
+.composer-context-strip [data-testid="place-chip"] { flex-shrink: 1; min-width: 0; max-width: 100%; }
+.composer-after > svg { display: none; }
+@container composer (max-width: 600px) {
+  /* stop, after-this and send keep their width; the access pill gives way */
+  .composer-layout { grid-template-columns: auto minmax(0,auto) minmax(max-content,1fr); }
+  .composer-access > div > button > span:first-child > span { display: none; }
+}
+@container composer (max-width: 520px) {
+  .composer-context-strip { gap: 4px; }
+  .composer-context-strip .composer-chip-label { max-width: 8rem; }
+  .composer-after { display: flex; width: 32px; height: 32px; align-items: center; justify-content: center; padding: 0; }
+  .composer-after > svg { display: block; }
+  .composer-after > span { display: none; }
+}
+@container composer (max-width: 440px) {
+  .composer-context-strip .composer-chip-label,
+  .composer-context-strip [data-testid="place-chip"] > span.truncate { display: none; }
+  .composer-context-strip [data-testid="place-chip"] { padding-inline: 8px; }
+  .composer-model > button > span { display: none; }
+}

@@ -1,11 +1,12 @@
+import { HostedNextStep } from "@/components/HostedNextStep";
 import { RecruitmentWelcome } from "@/components/onboarding/RecruitmentWelcome";
 import { SayHiToFiraz } from "@/components/onboarding/SayHiToFiraz";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Menu } from "lucide-react";
-import { StoreProvider, useStore } from "@/state/store";
+import { api, NEW_THREAD_PENDING, openThread, StoreProvider, useStore } from "@/state/store";
 import { FirstConversationTour } from "@/components/onboarding/FirstConversationTour";
 import { GuidedTour } from "@/components/onboarding/GuidedTour";
-import { welcomeDue, teamSetupBot } from "@/lib/onboarding";
+import { completionPatch, welcomeDue, teamSetupBot } from "@/lib/onboarding";
 import { splashSquad } from "@/lib/launch-splash";
 import { ThreadRefsProvider } from "@/components/ThreadRefs";
 import { emailGateDone, initAnalytics } from "@/lib/analytics";
@@ -37,8 +38,9 @@ import { KeyboardShortcutsModal } from "@/components/KeyboardShortcutsModal";
 import { LocalVmWorkspace } from "@/components/LocalVmWorkspace";
 import { TeamMapPage } from "@/components/TeamMapPage";
 import { JobInboxPage } from "@/components/JobInbox";
-import { setLocale } from "@/lib/i18n";
+import { setLocale, t } from "@/lib/i18n";
 import { shouldOpenKeyboardShortcuts } from "@/lib/keyboard-shortcuts";
+import { readThreadPins, stepThread } from "@/components/CompactBotThreads";
 
 function Shell() {
   const { state, dispatch } = useStore();
@@ -101,7 +103,7 @@ function Shell() {
     state.instances.length > 0 &&
     !state.instances.some((i) => i.snapshot.state === "available");
 
-  // App-wide shortcuts: ⌘N new bot · ⌘1–9 jump to bot · ⌘⇧[ / ⌘⇧] prev/next · ⌘/ or ? shortcuts cheat sheet.
+  // App-wide shortcuts: ⌘N new bot · ⌘1–9 jump to bot · ⌘[ / ⌘] prev/next thread · ⌘⇧[ / ⌘⇧] prev/next bot · ⌘/ or ? shortcuts cheat sheet.
   // Kept deliberately small; every panel already closes on Esc.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -124,6 +126,16 @@ function Shell() {
           e.preventDefault();
           dispatch({ type: "select", id: target.id });
         }
+      } else if (!e.shiftKey && !e.altKey && (e.code === "BracketLeft" || e.code === "BracketRight")) {
+        // ⌘[ / ⌘] steps through the current bot's threads in the order the
+        // sidebar lists them, so the avatar rail can switch without chrome
+        const bot = state.activeView === "chat" ? state.bots.find((b) => b.id === state.selectedId) : undefined;
+        const active = bot ? state.pendingThreadSwitch[bot.id] ?? bot.threadId : "";
+        const next = bot && stepThread(bot.tasks ?? [], readThreadPins(bot.id), active, e.code === "BracketRight" ? 1 : -1);
+        if (bot && next) {
+          e.preventDefault();
+          dispatch({ type: "switchTask", botId: bot.id, threadId: next.threadId });
+        }
       } else if (e.shiftKey && (e.key === "[" || e.key === "]")) {
         const idx = bots.findIndex((b) => b.id === state.selectedId);
         const next = bots[(idx + (e.key === "]" ? 1 : -1) + bots.length) % bots.length];
@@ -135,7 +147,7 @@ function Shell() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [state.bots, state.selectedId, state.shortcutsOpen, dispatch]);
+  }, [state.bots, state.selectedId, state.activeView, state.pendingThreadSwitch, state.shortcutsOpen, dispatch]);
 
   useEffect(() => {
     window.ogb?.setUnreadCount?.(unreadCount);
@@ -298,6 +310,7 @@ function Shell() {
           // server's page replaces it in the same ChatView (same slot, same
           // type) when it lands.
           const pending = state.pendingThreadSwitch[bot.id]!;
+          if (pending === NEW_THREAD_PENDING) return <ConversationSkeleton title={t("task.newShort")} empty />;
           const cached = state.threadCache[pending];
           return cached
             ? <ChatView bot={{ ...bot, threadId: pending, messages: cached.messages, activeLeafId: cached.activeLeafId ?? null, hasMore: cached.hasMore }} />
@@ -392,6 +405,34 @@ function WelcomeGate() {
       legacyDone: emailGateDone(),
     });
   if (due && !state.welcomeOpen) firstRun.current = true;
+  // A plain first run happens in the chat: bos greets the person, offers
+  // starter jobs and asks for an engine sign-in in its own messages
+  // (shared/onboarding-chat.ts). The modal stays for the marketer offer, a
+  // replay from Settings, and as the fallback if the chat cannot start.
+  const [chatFailed, setChatFailed] = useState(false);
+  const chatStarting = useRef(false);
+  const latest = useRef(state);
+  latest.current = state;
+  const chatFirstRun = due && !marketerOpen && !state.welcomeOpen && !chatFailed;
+  useEffect(() => {
+    if (!chatFirstRun || chatStarting.current) return;
+    chatStarting.current = true;
+    void (async () => {
+      try {
+        const { state: chat } = await api("/api/onboarding/chat", { method: "POST", body: JSON.stringify({ event: { type: "start" } }), timeoutMs: 15000 });
+        const config = await api("/api/config", { method: "PUT", body: JSON.stringify(completionPatch()), timeoutMs: 10000 });
+        dispatch({ type: "configStatus", config });
+        setDismissed(true);
+        const now = latest.current;
+        if (now.bots.some((bot) => bot.id === chat.botId)) openThread(dispatch, { botId: chat.botId, threadId: chat.threadId }, now);
+      } catch {
+        setChatFailed(true);
+      } finally {
+        chatStarting.current = false;
+      }
+    })();
+  }, [chatFirstRun, dispatch]);
+  if (chatFirstRun) return null;
   // The hello card holds welcomeOpen so the chat tours wait behind it.
   if (hello) return <SayHiToFiraz onDone={() => {
     setHello(false);
@@ -430,6 +471,7 @@ function Application() {
         <WelcomeGate />
         <GuidedTour />
         <FirstConversationTour />
+        <HostedNextStep />
       </StoreProvider>
     </DesktopCapabilitiesProvider>
   );

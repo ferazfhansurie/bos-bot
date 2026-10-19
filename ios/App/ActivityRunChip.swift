@@ -56,8 +56,8 @@ struct ActivityRunChip: View {
                             .padding(.vertical, 4)
                     }
                 }
-                .padding(.leading, 12)
-                .padding(.vertical, 6)
+                .padding(.leading, 22)
+                .padding(.top, 10)
                 .transition(.opacity)
             }
         }
@@ -96,35 +96,29 @@ struct ActivityDisclosureRow: View {
     let label: String
     let status: ToolStep.Status
     var count: Int = 1
-    /// An inline-unfolding row turns its chevron down while open.
+    /// Kept for callers; ChatGPT's rows carry no chevron.
     var expanded = false
-    @Environment(\.colorScheme) private var colorScheme
 
+    /// ChatGPT's activity row: a 16pt glyph at 60% ink, the line at 40%,
+    /// 6pt apart, one line, truncated.
     var body: some View {
-        let isDark = colorScheme == .dark
-        HStack(spacing: 9) {
+        HStack(spacing: 6) {
             Image(systemName: symbol)
-                .font(.system(size: 11.5))
-                .foregroundStyle(Color.secondary)
-                .frame(width: 14)
-
-            Text(label)
-                .font(.system(size: 12.5, weight: .medium))
-                .foregroundStyle(isDark ? Color(hex: "#B8B8B8") : Color(hex: "#5A5A5A"))
-                .lineLimit(1)
-                .truncationMode(.middle)
-
-            Spacer(minLength: 6)
-
-            StepStatusBadge(status: status)
-
-            Image(systemName: "chevron.right")
-                .font(.system(size: 9, weight: .bold))
-                .foregroundStyle(Color.secondary.opacity(0.6))
-                .rotationEffect(.degrees(expanded ? 90 : 0))
+                .font(.system(size: 13))
+                .foregroundStyle(GPT.activityIcon)
+                .frame(width: 16)
+            if status == .running {
+                GPTShimmer(text: label, size: 15).lineLimit(1)
+            } else {
+                Text(label)
+                    .font(.system(size: 15))
+                    .foregroundStyle(GPT.activityText)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+            }
+            Spacer(minLength: 0)
         }
-        .padding(.horizontal, 11)
-        .frame(minHeight: 44)
+        .frame(minHeight: 24)
         .contentShape(Rectangle())
     }
 }
@@ -312,36 +306,33 @@ struct ToolStepRow: View {
                 withAnimation(.spring(response: 0.28, dampingFraction: 0.8)) { expanded.toggle() }
                 Haptics.selection()
             } label: {
-                HStack(spacing: 8) {
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
                     Image(systemName: threadRef == nil ? step.symbol : "arrow.up.right.square")
-                        .font(.system(size: 11))
-                        .foregroundStyle(Color.secondary)
-                        .frame(width: 14)
+                        .font(.system(size: 13))
+                        .foregroundStyle(GPT.activityIcon)
+                        .frame(width: 16)
 
                     VStack(alignment: .leading, spacing: 1) {
-                        Text(step.isTool ? step.label : step.name)
-                            .font(.system(size: 12.5, weight: .medium))
-                            .foregroundStyle(labelColor)
-                            .lineLimit(2)
-                            .multilineTextAlignment(.leading)
+                        if step.status == .running {
+                            GPTShimmer(text: step.isTool ? step.label : step.name, size: 15).lineLimit(1)
+                        } else {
+                            Text(step.isTool ? step.label : step.name)
+                                .font(.system(size: 15))
+                                .foregroundStyle(GPT.activityText)
+                                .lineLimit(1)
+                                .truncationMode(.tail)
+                                .multilineTextAlignment(.leading)
+                        }
                         if step.status == .failed {
                             Text("didn't work, so it tried another way")
-                                .font(.system(size: 10.5))
-                                .foregroundStyle(Color.secondary.opacity(0.8))
+                                .font(.system(size: 13))
+                                .foregroundStyle(GPT.tertiaryText)
                         }
                     }
 
-                    Spacer(minLength: 6)
-
-                    StepStatusBadge(status: step.status, showsLabel: false)
-
-                    if hasDetail && threadRef == nil {
-                        Image(systemName: "chevron.down")
-                            .font(.system(size: 8.5, weight: .bold))
-                            .foregroundStyle(Color.secondary.opacity(0.6))
-                            .rotationEffect(.degrees(expanded ? 180 : 0))
-                    }
+                    Spacer(minLength: 0)
                 }
+                .frame(minHeight: 24)
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
@@ -465,40 +456,41 @@ struct WorkingSteps: View {
     /// The turn's activity so far, oldest first.
     let items: [Message]
     let startedAt: Date
-    /// The bot's face, when the row above does not already show it (1:1).
+    /// Unused since the lead line above carries the bot's face; kept so
+    /// callers that pass one still compile.
     var avatar: AnyView? = nil
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
+    /// ChatGPT's running turn: "Working for 12s" shimmering over the
+    /// hairline, the last few steps quiet beneath it, the current one
+    /// shimmering at the end.
     var body: some View {
         let steps = items.map(toolStep(from:))
         let live = steps.last(where: { $0.status == .running })
         let finished = steps.filter { $0.status != .running }.suffix(3)
-        let line = live.map { $0.isTool ? $0.label : $0.name } ?? "Thinking"
-        VStack(alignment: .leading, spacing: 6) {
-            ForEach(finished) { step in
-                ToolStepRow(step: step, dimmed: true)
-                    .transition(.opacity.combined(with: .offset(y: 4)))
+        VStack(alignment: .leading, spacing: 0) {
+            TimelineView(.periodic(from: startedAt, by: 1)) { context in
+                GPTShimmer(text: workedTitle(seconds: max(0, Int(context.date.timeIntervalSince(startedAt))), running: true))
             }
-
-            HStack(spacing: 8) {
-                if let avatar {
-                    avatar.transition(.scale(scale: 0.6).combined(with: .opacity))
-                } else {
-                    WorkingDots()
+            .padding(.bottom, 9)
+            .accessibilityIdentifier("working-header")
+            Rectangle().fill(GPT.hairline).frame(height: 1)
+            if !finished.isEmpty || live != nil {
+                VStack(alignment: .leading, spacing: 10) {
+                    ForEach(finished) { step in
+                        ToolStepRow(step: step, dimmed: true)
+                            .transition(.opacity.combined(with: .offset(y: 4)))
+                    }
+                    if let live {
+                        ToolStepRow(step: live)
+                            .transition(.opacity.combined(with: .offset(y: 4)))
+                    }
                 }
-                ShimmerLabel(text: line)
-                    .lineLimit(1)
-                WorkingElapsedTime(startedAt: startedAt)
-                if steps.count > 1 {
-                    Text("· \(steps.count) steps")
-                        .font(.system(size: 10.5))
-                        .foregroundStyle(Color.secondary.opacity(0.8))
-                }
+                .padding(.top, 12)
             }
-            .animation(reduceMotion ? nil : .spring(response: 0.2, dampingFraction: 0.9), value: line)
         }
-        .animation(reduceMotion ? nil : .spring(response: 0.3, dampingFraction: 0.85), value: finished.map(\.id))
-        .padding(.vertical, 6)
+        .animation(reduceMotion ? nil : .spring(response: 0.3, dampingFraction: 0.85), value: steps.map(\.id))
+        .padding(.vertical, 2)
     }
 }
 

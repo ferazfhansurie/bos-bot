@@ -60,6 +60,8 @@ type OnboardingLine = Pick<WireMessage, "id"> & { onboarding?: OnboardingChatMes
 export interface OnboardingChatHost {
   /** The person's name from the profile; the greeting uses the first word. */
   personName: string;
+  /** False when connected apps can't work here, so no connect cards post. */
+  appsAvailable?: boolean;
   messages(threadId: string): readonly OnboardingLine[];
   append(threadId: string, line: OnboardingChatMessage): void;
   patch(threadId: string, messageId: string, line: OnboardingChatMessage): void;
@@ -82,7 +84,7 @@ export function applyOnboardingChatEvent(host: OnboardingChatHost, before: Onboa
   const post = (step: OnboardingChatStep) => {
     if (posted.has(step)) return;
     posted.add(step);
-    const ctx = { personName: host.personName, botName: state.botName, engineReady: state.engineReady, connected: state.connected };
+    const ctx = { personName: host.personName, botName: state.botName, engineReady: state.engineReady, connected: state.connected, appsAvailable: host.appsAvailable };
     const lines = onboardingScript(step, ctx);
     const seed = step === "greet" && lines.length ? host.seedGreeting?.(threadId) : null;
     if (seed) host.patch(threadId, seed, lines[0]);
@@ -90,9 +92,9 @@ export function applyOnboardingChatEvent(host: OnboardingChatHost, before: Onboa
   };
   if (state.step === "done") {
     // typing early (or skipping the last card) ends setup; nothing more posts
-  } else if (before.step === "greet" && state.step === "name") {
+  } else if (before.step === "greet" && state.step !== "greet") {
     post("greet");
-    post("name");
+    post(state.step);
   } else if (before.step === "name" && state.step !== "name") {
     post("about");
     // "about" carries no card, so a skipped name walks straight past it

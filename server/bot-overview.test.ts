@@ -258,6 +258,17 @@ describe("soulLead", () => {
 });
 
 describe("connectedAppsFacts", () => {
+  it("keeps pending and expired connections distinct, without forwarding account data", async () => {
+    const inventory = {
+      gmail: { connected: true, pending: true, status: "ACTIVE", accounts: [{ id: "private-account", alias: "private" }] },
+      slack: { connected: false, pending: true, status: "INITIATED" },
+      calendar: { connected: false, status: "EXPIRED" },
+      linear: { connected: false, status: "not_connected" },
+    };
+    const facts = await connectedAppsFacts(true, "configured", async () => inventory);
+    expect(facts).toEqual({ configured: true, authoritative: true, services: ["gmail"], pending: ["slack"], reconnect: ["calendar"] });
+    expect(JSON.stringify(buildBotOverview(baseFacts({ connectedApps: facts })).connections)).not.toContain("private");
+  });
   it("lists the connected slugs when the inventory reads cleanly", async () => {
     const facts = await connectedAppsFacts(true, "configured", async () => ({
       gmail: { connected: true },

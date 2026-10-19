@@ -6,24 +6,19 @@ import { t } from "@/lib/i18n";
 import { cn } from "@/lib/cn";
 import { ServiceIcon } from "./PluginsPanel";
 import type { LocaleKey } from "@/locales";
-
-async function openConnectionPage(url: string) {
-  if (window.ogb?.openExternal) {
-    await window.ogb.openExternal(url);
-    return true;
-  }
-  const opened = window.open("", "_blank");
-  if (!opened) return false;
-  opened.opener = null;
-  opened.location.replace(url);
-  return true;
-}
+import { reserveConnectionWindow } from "@/lib/connection-window";
 
 export function ConnectorCard({ botId, threadId, message }: { botId: string; threadId: string; message: Message }) {
   const connector = message.connector!;
   const [busy, setBusy] = useState(false);
   const [localError, setLocalError] = useState<string | { key: LocaleKey } | null>(null);
   const polling = useRef(false);
+  const [pendingUrl, setPendingUrl] = useState<string | null>(null);
+  const connectWindow = useRef<ReturnType<typeof reserveConnectionWindow> | null>(null);
+  useEffect(() => () => { connectWindow.current?.cancel(); }, []);
+  useEffect(() => {
+    if (connector.status === "failed") setPendingUrl(null);
+  }, [connector.status]);
 
   const endpoint = `/api/bots/${encodeURIComponent(botId)}/connector-cards/${encodeURIComponent(message.id)}`;
   const checkStatus = useCallback(async () => {
@@ -59,6 +54,8 @@ export function ConnectorCard({ botId, threadId, message }: { botId: string; thr
   if (connector.dismissed) return null;
 
   const connect = async () => {
+    const reserved = reserveConnectionWindow();
+    connectWindow.current = reserved;
     setBusy(true);
     setLocalError(null);
     try {
@@ -66,12 +63,15 @@ export function ConnectorCard({ botId, threadId, message }: { botId: string; thr
         method: "POST",
         body: JSON.stringify({ threadId }),
       });
-      if (!await openConnectionPage(String(result.url))) {
+      setPendingUrl(String(result.url));
+      if (!await reserved.navigate(String(result.url))) {
         setLocalError({ key: "connectors.card.popupBlocked" });
       }
     } catch (error) {
+      reserved.cancel();
       setLocalError(error instanceof Error ? error.message : String(error));
     } finally {
+      connectWindow.current = null;
       setBusy(false);
     }
   };
@@ -120,7 +120,11 @@ export function ConnectorCard({ botId, threadId, message }: { botId: string; thr
                   : connector.description}
             </p>
           </div>
-          {!connected ? (
+          {!connected && pendingUrl ? (
+            <a href={pendingUrl} target="_blank" rel="noopener noreferrer" onClick={() => setLocalError(null)} className={cn(pill, "border border-hairline text-ink hover:bg-raised")}>
+              {t("connectors.action.continue")}
+            </a>
+          ) : !connected ? (
             <button
               type="button"
               onClick={() => void connect()}

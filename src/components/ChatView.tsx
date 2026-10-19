@@ -1,13 +1,15 @@
+import { OutputEditor } from "./OutputEditor";
+import { withoutMemorySourceMarkers } from "../../shared/memory-source";
+import { RequestPhoneLink } from "./RequestPhoneLink";
+import { AnswerMemorySources } from "./AnswerMemorySources";
 import {ThreadDoneButton} from './ThreadDoneButton';
-import { Component, memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode, type RefObject } from "react";
+import { Component, memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
 import {
   AlertTriangle,
   ArrowDown,
-  Check,
   ChevronLeft,
   ChevronRight,
   Bug,
-  Copy,
   Monitor,
   Pencil,
   Pin,
@@ -43,7 +45,6 @@ import { ActivityMascot } from "./ActivityMascot";
 import { turnGesture } from "../../shared/mascot-choreography";
 import { showToolCallsEnabled, skillAuthoringEnabled } from "@/lib/feature-flags";
 import { glyphFaceForBot, normalizeState, stateForBot } from "@/lib/mascot";
-import { resolveMausColor } from "../../shared/glyph-faces";
 import { peerLine, type PeerLine } from "@/lib/peer-message";
 import { showWorkingDots } from "@/lib/turn-tail";
 import { liveActivityLabel } from "@/lib/live-activity";
@@ -59,7 +60,8 @@ import { OptionCard, shouldHideOnboardingCard } from "./OptionCard";
 import { ApprovalCard } from "./ApprovalCard";
 import { QuestionCard } from "./QuestionCard";
 import { Composer } from "./Composer";
-import { ConversationHeader, ConversationTools } from "./ConversationChrome";
+import { ConversationHeader } from "./ConversationChrome";
+import { ConversationActions } from "./workbench/ConversationActions";
 import { SharedAttachmentTile } from "./SharedAttachmentTile";
 import type { SharedComposer } from "./shared-conversation";
 import { ConfirmDialog } from "./ConfirmDialog";
@@ -108,6 +110,7 @@ class SharedTranscriptAnchor extends Component<{
 import { ChatFindBar } from "./ChatFindBar";
 import { ReplyQuote } from "./ReplyQuote";
 import { ConnectorCard } from "./ConnectorCard";
+import { OnboardingChatCard } from "./OnboardingChatCard";
 import { SecretRequestCard } from "./SecretRequestCard";
 import { hasRoutineExecutionTask, RoutineRunCard } from "./RoutineRunCard";
 import { AttachmentGallery, collectMessageFiles } from "./AttachmentGallery";
@@ -115,12 +118,12 @@ import { ScreenFrame } from "./ScreenFrame";
 import { CompactionChip, DigestChip } from "./DigestChip";
 import { RenameTitle } from "./RenameTitle";
 import { BotActivityPicker } from "./TaskPicker";
-import { ModelPicker } from "./ModelPicker";
 import { ExportTranscriptMenu } from "./ExportTranscriptMenu";
 import { TerminalButton } from "./TerminalPanel";
 import { botControlAvailable, remoteBotHint, remoteBotNotice } from "@/lib/remote-bot";
 
 import { SpeakButton } from "./SpeakButton";
+import { BAD, FeedbackButtons, GOOD, ShareButton, SpeakerHeader, TurnActionRow, TurnCopyButton, turnActionClass } from "./TurnActions";
 import { BotCallButton, BotCallOverlay } from "./voice-call/BotCall";
 import { callIsOn, useCallSnapshot } from "./voice-call/VoiceCall";
 import { useRealtimeCall } from "@/lib/voice-call/session";
@@ -128,7 +131,7 @@ import { effectivePlace, toolPlace, type EffectivePlace } from "@/lib/place";
 import { cn } from "@/lib/cn";
 import { activeLocale, t } from "@/lib/i18n";
 import { useFocusMessage } from "@/lib/focus-message";
-import { describeRun, groupTranscript, type TranscriptItem } from "@/lib/activity-runs";
+import { groupTranscript, type TranscriptItem } from "@/lib/activity-runs";
 import { includeIndex, resolveVirtualRange, rowHeightCache, sameVirtualRange, spanHeight, tailRange, viewportRange, type IndexRange, type VirtualRange } from "@/lib/virtual-range";
 import { ActivityRun } from "./ActivityRun";
 import { TurnNarrationRun } from "./TurnNarrationRun";
@@ -171,28 +174,6 @@ function DaySeparator({ at }: { at: number }) {
     <div className="py-3 text-center text-[13px] text-ink-secondary">
       {dayLabel(at)} {formatTime(at)}
     </div>
-  );
-}
-
-/** Hover/focus-revealed copy control shared by user + bot bubbles. */
-function CopyButton({ text, className }: { text: string; className?: string }) {
-  const [copied, setCopied] = useState(false);
-  return (
-    <button
-      onClick={() => {
-        void navigator.clipboard?.writeText(text);
-        setCopied(true);
-        setTimeout(() => setCopied(false), 1200);
-      }}
-      aria-label={t("chat.copyMessage")}
-      title={t("chat.copyMessage")}
-      className={cn(
-        "rounded-md p-1.5 text-ink-secondary opacity-0 transition-opacity hover:bg-raised hover:text-ink focus-visible:opacity-100 group-hover:opacity-100 group-focus-within:opacity-100",
-        className,
-      )}
-    >
-      {copied ? <Check size={14} className="text-success" /> : <Copy size={14} />}
-    </button>
   );
 }
 
@@ -371,6 +352,7 @@ function Bubble({
   const mentionPeers = useMemo(() => shared ? [...(shared.mentionPeople ?? []), ...shared.mentionBots] : state.bots.filter((peer) => peer.id !== bot.id), [shared, state.bots, bot.id]);
   const [expanded, setExpanded] = useState(false);
   const [viewRaw, setViewRaw] = useState(false);
+  const [editOutput, setEditOutput] = useState(false);
   const speech = useSpeech();
   const speaking = speech.messageId === message.id && speech.status !== "idle";
   const text = peer ? peer.body : (message.text ?? "");
@@ -381,14 +363,11 @@ function Bubble({
   const visibleText = webhookView?.task ?? attachments?.display ?? text;
   const hasAttachments = Boolean(attachments && (attachments.images.length || attachments.files.length));
   const sharedMeta = shared?.messageMeta?.[message.id];
-  const sharedSpeaker = shared?.mentionBots.find(candidate => candidate.id === message.from?.botId);
-  const speakerColour = message.from?.color ?? sharedSpeaker?.color ?? (peer?.botId ? state.bots.find(candidate => candidate.id === peer.botId)?.color : undefined) ?? bot.color;
   const collapsible =
     user && !webhookView && !expanded && (visibleText.length > USER_COLLAPSE_CHARS || visibleText.split("\n").length > USER_COLLAPSE_LINES);
 
   if (sharedMeta?.deletedAt) return <div className={cn("flex w-full flex-col", user ? "items-end" : "items-start")}>
-    {!user && message.from && <div className="mb-1 text-[11px] text-ink-secondary">{message.from.name}</div>}
-    <div className="rounded-2xl bg-card px-4 py-2.5 text-sm italic text-ink-secondary">Message removed</div>
+    <div className={cn("text-sm italic chat-text-tertiary", user && "chat-user-bubble")}>Message removed</div>
   </div>;
 
   if (user && editing && !webhookView && !hasAttachments) {
@@ -405,8 +384,15 @@ function Bubble({
   const ownReactions = Object.entries(
     (message.reactions ?? []).reduce<Record<string, string[]>>((all, r) => ({ ...all, [r.emoji]: [...(all[r.emoji] ?? []), r.by] }), {}),
   );
-  const reactionList = shared ? Object.entries(sharedReactions) : ownReactions;
+  const allReactions = shared ? Object.entries(sharedReactions) : ownReactions;
   const selfActor = shared ? (shared.selfId ?? "") : "user";
+  // in a 1:1 the thumbs in the action row are the only view of 👍/👎 —
+  // a chip beside them would say the same thing twice
+  const reactionList = shared || user ? allReactions : allReactions.filter(([emoji]) => emoji !== GOOD && emoji !== BAD);
+  const feedback = {
+    good: Boolean(allReactions.find(([emoji]) => emoji === GOOD)?.[1].includes(selfActor)),
+    bad: Boolean(allReactions.find(([emoji]) => emoji === BAD)?.[1].includes(selfActor)),
+  };
   const react = shared
     ? shared.annotateMessage
       ? (emoji: string) => void shared.annotateMessage?.(message.id, { reaction: emoji, active: !sharedReactions[emoji]?.includes(selfActor) })
@@ -426,212 +412,227 @@ function Bubble({
     if (v && !bot.busy) dispatch({ type: "switchBranch", botId: bot.id, threadId: bot.threadId, messageId: v.id });
   };
 
-  return (
-    <div className={cn("group flex w-full flex-col", user ? "items-end" : "items-start")}>
-      {message.leadAction && <div role="status" className="mb-1 rounded-lg border border-line bg-card px-3 py-2 text-xs text-ink-secondary">
-        <span className="font-medium">{message.leadAction.status} · {state.bots.find(b => b.id === message.leadAction?.leadBotId)?.name ?? "Lead"}</span>
-        <div>{message.leadAction.requiredAction}</div>
-        {message.leadAction.resolution && <div>{message.leadAction.resolution.decision} · {message.leadAction.resolution.evidence}</div>}
-      </div>}
-      {peer && <PeerLabel peer={peer} />}
-      {shared && !user && message.from && <div className="mb-1 flex items-center gap-1.5 pl-0.5 text-[11px] font-medium text-ink-secondary">
-        {sharedSpeaker && <BotAvatar
-          bot={sharedSpeaker} size={20} animated={false} />}
-        {message.from.name}
-      </div>}
-      <div className={cn("flex w-full items-center gap-1.5", user ? "justify-end" : "justify-start")}>
-        {user && (
-          <MessageActions side="user" onReply={onReply} onReact={react}>
-            {/* editing rewinds the thread, so it waits for the turn to end —
-                same rule as the version switcher below */}
-            {(shared ? Boolean(shared.editMessage) : botControlAvailable(bot, "edit") && !bot.busy) && message.kind === "text" && !webhookView && !hasAttachments && (
-              <button
-                onClick={onStartEdit}
-                aria-label={t("chat.editMessage")}
-                title={t("chat.editMessage")}
-                className={messageActionClass}
-              >
-                <Pencil size={14} />
-              </button>
-            )}
-            {Boolean(visibleText.trim()) && <CopyButton text={visibleText} className="opacity-100" />}
-            {shared?.annotateMessage && !sharedMeta?.pinnedBy && <button type="button" onClick={() => void shared.annotateMessage?.(message.id, { pinned: true })} aria-label={t("chat.pinMessage")} title={t("chat.pinMessage")} className={messageActionClass}><Pin size={14} /></button>}
-            {shared?.deleteMessage && <button type="button" onClick={() => shared.onRequestDelete?.(message.id)} aria-label="Remove message" title="Remove message" className={cn(messageActionClass, "text-danger")}><Trash2 size={14} /></button>}
-            {!shared && <button
-              onClick={() =>
-                dispatch({
-                  type: "updateTask",
-                  botId: bot.id,
-                  threadId: bot.threadId,
-                  patch: { pinnedMessageId: bot.pinnedMessageId === message.id ? "" : message.id },
-                })
-              }
-              aria-label={bot.pinnedMessageId === message.id ? t("chat.unpinMessage") : t("chat.pinMessage")}
-              title={bot.pinnedMessageId === message.id ? t("chat.unpinHint") : t("chat.pinHint")}
-              className={cn(messageActionClass, remoteClient && "hidden")}
-            >
-              {bot.pinnedMessageId === message.id ? <PinOff size={14} /> : <Pin size={14} />}
-            </button>}
-          </MessageActions>
-        )}
-        <div
-          className={cn(
-            "conversation-bubble w-fit max-w-[min(42rem,78%)]",
-            emerging && "turn-answer",
-            arriving && !emerging && (user ? "msg-spring origin-right" : "msg-spring origin-left"),
-            user && webhookView
-              ? "overflow-hidden border border-accent/25 bg-card text-ink shadow-[0_10px_30px_rgba(0,0,0,0.18)]"
-              : user
-                ? "bg-bubble-user px-4 py-2.5 whitespace-pre-wrap text-ink"
-                : "bot-colour-bubble px-4 py-2.5 text-ink",
-          )}
-          style={!user ? { "--bot-bubble-colour": resolveMausColor(speakerColour) } as CSSProperties : undefined}
-          title={new Date(message.at).toLocaleString()}
-        >
-          {replyTarget && (
-            <div className="mb-2">
-              <ReplyQuote
-                message={replyTarget}
-                fallbackName={bot.name}
-                compact
-                onJump={() =>
-                  dispatch({ type: "focusMessage", threadId: bot.threadId, messageId: replyTarget.id })
-                }
-              />
-            </div>
-          )}
-          {shared && message.replyToId && !replyTarget && <div className="mb-2 rounded-lg border-s-2 border-accent/60 bg-inset/70 px-2.5 py-1.5 text-xs text-ink-secondary">Reply to an earlier message</div>}
-          {shared && message.sharedAttachments?.map(attachment => <SharedAttachmentTile key={attachment.id} roomId={bot.threadId.slice("shared:".length)} attachment={attachment} />)}
-          {user && webhookView ? (
-            <div className="min-w-[300px] max-w-[520px]">
-              <div className="flex items-center gap-2 border-b border-accent/15 bg-accent/[0.055] px-4 py-2.5 text-[11.5px] font-medium text-accent">
-                <Webhook size={13} />
-                <span>{t("chat.webhookTask")}</span>
-              </div>
-              <div className="chat-text px-4 py-3 whitespace-pre-wrap">{webhookView.task}</div>
-              {webhookView.payload && (
-                <details className="border-t border-hairline/30 bg-inset/25 px-4 py-2.5 text-[11.5px] text-ink-secondary">
-                  <summary className="cursor-pointer select-none hover:text-ink">{t("chat.viewPayload")}</summary>
-                  <pre className="mt-2 max-h-48 overflow-auto rounded-lg border border-hairline/25 bg-black/25 p-3 font-mono text-[10.5px] leading-relaxed whitespace-pre-wrap text-ink-secondary">{webhookView.payload}</pre>
-                </details>
-              )}
-            </div>
-          ) : user ? (
-            <>
-              {attachments && <AttachmentGallery images={attachments.images} files={attachments.files} message={{ threadId: bot.threadId, messageId: message.id }} eager={eagerAttachments} className={!visibleText ? "mb-0" : undefined} />}
-              {visibleText && (
-                <div
-                  className={cn("chat-text", collapsible && "max-h-40 overflow-hidden [mask-image:linear-gradient(to_bottom,black_60%,transparent)]")}
-                >
-                  <ThreadRefText text={visibleText} peers={mentionPeers} />
-                </div>
-              )}
-              {message.steerDelivery === "outcome_unknown" ? (
-                <div className="mt-1 text-[11px] text-warning" title={t("chat.steerUnknownHint")}>
-                  {t("chat.steerUnknown")}
-                </div>
-              ) : message.steered && (
-                <div className="mt-1 text-[11px] text-ink-secondary/70" title={t("chat.sentMidTurnHint")}>
-                  {t("chat.sentMidTurn")}
-                </div>
-              )}
-              {collapsible && (
-                <button onClick={() => setExpanded(true)} className="mt-1 text-[12.5px] text-ink-secondary hover:text-ink">
-                  {t("chat.showFull")}
-                </button>
-              )}
-              {expanded && (
-                <button onClick={() => setExpanded(false)} className="mt-1 text-[12.5px] text-ink-secondary hover:text-ink">
-                  {t("chat.showLess")}
-                </button>
-              )}
-            </>
-          ) : (
-            <MessageBoundary key={viewRaw ? "raw" : "rendered"} fallbackText={text || t("chat.generatedImage")}>
-              <AttachmentGallery images={generatedPaths} files={linkedFiles} message={{ threadId: bot.threadId, messageId: message.id }} className={text ? undefined : "mb-0"} eager={eagerAttachments} />
-              {viewRaw && text ? (
-                <RawMarkdownView text={text} />
-              ) : text ? (
-                <ChatMarkdown text={text} mentionPeers={mentionPeers} message={{ threadId: bot.threadId, messageId: message.id }} />
-              ) : null}
-            </MessageBoundary>
-          )}
-          {sharedMeta?.editedAt && <div className="mt-1 text-[10px] text-ink-secondary" title={new Date(sharedMeta.editedAt).toLocaleString()}>edited</div>}
-        </div>
-        {!user && (
-          <MessageActions side="bot" forceOpen={viewRaw || speaking} onReply={onReply} onReact={react}>
-            {text && <CopyButton text={text} className="opacity-100" />}
-            {text && <RawToggleAction active={viewRaw} onToggle={() => setViewRaw((r) => !r)} className="opacity-100" />}
-            {!shared && message.kind === "text" && text && !peer && (
-              <SpeakButton text={text} botId={bot.id} messageId={message.id} voiceId={bot.voice} className="opacity-100" />
-            )}
-            {!shared && isLastBotText && !bot.busy && onRegenerate && (
-              <button
-                onClick={onRegenerate}
-                aria-label={t("chat.regenerate")}
-                title={t("chat.regenerate")}
-                className={messageActionClass}
-              >
-                <RefreshCw size={14} />
-              </button>
-            )}
-            {!shared && <button
-              onClick={() =>
-                dispatch({
-                  type: "updateTask",
-                  botId: bot.id,
-                  threadId: bot.threadId,
-                  patch: { pinnedMessageId: bot.pinnedMessageId === message.id ? "" : message.id },
-                })
-              }
-              aria-label={bot.pinnedMessageId === message.id ? t("chat.unpinMessage") : t("chat.pinMessage")}
-              title={bot.pinnedMessageId === message.id ? t("chat.unpinHint") : t("chat.pinHint")}
-              className={cn(messageActionClass, remoteClient && "hidden")}
-            >
-              {bot.pinnedMessageId === message.id ? <PinOff size={14} /> : <Pin size={14} />}
-            </button>}
-          </MessageActions>
-        )}
-        <span
-          className={cn(
-            "self-end pb-1 text-[11px] tabular-nums text-ink-secondary/70 opacity-0 transition-opacity group-hover:opacity-100",
-            user ? "order-first mr-1" : "ml-1",
-          )}
-        >
-          {formatTime(message.at)}
-        </span>
-      </div>
-      {reactionList.length > 0 && <div className={cn("-mt-1.5 flex flex-wrap items-center gap-1 px-2", user ? "justify-end" : "justify-start")}>
-        {reactionList.map(([emoji, actors]) => <button key={emoji} type="button" disabled={!react} aria-label={`${emoji}, ${actors.length} reactions`} aria-pressed={actors.includes(selfActor)} onClick={() => react?.(emoji)} className={cn("relative z-[1] flex h-6 items-center gap-1 rounded-full border px-1.5 text-[12px] tabular-nums shadow-sm", actors.includes(selfActor) ? "border-accent/40 bg-accent/15 text-ink" : "border-hairline/60 bg-app text-ink-secondary", react && "hover:bg-raised")}>
-          <span className="text-[13px] leading-none">{emoji}</span>{actors.length > 1 && actors.length}
-        </button>)}
-      </div>}
-      {shared?.annotateMessage && sharedMeta?.pinnedBy && <div className="mt-1 text-[11px] text-ink-secondary">
-        <button type="button" className="rounded-full px-2 py-0.5 hover:bg-raised" onClick={() => void shared.annotateMessage?.(message.id, { pinned: false })}>Pinned · Unpin</button>
-      </div>}
-      {versions.length > 1 && botControlAvailable(bot, "versions") && (
-        <div className="mt-1 flex items-center gap-0.5 pr-1 text-[12px] text-ink-secondary">
-          <button
-            onClick={() => switchTo(versions[versionIndex - 1])}
-            disabled={versionIndex <= 0 || bot.busy}
-            className="rounded p-0.5 hover:bg-raised hover:text-ink disabled:opacity-30 disabled:hover:bg-transparent"
-            title={t("chat.previousVersion")}
-          >
-            <ChevronLeft size={14} />
-          </button>
-          <span className="tabular-nums">
-            {versionIndex + 1}/{versions.length}
-          </span>
-          <button
-            onClick={() => switchTo(versions[versionIndex + 1])}
-            disabled={versionIndex >= versions.length - 1 || bot.busy}
-            className="rounded p-0.5 hover:bg-raised hover:text-ink disabled:opacity-30 disabled:hover:bg-transparent"
-            title={t("chat.nextVersion")}
-          >
-            <ChevronRight size={14} />
-          </button>
+  const pinButton = !shared && (
+    <button
+      onClick={() =>
+        dispatch({
+          type: "updateTask",
+          botId: bot.id,
+          threadId: bot.threadId,
+          patch: { pinnedMessageId: bot.pinnedMessageId === message.id ? "" : message.id },
+        })
+      }
+      aria-label={bot.pinnedMessageId === message.id ? t("chat.unpinMessage") : t("chat.pinMessage")}
+      title={bot.pinnedMessageId === message.id ? t("chat.unpinHint") : t("chat.pinHint")}
+      className={cn(messageActionClass, remoteClient && "hidden")}
+    >
+      {bot.pinnedMessageId === message.id ? <PinOff size={14} /> : <Pin size={14} />}
+    </button>
+  );
+
+  const replyQuote = (
+    <>
+      {replyTarget && (
+        <div className="mb-2">
+          <ReplyQuote
+            message={replyTarget}
+            fallbackName={bot.name}
+            compact
+            onJump={() =>
+              dispatch({ type: "focusMessage", threadId: bot.threadId, messageId: replyTarget.id })
+            }
+          />
         </div>
       )}
+      {shared && message.replyToId && !replyTarget && <div className="mb-2 rounded-lg border-s-2 border-accent/60 bg-inset/70 px-2.5 py-1.5 text-xs text-ink-secondary">Reply to an earlier message</div>}
+    </>
+  );
+
+  const reactionChips = reactionList.length > 0 && <div className={cn("mt-1 flex flex-wrap items-center gap-1", user ? "justify-end" : "justify-start")}>
+    {reactionList.map(([emoji, actors]) => <button key={emoji} type="button" disabled={!react} aria-label={`${emoji}, ${actors.length} reactions`} aria-pressed={actors.includes(selfActor)} onClick={() => react?.(emoji)} className={cn("relative z-[1] flex h-6 items-center gap-1 rounded-full border px-1.5 text-[12px] tabular-nums", actors.includes(selfActor) ? "border-accent/40 bg-accent/15 text-ink" : "chat-hairline bg-app text-ink-secondary", react && "hover:bg-raised")}>
+      <span className="text-[13px] leading-none">{emoji}</span>{actors.length > 1 && actors.length}
+    </button>)}
+  </div>;
+
+  const pinnedNote = shared?.annotateMessage && sharedMeta?.pinnedBy && <div className="mt-1 text-[11px] text-ink-secondary">
+    <button type="button" className="rounded-full px-2 py-0.5 hover:bg-raised" onClick={() => void shared.annotateMessage?.(message.id, { pinned: false })}>Pinned · Unpin</button>
+  </div>;
+
+  const leadAction = message.leadAction && <div role="status" className="mb-1 rounded-lg border border-line bg-card px-3 py-2 text-xs text-ink-secondary">
+    <span className="font-medium">{message.leadAction.status} · {state.bots.find(b => b.id === message.leadAction?.leadBotId)?.name ?? "Lead"}</span>
+    <div>{message.leadAction.requiredAction}</div>
+    {message.leadAction.resolution && <div>{message.leadAction.resolution.decision} · {message.leadAction.resolution.evidence}</div>}
+  </div>;
+
+  if (user) {
+    const canEdit = (shared ? Boolean(shared.editMessage) : botControlAvailable(bot, "edit") && !bot.busy) && message.kind === "text" && !webhookView && !hasAttachments;
+    return (
+      <div className="group flex w-full flex-col items-end" title={new Date(message.at).toLocaleString()}>
+        {leadAction}
+        {/* chatgpt puts what you attached above your bubble, not inside it */}
+        {attachments && (attachments.images.length > 0 || attachments.files.length > 0) && (
+          <div className="mb-1 flex w-full justify-end">
+            <AttachmentGallery variant="user" images={attachments.images} files={attachments.files} message={{ threadId: bot.threadId, messageId: message.id }} eager={eagerAttachments} className="mb-0" />
+          </div>
+        )}
+        {shared && message.sharedAttachments?.length ? (
+          <div className="mb-1 flex max-w-[70%] flex-col items-end gap-1">
+            {message.sharedAttachments.map(attachment => <SharedAttachmentTile key={attachment.id} roomId={bot.threadId.slice("shared:".length)} attachment={attachment} />)}
+          </div>
+        ) : null}
+        {(webhookView || visibleText || replyTarget || (shared && message.replyToId)) && (
+          <div
+            className={cn(
+              "w-fit min-w-0",
+              emerging && "turn-answer",
+              arriving && !emerging && "msg-spring origin-right",
+              webhookView
+                ? "conversation-bubble max-w-[70%] overflow-hidden border border-accent/25 bg-card text-ink shadow-[0_10px_30px_rgba(0,0,0,0.18)]"
+                : "chat-user-bubble whitespace-pre-wrap",
+            )}
+          >
+            {replyQuote}
+            {webhookView ? (
+              <div className="min-w-[300px] max-w-[520px]">
+                <div className="flex items-center gap-2 border-b border-accent/15 bg-accent/[0.055] px-4 py-2.5 text-[11.5px] font-medium text-accent">
+                  <Webhook size={13} />
+                  <span>{t("chat.webhookTask")}</span>
+                </div>
+                <div className="chat-text px-4 py-3 whitespace-pre-wrap">{webhookView.task}</div>
+                {webhookView.payload && (
+                  <details className="border-t border-hairline/30 bg-inset/25 px-4 py-2.5 text-[11.5px] text-ink-secondary">
+                    <summary className="cursor-pointer select-none hover:text-ink">{t("chat.viewPayload")}</summary>
+                    <pre className="mt-2 max-h-48 overflow-auto rounded-lg border border-hairline/25 bg-black/25 p-3 font-mono text-[10.5px] leading-relaxed whitespace-pre-wrap text-ink-secondary">{webhookView.payload}</pre>
+                  </details>
+                )}
+              </div>
+            ) : (
+              <>
+                {visibleText && (
+                  <div
+                    className={cn("chat-text", collapsible && "max-h-40 overflow-hidden [mask-image:linear-gradient(to_bottom,black_60%,transparent)]")}
+                  >
+                    <ThreadRefText text={visibleText} peers={mentionPeers} />
+                  </div>
+                )}
+                {collapsible && (
+                  <button onClick={() => setExpanded(true)} className="mt-1 text-[12.5px] chat-text-secondary hover:text-ink">
+                    {t("chat.showFull")}
+                  </button>
+                )}
+                {expanded && (
+                  <button onClick={() => setExpanded(false)} className="mt-1 text-[12.5px] chat-text-secondary hover:text-ink">
+                    {t("chat.showLess")}
+                  </button>
+                )}
+              </>
+            )}
+            {sharedMeta?.editedAt && <div className="mt-1 text-[10px] chat-text-tertiary" title={new Date(sharedMeta.editedAt).toLocaleString()}>edited</div>}
+          </div>
+        )}
+        {message.steerDelivery === "outcome_unknown" ? (
+          <div className="mt-1 text-[11px] text-warning" title={t("chat.steerUnknownHint")}>
+            {t("chat.steerUnknown")}
+          </div>
+        ) : message.steered && (
+          <div className="mt-1 text-[11px] chat-text-tertiary" title={t("chat.sentMidTurnHint")}>
+            {t("chat.sentMidTurn")}
+          </div>
+        )}
+        {reactionChips}
+        <TurnActionRow persistent={false} align="end" at={message.at}>
+          {versions.length > 1 && botControlAvailable(bot, "versions") && (
+            <div className="flex items-center gap-0.5 text-[12px] chat-text-tertiary tabular-nums">
+              <button
+                onClick={() => switchTo(versions[versionIndex - 1])}
+                disabled={versionIndex <= 0 || bot.busy}
+                className={turnActionClass}
+                title={t("chat.previousVersion")}
+                aria-label={t("chat.previousVersion")}
+              >
+                <ChevronLeft size={16} />
+              </button>
+              <span>{versionIndex + 1}/{versions.length}</span>
+              <button
+                onClick={() => switchTo(versions[versionIndex + 1])}
+                disabled={versionIndex >= versions.length - 1 || bot.busy}
+                className={turnActionClass}
+                title={t("chat.nextVersion")}
+                aria-label={t("chat.nextVersion")}
+              >
+                <ChevronRight size={16} />
+              </button>
+            </div>
+          )}
+          {Boolean(visibleText.trim()) && <TurnCopyButton text={visibleText} label={t("chat.copyMessage")} />}
+          {canEdit && (
+            <button onClick={onStartEdit} aria-label={t("chat.editMessage")} title={t("chat.editMessage")} className={turnActionClass}>
+              <Pencil size={18} aria-hidden="true" />
+            </button>
+          )}
+          <MessageActions side="user" variant="turn" onReply={onReply} onReact={react}>
+            {shared?.annotateMessage && !sharedMeta?.pinnedBy && <button type="button" onClick={() => void shared.annotateMessage?.(message.id, { pinned: true })} aria-label={t("chat.pinMessage")} title={t("chat.pinMessage")} className={messageActionClass}><Pin size={14} /></button>}
+            {shared?.deleteMessage && <button type="button" onClick={() => shared.onRequestDelete?.(message.id)} aria-label="Remove message" title="Remove message" className={cn(messageActionClass, "text-danger")}><Trash2 size={14} /></button>}
+            {pinButton}
+          </MessageActions>
+        </TurnActionRow>
+        {pinnedNote}
+      </div>
+    );
+  }
+
+  const bodyText = text ? withoutMemorySourceMarkers(text) : "";
+  return (
+    <div className="group flex w-full min-w-0 flex-col items-start">
+      {leadAction}
+      {peer && <PeerLabel peer={peer} />}
+      <div
+        className={cn(
+          "w-full min-w-0 text-ink",
+          emerging && "turn-answer",
+          arriving && !emerging && "chat-enter",
+        )}
+        title={new Date(message.at).toLocaleString()}
+      >
+        {replyQuote}
+        {shared && message.sharedAttachments?.map(attachment => <SharedAttachmentTile key={attachment.id} roomId={bot.threadId.slice("shared:".length)} attachment={attachment} />)}
+        <MessageBoundary key={viewRaw ? "raw" : "rendered"} fallbackText={text || t("chat.generatedImage")}>
+          <AttachmentGallery images={generatedPaths} files={linkedFiles} message={{ threadId: bot.threadId, messageId: message.id }} className={text ? undefined : "mb-0"} eager={eagerAttachments} />
+          {viewRaw && text ? (
+            <RawMarkdownView text={text} />
+          ) : text ? (
+            <ChatMarkdown text={bodyText} mentionPeers={mentionPeers} message={{ threadId: bot.threadId, messageId: message.id }} />
+          ) : null}
+        </MessageBoundary>
+        {editOutput && <OutputEditor bot={bot} message={message} onClose={() => setEditOutput(false)} />}
+        {!shared && !peer && text && <AnswerMemorySources botId={bot.id} threadId={bot.threadId} messageId={message.id} text={text} />}
+        {sharedMeta?.editedAt && <div className="mt-1 text-[10px] chat-text-tertiary" title={new Date(sharedMeta.editedAt).toLocaleString()}>edited</div>}
+      </div>
+      {reactionChips}
+      <TurnActionRow persistent={(isLastBotText && !bot.busy) || viewRaw || speaking} at={message.at}>
+        {text && <TurnCopyButton text={bodyText} />}
+        {!shared && message.kind === "text" && text && !peer && (
+          <SpeakButton text={text} botId={bot.id} messageId={message.id} voiceId={bot.voice} iconSize={18} className={cn(turnActionClass, "opacity-100")} />
+        )}
+        {react && text && <FeedbackButtons active={feedback} onReact={react} />}
+        {text && <ShareButton text={bodyText} />}
+        <MessageActions side="bot" variant="turn" forceOpen={viewRaw || speaking} onReply={onReply} onReact={react}>
+          {!shared && !peer && message.kind === "text" && text && !bot.id.startsWith("rb-") && !bot.busy && <button type="button" className={messageActionClass} aria-label="edit and comment on output" title="edit and comment on output" onClick={() => setEditOutput(true)}><Pencil size={14} /></button>}
+          {text && <RawToggleAction active={viewRaw} onToggle={() => setViewRaw((r) => !r)} className="opacity-100" />}
+          {!shared && isLastBotText && !bot.busy && onRegenerate && (
+            <button
+              onClick={onRegenerate}
+              aria-label={t("chat.regenerate")}
+              title={t("chat.regenerate")}
+              className={messageActionClass}
+            >
+              <RefreshCw size={14} />
+            </button>
+          )}
+          {pinButton}
+        </MessageActions>
+      </TurnActionRow>
+      {pinnedNote}
     </div>
   );
 }
@@ -715,6 +716,16 @@ function estimateRowHeight(item: RowItem): number {
   }
 }
 
+/** Who a row speaks for, for the speaker header: the person's own lines
+ * and relayed peer lines carry their own label, so they return null. */
+function rowSpeaker(item: RowItem): string | null {
+  if (item.kind !== "message") return "bot";
+  const m = item.message;
+  if (m.role === "user") return null;
+  if (m.kind === "compaction" || m.kind === "digest") return null;
+  return m.from?.botId ?? m.from?.name ?? "bot";
+}
+
 /** Rows that are known to render nothing are left out before windowing, so
  * they never take a spacer slot or a gap. Mirrors TranscriptRow's nulls. */
 function rowRenders(item: RowItem, showToolCalls: boolean, transcript: Message[]): boolean {
@@ -754,6 +765,8 @@ function sameRowItem(a: RowItem, b: RowItem): boolean {
 interface TranscriptRowProps {
   item: RowItem;
   newDay: boolean;
+  /** first row of a bot's reply: avatar + name above it */
+  speaker: boolean;
   bot: Bot;
   shared?: SharedChatOptions;
   showToolCalls: boolean;
@@ -777,17 +790,27 @@ interface TranscriptRowProps {
 /** One transcript row. Memoized on its own message(s) and flags, so a new
  * row or a store change re-renders the rows it touches, not the thread. */
 const TranscriptRow = memo(function TranscriptRow({
-  item, newDay, bot, shared, showToolCalls, place, focusedId, editing, isLastBotText, emerging, arriving,
+  item, newDay, speaker, bot, shared, showToolCalls, place, focusedId, editing, isLastBotText, emerging, arriving,
   eagerAttachments, canRetry, engine, onStartEdit, onCancelEdit, onSubmitEdit, onRegenerate, onReply,
 }: TranscriptRowProps) {
   const first = item.kind === "message" ? item.message : item.messages[0];
+  const voice = speaker ? first.from : undefined;
+  const header = speaker ? (
+    <div className="-mb-1">
+      <SpeakerHeader
+        bot={voice ? shared?.mentionBots.find((candidate) => candidate.id === voice.botId) ?? { name: voice.name, color: voice.color ?? bot.color } : bot}
+        name={voice?.name ?? bot.name}
+      />
+    </div>
+  ) : null;
   if (item.kind === "turn") {
     const shown = showToolCalls ? item.messages : item.messages.filter((message) => message.kind === "text");
     if (!shown.length) return null;
-    const label = showToolCalls && item.steps.length ? `${item.label} · ${describeRun(item.steps)}` : item.label;
+    const label = item.label;
     return (
       <>
         {newDay && <DaySeparator at={first.at} />}
+        {header}
         <TurnNarrationRun label={label} forceOpen={item.messages.some((message) => message.id === focusedId)}>
           {shown.map((message) => (
             <div key={message.id} className="contents" data-mid={message.id}>
@@ -818,6 +841,7 @@ const TranscriptRow = memo(function TranscriptRow({
     return (
       <>
         {newDay && <DaySeparator at={first.at} />}
+        {header}
         <ActivityRun messages={item.messages} forceOpen={item.messages.some((step) => step.id === focusedId)}>
           {item.messages.map((step) => (
             <div key={step.id} className="contents" data-mid={step.id}>
@@ -854,6 +878,7 @@ const TranscriptRow = memo(function TranscriptRow({
         return (
           <MessageBoundary fallbackText={m.card?.subtitle || m.card?.title || ""}>
             {card}
+            {!bot.remote && m.card?.requestId && (m.card.tool || m.card.questionRequest) && !m.card.answered && !m.card.dismissed && <RequestPhoneLink botId={bot.id} threadId={bot.threadId} messageId={m.id} requestId={m.card.requestId} />}
           </MessageBoundary>
         );
       }
@@ -883,8 +908,8 @@ const TranscriptRow = memo(function TranscriptRow({
         return <CompactionChip message={m} />;
       case "screen":
         return m.png ? <ScreenFrame png={m.png} mime={m.mime} /> : null;
-      default:
-        return (
+      default: {
+        const bubble = (
           <Bubble
             bot={bot}
             message={m}
@@ -902,12 +927,21 @@ const TranscriptRow = memo(function TranscriptRow({
             onReply={() => onReply(m)}
           />
         );
+        const card = m.onboarding?.card?.kind;
+        return card === "engine" || card === "suggestions" ? (
+          <div className="flex flex-col gap-2.5">
+            {bubble}
+            <OnboardingChatCard bot={bot} message={m} />
+          </div>
+        ) : bubble;
+      }
     }
   })();
   if (!row) return null;
   return (
     <>
       {newDay && <DaySeparator at={m.at} />}
+      {header}
       {row}
     </>
   );
@@ -1006,13 +1040,21 @@ const MessagesList = memo(function MessagesList({
   // steps become one reversible row while the terminal answer stays visible.
   const items = useMemo(() => shared ? messages.map(message => ({ kind: "message" as const, message })) : groupTranscript(messages), [messages, locale, shared]);
   const rows = useMemo(() => {
-    const out: { key: string; item: RowItem; newDay: boolean }[] = [];
+    const out: { key: string; item: RowItem; newDay: boolean; speaker: boolean }[] = [];
+    // the speaker of the last row that rendered: a new bot reply (or the
+    // other bot in a room) gets the avatar + name header, its follow-on
+    // rows do not
+    let lastSpeaker: string | null = null;
     items.forEach((item, i) => {
       const previous = items[i - 1];
       const prev = previous && (previous.kind === "message" ? previous.message : previous.messages.at(-1));
       const first = item.kind === "message" ? item.message : item.messages[0];
       const newDay = !prev || new Date(prev.at).toDateString() !== new Date(first.at).toDateString();
-      if (rowRenders(item, showToolCalls, transcript)) out.push({ key: rowKey(item), item, newDay });
+      if (!rowRenders(item, showToolCalls, transcript)) return;
+      const who = rowSpeaker(item);
+      const speaker = who !== null && (who !== lastSpeaker || newDay);
+      if (item.kind !== "message" || item.message.role === "user" || who !== null) lastSpeaker = who;
+      out.push({ key: rowKey(item), item, newDay, speaker });
     });
     return out;
   }, [items, showToolCalls, transcript]);
@@ -1149,13 +1191,14 @@ const MessagesList = memo(function MessagesList({
         // carry their own gap so a spacer can stand in for any of them.
         <div ref={listRef} className="-mt-3 flex flex-col" data-testid="transcript-rows">
           {topSpace > 0 && <div aria-hidden="true" style={{ height: topSpace }} />}
-          {rows.slice(mounted.start, mounted.end).map(({ key, item, newDay }) => {
+          {rows.slice(mounted.start, mounted.end).map(({ key, item, newDay, speaker }) => {
             const m = item.kind === "message" ? item.message : undefined;
             return (
               <div key={key} data-vkey={key} data-mid={m?.id} className="flex flex-col gap-3 pt-3 empty:hidden">
                 <TranscriptRow
                   item={item}
                   newDay={newDay}
+                  speaker={speaker}
                   bot={bot}
                   shared={shared}
                   showToolCalls={showToolCalls}
@@ -1712,7 +1755,7 @@ export function ChatView({ bot: profile, shared }: { bot: Bot; shared?: SharedCh
           {shared?.actions}
           {!shared && <HeaderCallSlot bot={bot} />}
           {!shared&&<ThreadDoneButton key={`${bot.id}:${bot.threadId}`} bot={bot}/>}
-          <ConversationTools key={bot.threadId}>
+          <ConversationActions key={bot.threadId} bot={bot} messages={messages} local={local && !shared && !remoteClient}>
           {<button
             onClick={() => shared ? shared.onOpenSearch?.() : setFindOpen((open) => !open)}
             aria-label={t("chat.find")}
@@ -1733,7 +1776,6 @@ export function ChatView({ bot: profile, shared }: { bot: Bot; shared?: SharedCh
             botName={bot.name}
           />}
 
-          {!shared && !remoteClient && <div className="conversation-model"><ModelPicker key={bot.threadId} bot={bot} threadId={bot.threadId} /></div>}
           {local && <TerminalButton target={{ botId: bot.id, threadId: bot.threadId, name: bot.name }} className="rounded-md" />}
           {local&&<details className="conversation-advanced"><summary className="cursor-pointer list-none rounded-lg px-2.5 py-2 text-xs text-ink-secondary hover:bg-raised">Advanced</summary>          {local && <button
             data-tour="computer"
@@ -1747,7 +1789,7 @@ export function ChatView({ bot: profile, shared }: { bot: Bot; shared?: SharedCh
             <Monitor size={18} /><span>{t("chat.computer")}</span>
           </button>}
           {!remoteClient&&<button className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-xs text-ink-secondary hover:bg-raised" onClick={()=>dispatch({type:'toggleInspector'})}><Bug size={15}/>{t('chat.inspector')}</button>}</details>}
-          </ConversationTools>
+          </ConversationActions>
         </div>
       </ConversationHeader>
 
@@ -1799,7 +1841,7 @@ export function ChatView({ bot: profile, shared }: { bot: Bot; shared?: SharedCh
       <div className="relative min-h-0 flex-1">
       <div
         ref={scrollRef}
-        className="h-full overflow-x-hidden overflow-y-auto overscroll-y-contain px-5 [overflow-anchor:none]"
+        className="chat-thread h-full overflow-x-hidden overflow-y-auto overscroll-y-contain px-4 [overflow-anchor:none]"
         onPointerDown={(e) => {
           // grabbing the scrollbar is a scroll gesture too — the lane lives
           // past the content box (clientWidth excludes it)
@@ -1837,7 +1879,7 @@ export function ChatView({ bot: profile, shared }: { bot: Bot; shared?: SharedCh
       >
         <div
           ref={transcriptRef}
-          className="flex w-full flex-col gap-3"
+          className="mx-auto flex w-full max-w-[768px] flex-col gap-3"
           style={{ paddingBottom: composerDock.pad }}
           role="log"
           aria-live="polite"

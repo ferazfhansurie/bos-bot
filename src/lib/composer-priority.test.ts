@@ -17,9 +17,9 @@ describe("composerPriorityVisible", () => {
 describe("effectiveSendPriority", () => {
   it("keeps block only while the toggle is on screen", () => {
     expect(effectiveSendPriority("block", true)).toBe("block");
-    expect(effectiveSendPriority("block", false)).toBe("queue");
+    expect(effectiveSendPriority("block", false)).toBe("steer");
     expect(effectiveSendPriority("queue", true)).toBe("queue");
-    expect(effectiveSendPriority("queue", false)).toBe("queue");
+    expect(effectiveSendPriority("queue", false)).toBe("steer");
   });
 });
 
@@ -31,8 +31,8 @@ describe("withSendPriority", () => {
   });
 
   it("omits priority for queue and undefined so older servers see the same body", () => {
-    expect(withSendPriority(base, "queue")).toEqual(base);
-    expect("priority" in withSendPriority(base, "queue")).toBe(false);
+    expect(withSendPriority(base, "queue")).toEqual({ ...base, priority: "queue" });
+    expect(withSendPriority(base, "steer")).toEqual({ ...base, priority: "steer" });
     expect(withSendPriority(base, undefined)).toEqual(base);
     expect(JSON.stringify(withSendPriority(base, undefined))).toBe(JSON.stringify(base));
   });

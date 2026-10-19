@@ -8,7 +8,7 @@ import { cn } from "@/lib/cn";
 import { t } from "@/lib/i18n";
 import type { LocaleKey } from "@/locales";
 
-export type ConfigSection = "composio" | "box" | "opencodeGo" | "anthropic" | "openaiCompat" | "xai";
+export type ConfigSection = "composio" | "box" | "boxCompute" | "opencodeGo" | "anthropic" | "openaiCompat" | "xai";
 /** Sections whose key can be tried against the provider from the server. */
 export type TestableProvider = "anthropic" | "openaiCompat" | "xai";
 
@@ -21,6 +21,7 @@ const SECTIONS: Record<
     flag: (c) => c.composio.configured,
   },
   box: { body: (v) => ({ box: { token: v } }), flag: (c) => c.box.configured },
+  boxCompute: { body: (v) => ({ boxCompute: { token: v } }), flag: (c) => c.boxCompute?.configured ?? false },
   opencodeGo: { body: (v) => ({ opencodeGo: { apiKey: v } }), flag: (c) => c.opencodeGo?.configured ?? false },
   anthropic: { body: (v) => ({ anthropic: { key: v } }), flag: (c) => c.anthropic?.configured ?? false },
   openaiCompat: { body: (v) => ({ openaiCompat: { key: v } }), flag: (c) => c.openaiCompat?.configured ?? false },
@@ -29,9 +30,10 @@ const SECTIONS: Record<
 
 // Provider keys have no desktop-shell slot yet and go through the server's
 // own 0600 config, the same place they live on a hosted server.
-const ELECTRON_CREDENTIAL: Partial<Record<ConfigSection, "composioApiKey" | "boxToken" | "opencodeGoApiKey">> = {
+const ELECTRON_CREDENTIAL: Partial<Record<ConfigSection, "composioApiKey" | "boxToken" | "boxComputeApiKey" | "opencodeGoApiKey">> = {
   composio: "composioApiKey",
   box: "boxToken",
+  boxCompute: "boxComputeApiKey",
   opencodeGo: "opencodeGoApiKey",
 };
 
@@ -65,6 +67,15 @@ const CREDENTIALS: Record<
     linkLabelKey: "keys.box.link",
     optional: true,
     warningKey: "keys.box.warning",
+  },
+  boxCompute: {
+    labelKey: "keys.boxCompute.label",
+    placeholder: "bc_live_…",
+    descriptionKey: "keys.boxCompute.desc",
+    href: "https://app.boxcompute.ai/api-keys",
+    linkLabelKey: "keys.boxCompute.link",
+    optional: true,
+    warningKey: "keys.boxCompute.warning",
   },
   opencodeGo: {
     labelKey: "keys.opencode.label",

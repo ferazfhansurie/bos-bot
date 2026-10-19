@@ -34,7 +34,7 @@ function foldable(message: Message): boolean {
   const tool = message.tool;
   if (message.kind !== "activity" || !tool) return false;
   if (message.comm || message.threadRef || tool.recovery) return false;
-  if (tool.ok !== true) return false;
+  if (tool.ok === undefined || tool.name === "turn failed" || tool.name === "stopped") return false;
   return !tool.name.startsWith("error:");
 }
 
@@ -52,8 +52,7 @@ type TurnFold = Extract<TranscriptItem, { kind: "turn" }>;
 
 /** A settled turn folds into one reversible row: its narration (earlier
  * assistant messages of the same provider turn) and its finished tool steps,
- * from the prompt up to the terminal answer, which stays visible. Failed
- * steps, cards and bot⇄bot chips are not foldable and keep their place, so a
+ * from the prompt up to the terminal answer, which stays visible. Cards and bot⇄bot chips are not foldable and keep their place, so a
  * long tool-heavy turn reads as prompt, "Worked for 4m · 23 steps", answer.
  * A turn with one step and no narration is left as it is: a fold that hides
  * one chip costs more than the chip. */
@@ -163,18 +162,9 @@ export function groupTranscript(messages: Message[]): TranscriptItem[] {
   return group(messages, true);
 }
 
-const MAX_NAMES = 3;
-
-/** The one line a folded run has to earn its place with: how much work it
- * was and which tools did it. Failed steps are never folded. */
+/** Keep implementation commands inside the expanded activity details. */
 export function describeRun(messages: Message[]): string {
-  const counts = new Map<string, number>();
-  for (const message of messages) {
-    const name = message.tool?.name ?? "";
-    counts.set(name, (counts.get(name) ?? 0) + 1);
-  }
-  const names = [...counts].map(([name, count]) => (count > 1 ? `${name} ×${count}` : name));
-  const shown = names.slice(0, MAX_NAMES).join(", ");
-  const rest = names.length > MAX_NAMES ? ` ${t("chat.run.more", { count: names.length - MAX_NAMES })}` : "";
-  return t("chat.run.steps", { count: messages.length, tools: `${shown}${rest}` });
+  const count = messages.filter(message => message.tool?.ok === false).length;
+  const label = t("chat.run.stepCount", { count: messages.length });
+  return count ? `${label} · ${t(count === 1 ? "chat.run.incompleteOne" : "chat.run.incomplete", { count })}` : label;
 }

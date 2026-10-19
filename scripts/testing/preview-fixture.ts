@@ -58,7 +58,7 @@ export async function mountPreview(
     root: REPO_ROOT,
     ...(logLevel ? { logLevel } : {}),
     server: { host: "127.0.0.1", port: 0, proxy: {
-      "/api": { target: fixture.info.url },
+      "/api": { target: fixture.info.url, ws: true },
       "/.well-known/openmausbot/environment": { target: fixture.info.url },
     } },
     plugins: [{

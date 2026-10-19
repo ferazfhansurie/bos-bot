@@ -25,6 +25,9 @@ const WHATSAPP_REPLIES = compatEnv.OMB_WHATSAPP_REPLIES === "1";
 const MAX_RESPONSE_BYTES = 20 * 1024 * 1024;
 const INITIALIZE_RELAY_TIMEOUT_MS = 1_000;
 const RELAY_TIMEOUT_MS = 10 * 60_000;
+// codex mounts this server as required, so tools/list must answer well inside
+// its 20s startup window even when the connector service stalls
+const LIST_RELAY_TIMEOUT_MS = 12_000;
 
 function parsedHeaders(): Record<string, string> {
   try {
@@ -205,6 +208,13 @@ interface ConnectorRequest {
   alias?: string;
 }
 
+function connectorRemoves(args: unknown): boolean {
+  const toolkits = args && typeof args === "object" && !Array.isArray(args) ? (args as { toolkits?: unknown }).toolkits : undefined;
+  return Array.isArray(toolkits) && toolkits.some((item) =>
+    item && typeof item === "object" && !Array.isArray(item)
+    && ["remove", "delete", "disconnect"].includes(String((item as { action?: unknown }).action ?? "").toLowerCase()));
+}
+
 function connectorAdds(args: unknown): ConnectorRequest[] {
   if (!args || typeof args !== "object" || Array.isArray(args)) return [];
   const toolkits = (args as { toolkits?: unknown }).toolkits;
@@ -284,19 +294,27 @@ async function handle(message: Json): Promise<void> {
     if (id !== undefined) send({ jsonrpc: "2.0", id, result: {} });
     return;
   }
-  if (method === "tools/list" && WHATSAPP_NATIVE) {
+  if (method === "tools/list") {
     let upstream: Json | null = null;
     if (UPSTREAM) {
       try {
-        upstream = await relay(message);
+        upstream = await relay(message, LIST_RELAY_TIMEOUT_MS);
       } catch {
-        // Composio being down must not hide the local read tools.
+        // Composio being down must not hide the local read tools, nor fail
+        // the required mount and with it the whole turn.
       }
     }
     if (id === undefined) return;
     const result = (upstream?.result ?? {}) as Json;
-    const tools = Array.isArray(result.tools) ? result.tools : [];
-    send({ ...(upstream ?? { jsonrpc: "2.0", id }), result: { ...result, tools: [...tools, ...WHATSAPP_TOOLS, ...(WHATSAPP_REPLIES ? WHATSAPP_REPLY_TOOLS : [])] } });
+    // Composio marks MANAGE_CONNECTIONS destructive, so codex asked "allow?"
+    // before every connect. Here an add only shows a card and remove is
+    // refused below, so it carries no side effect worth a prompt.
+    const tools = (Array.isArray(result.tools) ? result.tools : []).map((tool) =>
+      tool && typeof tool === "object" && /MANAGE_CONNECTIONS$/i.test(String((tool as Json).name ?? ""))
+        ? { ...(tool as Json), annotations: { ...((tool as Json).annotations as Json ?? {}), readOnlyHint: true, destructiveHint: false, openWorldHint: false } }
+        : tool);
+    const local = WHATSAPP_NATIVE ? [...WHATSAPP_TOOLS, ...(WHATSAPP_REPLIES ? WHATSAPP_REPLY_TOOLS : [])] : [];
+    send({ jsonrpc: "2.0", id, result: { ...result, tools: [...tools, ...local] } });
     return;
   }
   if (method === "tools/call") {
@@ -314,6 +332,14 @@ async function handle(message: Json): Promise<void> {
       } catch (error) {
         send(textResult(id, error instanceof Error ? error.message : String(error), true));
       }
+      return;
+    }
+    if (/MANAGE_CONNECTIONS$/i.test(name) && connectorRemoves(params.arguments)) {
+      send(textResult(
+        id,
+        "Removing a connected account is done by the user: ask them to open Plugins → Connected apps and disconnect it there.",
+        true,
+      ));
       return;
     }
     const allRequests = /MANAGE_CONNECTIONS$/i.test(name) ? connectorAdds(params.arguments) : [];

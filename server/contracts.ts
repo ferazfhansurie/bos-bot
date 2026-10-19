@@ -195,6 +195,9 @@ export interface SendTurnInput {
     agents?: { command: string; args: string[]; env: Record<string, string> };
     /** Physical Android phone tools over authorized USB debugging. */
     phone?: { command: string; args: string[]; env: Record<string, string> };
+    /** BoxCompute cloud sandbox for this bot: stdio proxy that relays to the
+     * harness with a turn-scoped capability (the API key stays server-side). */
+    sandbox?: { command: string; args: string[]; env: Record<string, string> };
     /** The app's built-in browser: an MCP proxy (server/drivers/browser-proxy)
      * that forwards to the Electron-owned WebContentsView the Browser tab
      * shows. One tab per bot, in its own persistent session partition. */
@@ -265,6 +268,8 @@ export interface ProviderAdapter {
     composioMcp?: boolean;
     /** True when the driver can mount the first-party physical-phone MCP. */
     phoneMcp?: boolean;
+    /** True when the driver can mount the BoxCompute sandbox MCP. */
+    sandboxMcp?: boolean;
     /** True when the driver can mount the built-in browser MCP. Same rule:
      * a bot must never be told it has a browser its driver cannot hand it. */
     browserMcp?: boolean;
@@ -408,6 +413,9 @@ export interface EngineInstall {
   managed?: {
     label: string;
     downloadBytes: number;
+    /** Where the download comes from, for the button's note. Absent means
+     * Google (the Antigravity runtime, the first managed engine). */
+    vendor?: "google" | "openai" | "anthropic";
   };
   /** Settings can install or update this engine on the machine running the
    * server, as the server's own user, into a directory the app owns. Set by

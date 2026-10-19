@@ -1,3 +1,4 @@
+import type { RoutineNotificationPolicy } from "./routine-notifications.ts";
 /** Routine wire shapes — the routine and run records as they ride the REST
  * snapshot and the `routine` / `routine.run` live frames. Moved verbatim
  * from the client's hand-maintained mirrors (src/lib/routines.ts) so the
@@ -84,6 +85,7 @@ export interface Routine {
   durationMinutes: number;
   /** Optional wall-clock safety limit. Missing means the run is unlimited. */
   timeoutMinutes?: number;
+  notificationPolicy?: RoutineNotificationPolicy;
   overlap?: "skip" | "queue";
   skippedRuns?: number;
   lastSkippedAt?: number;
@@ -123,6 +125,8 @@ export interface RoutineRun {
   startedAt?: number;
   finishedAt?: number;
   output?: string;
+  notificationPolicy?: RoutineNotificationPolicy;
+  important?: boolean;
   error?: string;
   /** Concise, redacted question or approval reason while status is waiting. */
   attention?: string;
@@ -144,6 +148,7 @@ export interface RoutineInput {
   durationMinutes?: number;
   /** `null` explicitly removes the limit; omission preserves it on updates. */
   timeoutMinutes?: number | null;
+  notificationPolicy?: RoutineNotificationPolicy;
   overlap?: "skip" | "queue";
   attachments?: RoutineContextAttachment[];
   /** Omission preserves routing; null creates a new dedicated results task. */

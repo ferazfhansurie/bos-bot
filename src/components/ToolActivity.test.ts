@@ -8,7 +8,7 @@ describe("ToolActivity", () => {
     const html = renderToStaticMarkup(createElement(ToolActivity, { tool: { name: "Bash", ok: true, input: "echo hi", output: "<script>unsafe()</script>" } }));
     expect(html).toContain("<details");
     expect(html).not.toContain(" open=");
-    expect(html).toContain("Bash · Completed · Tool details");
+    expect(html).toContain("Run a command · Completed · Tool details");
     expect(html).toContain('role="button"');
     expect(html).toContain('aria-expanded="false"');
     expect(html).toContain("echo hi");
@@ -48,5 +48,30 @@ it("renders manual cancellation neutrally, including saved legacy failure chips"
   expect(html).not.toContain("turn failed");
   expect(html).not.toContain("text-danger");
   const failedTool = renderToStaticMarkup(createElement(ToolActivity, { tool: { name: "Bash", ok: false }, stopReason: "interrupted" }));
-  expect(failedTool).toContain("text-danger");
+  expect(failedTool).not.toContain("text-danger");
+  expect(failedTool).toContain("A step couldn’t finish");
+});
+
+
+it("keeps raw commands inside details and uses a calm, honest failure label", () => {
+ const raw = "/bin/zsh -lc ls /Users/private/workspace";
+ const html = renderToStaticMarkup(createElement(ToolActivity, {tool:{name:raw,ok:false}}));
+ const summary = html.match(/<summary[\s\S]*?<\/summary>/)?.[0] ?? "";
+ expect(summary).toContain("A step couldn’t finish");
+ expect(summary).not.toContain("/Users/");
+ expect(html).toContain(raw);
+ expect(html).not.toContain("text-danger");
+ expect(html).toContain("See the latest reply");
+});
+
+it("shows the recorded successful command summary in the truncated row", () => {
+ const html = renderToStaticMarkup(createElement(ToolActivity, {tool:{name:"Bash",summary:"cat /Users/private/context",ok:true}}));
+ const summary = html.match(/<summary[\s\S]*?<\/summary>/)?.[0] ?? "";
+ expect(summary).toContain("Ran cat /Users/private/context");expect(summary).toContain("truncate");
+});
+
+it("makes a stopped request distinct from a recoverable attempt", () => {
+ const html=renderToStaticMarkup(createElement(ToolActivity,{tool:{name:"turn failed",ok:false}}));
+ expect(html).toContain("This request stopped before finishing");
+ expect(html).toContain("ask the bot how to continue");
 });

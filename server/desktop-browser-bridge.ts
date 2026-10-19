@@ -1,7 +1,7 @@
 // Private Electron utility-process transport. No public endpoint or model credential.
 // The desktop app drives the person's own browser tabs (electron/shared-browser.mjs);
 // this carries one tool call there and its result back.
-type Request = { type: 'bos:shared-browser-request'; requestId: string; botId: string; threadId: string; method: string; params: unknown; deadline: number; generation?: string; profileId?: string };
+type Request = { type: 'bos:shared-browser-request'; requestId: string; botId: string; threadId: string; method: string; params: unknown; deadline: number; generation?: string; profileId?: string; fullAccess?: boolean };
 type Release = { type: 'bos:shared-browser-release'; threadId: string; generation?: string };
 type Pending = { resolve: (value: unknown) => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout> };
 export class DesktopBrowserBridge {
@@ -10,7 +10,7 @@ export class DesktopBrowserBridge {
   constructor(send: (message: Request | Release) => boolean) { this.send = send; }
   /** timeoutMs is the desktop's own deadline; the bridge waits two seconds longer
    * so the desktop's clearer error wins over a bare transport timeout. */
-  request(botId: string, threadId: string, method: string, params: unknown, timeoutMs = 20000, authority: { generation?: string; profileId?: string } = {}): Promise<unknown> {
+  request(botId: string, threadId: string, method: string, params: unknown, timeoutMs = 20000, authority: { generation?: string; profileId?: string; fullAccess?: boolean } = {}): Promise<unknown> {
     if (this.pending.size >= 16) return Promise.reject(new Error('The browser is busy. Try again in a moment.'));
     const requestId = crypto.randomUUID();
     const budget = Math.max(1000, Math.min(60000, timeoutMs));

@@ -140,6 +140,22 @@ posixOnly("mid-turn steering e2e", () => {
     rmSync(home, { recursive: true, force: true });
   });
 
+
+  it("normal Codex send steers the active turn without taking After this work", async () => {
+    const bot = (await api("POST", "/api/bots")).body.bot;
+    await api("PATCH", `/api/bots/${bot.id}`, { modelSelection: { instanceId: "codex", model: "fake-codex-model" } });
+    const route = `/api/bots/${bot.id}/messages`;
+    await api("POST", route, { text: "work in progress" });
+    await waitFor(async () => (await getBot(bot.id)).messages.some((m: any) => m.card), "Codex active turn");
+    const later = await api("POST", route, { text: "save for later", priority: "queue" });
+    const result = await api("POST", route, { text: "correct the active work", priority: "steer", sendId: "native-send-steer-once" });
+    expect(result.body).toMatchObject({ steered: true, delivery: "provider_accepted", consumption: "unconfirmed" });
+    expect(result.body.messages.map((m: any) => m.text)).toEqual(["correct the active work"]);
+    expect((await api("GET", "/api/bots?messages=0")).body.botQueuedMessages[bot.threadId]).toEqual([{ queueId: later.body.queueId, text: "save for later" }]);
+    await api("POST", `/api/bots/${bot.id}/interrupt`, { threadId: bot.threadId });
+    expect((await api("GET", "/api/bots?messages=0")).body.botQueuedMessages[bot.threadId]?.[0]?.paused).toBe(true);
+  }, 30000);
+
   it("interrupts an explicitly steered phone correction before the held tool returns", async () => {
     writeFileSync(toolResultGate, "hold result");
     rmSync(steerFinishGate, { force: true });
@@ -460,6 +476,7 @@ posixOnly("mid-turn steering e2e", () => {
     expect(queued.body.queued).toBe(true);
     expect((await getBot(created.id)).messages.some((m: any) => m.text === "second")).toBe(false);
     await api("POST", `/api/bots/${created.id}/interrupt`);
+    await api("POST", `/api/bots/${created.id}/queue/resume`, { threadId: created.threadId });
     await waitFor(
       async () => (await getBot(created.id)).messages.some((m: any) => m.text === "second"),
       "the queued message to begin its turn",
@@ -637,6 +654,7 @@ posixOnly("mid-turn steering e2e", () => {
     // cannot resume its thread after Stop, so that turn ends at resume; what
     // this proves is the server side: one dispatch, one row, nothing left.)
     await api("POST", `/api/bots/${created.id}/interrupt`);
+    await api("POST", `/api/bots/${created.id}/queue/resume`, { threadId: created.threadId });
     await waitFor(async () => (await getBot(created.id)).messages.some((m: any) => m.role === "user" && m.text === imageText), "the queued image to drain");
     await waitFor(async () => (await getBot(created.id)).busy === false, "the drained turn to settle");
     expect((await getBot(created.id)).messages.filter((m: any) => m.role === "user" && m.text?.includes(tag))).toHaveLength(1);
@@ -659,7 +677,7 @@ posixOnly("mid-turn steering e2e", () => {
     expect(repeat.body.message?.id).not.toBe(delivered.id);
   }, 40_000);
 
-  it.skipIf(!acpAvailable)("an engine without live steering keeps its queue through the steer endpoint, then drains after Stop", async () => {
+  it.skipIf(!acpAvailable)("an engine without live steering keeps its queue through the steer endpoint, then drains after Resume", async () => {
     const created = (await api("POST", "/api/bots")).body.bot;
     await api("PATCH", `/api/bots/${created.id}`, { modelSelection: { instanceId: "acp", model: "fake-model" } });
     expect((await api("POST", `/api/bots/${created.id}/messages`, { text: "first" })).status).toBe(202);
@@ -677,6 +695,7 @@ posixOnly("mid-turn steering e2e", () => {
     expect((await getBot(created.id)).messages.some((m: any) => m.text === "second")).toBe(false);
 
     await api("POST", `/api/bots/${created.id}/interrupt`);
+    await api("POST", `/api/bots/${created.id}/queue/resume`, { threadId: created.threadId });
     await waitFor(
       async () => (await getBot(created.id)).messages.some((m: any) => m.text === "second"),
       "the preserved queue to drain",
@@ -724,7 +743,7 @@ posixOnly("mid-turn steering e2e", () => {
     expect(stderr).not.toContain("signal SIGTERM");
   }, 40_000);
 
-  it.skipIf(!acpAvailable)("a room whose engine cannot steer keeps its queue until room-wide Stop cancels it", async () => {
+  it.skipIf(!acpAvailable)("a room whose engine cannot steer keeps its queue until room-wide Stop pauses it", async () => {
     const created = (await api("POST", "/api/bots")).body.bot;
     await api("PATCH", `/api/bots/${created.id}`, { modelSelection: { instanceId: "acp", model: "fake-model" } });
     const room = (await api("POST", "/api/groups", {
@@ -754,7 +773,8 @@ posixOnly("mid-turn steering e2e", () => {
     await api("POST", `/api/groups/${room.id}/interrupt`, {});
     await waitFor(async () => (await getGroup())?.working === false, "the stopped room turn to settle");
     expect((await getGroup())?.messages.some((m:any)=>m.text === "second")).toBe(false);
-    expect((await api("DELETE", `/api/groups/${room.id}/queue/${queued.body.queueId}`)).status).toBe(404);
+    expect((await api("GET", "/api/bots?messages=0")).body.botQueuedMessages[room.threadId]?.[0]?.paused).toBe(true);
+    expect((await api("DELETE", `/api/groups/${room.id}/queue/${queued.body.queueId}`)).status).toBe(200);
 
   }, 40_000);
 });

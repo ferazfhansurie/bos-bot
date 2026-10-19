@@ -19,8 +19,12 @@ STAGED = Path(PLAN["staged"]) if PLAN.get("staged") else None
 BACKUP = Path(PLAN["backup"]) if PLAN.get("backup") else None
 RESULT = Path(PLAN["resultPath"])
 PORTS = [int(p) for p in PLAN["ports"]]
+# The desktop binds the first free port of its family (8799/18799/28799), so a
+# relaunched app can come back on a different port than the one it left. Health
+# follows the app to whichever of these it owns; PORTS[0] is tried first.
+SERVER_PORTS = [PORTS[0]] + [int(p) for p in PLAN.get("serverPorts") or [] if int(p) != PORTS[0]]
 # Test-only (OMB_UPDATE_SANDBOX): no launchd, "the app" is whoever listens on
-# PORTS[0], relaunch is left to the test's supervisor, and FAULT injects one failure.
+# SERVER_PORTS, relaunch is left to the test's supervisor, and FAULT injects one failure.
 SANDBOX = bool(PLAN.get("sandbox"))
 FAULT = PLAN.get("fault") if SANDBOX else None
 # The no-downgrade guard admission ran, copied beside this script with its
@@ -139,7 +143,7 @@ def belongs(args, app):
 
 def app_pids(app, rows=None):
     if SANDBOX:
-        return sorted(pid for pid in listeners(PORTS[0]) if pid != os.getpid())
+        return sorted({pid for port in SERVER_PORTS for pid in listeners(port)} - {os.getpid()})
     rows = snapshot() if rows is None else rows
     return sorted(pid for pid, row in rows.items() if belongs(row["args"], app) and pid != os.getpid())
 
@@ -212,12 +216,17 @@ def healthy(app, expect, seconds):
         try:
             rows = snapshot(); roots = set(app_pids(app, rows))
             require(roots, "no app process")
-            with urllib.request.urlopen(PLAN["health"], timeout=2) as r:
+            port = None
+            for candidate in SERVER_PORTS:
+                owners = listeners(candidate)
+                if owners and all(descendant(p, roots, rows) for p in owners):
+                    port = candidate; break
+            require(port is not None, "port %d not owned by the app" % PORTS[0])
+            url = PLAN["health"] if port == PORTS[0] else f"http://127.0.0.1:{port}/api/health"
+            with urllib.request.urlopen(url, timeout=2) as r:
                 data = json.load(r)
             require(r.status == 200 and data.get("app") == "openmausbot", "health answered oddly")
             pid = data.get("pid")
-            owners = listeners(PORTS[0])
-            require(owners and all(descendant(p, roots, rows) for p in owners), "port %d not owned by the app" % PORTS[0])
             if pid is not None:
                 require(isinstance(pid, int) and pid in owners, "health pid does not own the port")
             for port in PORTS[1:]:

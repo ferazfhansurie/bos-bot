@@ -84,6 +84,7 @@ const routineToolDefinitionSchema = z.object({
   durationMinutes: z.number().optional(),
   timeoutMinutes: z.number().nullable().optional(),
   continuity: z.boolean().optional(),
+  notificationPolicy: z.enum(["all", "important", "failures"]).optional(),
   overlap: z.enum(["skip", "queue"]).optional(),
 }).strict();
 
@@ -211,6 +212,7 @@ const storedDefinitionSchema = z.object({
   durationMinutes: z.number().int().min(5).max(240),
   timeoutMinutes: z.number().int().min(5).max(240).optional(),
   continuity: z.boolean().optional(),
+  notificationPolicy: z.enum(["all", "important", "failures"]).optional(),
   overlap: z.enum(["skip", "queue"]).optional(),
 }).strict();
 const storedChangesSchema = storedDefinitionSchema
@@ -553,6 +555,7 @@ function normalizeDefinition(input: RoutineToolDefinitionInput, now: number): Ro
     durationMinutes: duration(input.durationMinutes),
     ...(timeoutMinutes == null ? {} : { timeoutMinutes }),
     ...(input.continuity === true ? { continuity: true } : {}),
+    ...(input.notificationPolicy ? { notificationPolicy: input.notificationPolicy } : {}),
     ...(input.overlap === "queue" ? { overlap: "queue" as const } : {}),
   };
 }
@@ -566,6 +569,7 @@ function normalizeChanges(input: RoutineToolChangesInput, now: number): RoutineR
   if (input.durationMinutes !== undefined) changes.durationMinutes = duration(input.durationMinutes);
   if (input.timeoutMinutes !== undefined) changes.timeoutMinutes = timeout(input.timeoutMinutes);
   if (input.continuity !== undefined) changes.continuity = input.continuity === true;
+  if (input.notificationPolicy !== undefined) changes.notificationPolicy = input.notificationPolicy;
   if (input.overlap !== undefined) changes.overlap = input.overlap;
   return changes;
 }
@@ -787,6 +791,7 @@ function effectiveDefinition(operation: RoutineRequestOperation, manager: Routin
     durationMinutes: existing.durationMinutes,
     ...(existing.timeoutMinutes === undefined ? {} : { timeoutMinutes: existing.timeoutMinutes }),
     ...(existing.continuity ? { continuity: true } : {}),
+    ...(existing.notificationPolicy ? { notificationPolicy: existing.notificationPolicy } : {}),
     ...(existing.overlap ? { overlap: existing.overlap } : {}),
   };
   if (operation.action !== "update") return base;
@@ -871,6 +876,7 @@ function cardCopy(
       `Runs on: ${destination}`,
       `Run limit: ${definition.timeoutMinutes === undefined ? "No limit" : `${definition.timeoutMinutes} minutes`}`,
       `Continuity: ${definition.continuity ? "Carries the previous run's report into the next run" : "Each run starts fresh"}`,
+      `Notifications: ${definition.notificationPolicy ?? "all"}`,
       `While busy: ${definition.overlap === "queue" ? "Queue one scheduled run; skip further occurrences until it starts" : "Skip overlapping scheduled occurrences"}`,
       // Last before the instructions: the one sentence that says what
       // confirming actually does, in the reader's terms.
@@ -897,6 +903,7 @@ function inputFromDefinition(definition: RoutineRequestDefinition, botId: string
     durationMinutes: definition.durationMinutes,
     ...(definition.timeoutMinutes === undefined ? {} : { timeoutMinutes: definition.timeoutMinutes }),
     ...(definition.continuity ? { continuity: true } : {}),
+    ...(definition.notificationPolicy ? { notificationPolicy: definition.notificationPolicy } : {}),
     ...(definition.overlap === "queue" ? { overlap: "queue" as const } : {}),
   };
 }
@@ -914,6 +921,7 @@ function updateFromChanges(
   if (changes.durationMinutes !== undefined) patch.durationMinutes = changes.durationMinutes;
   if (changes.timeoutMinutes !== undefined) patch.timeoutMinutes = changes.timeoutMinutes;
   if (changes.continuity !== undefined) patch.continuity = changes.continuity;
+  if (changes.notificationPolicy !== undefined) patch.notificationPolicy = changes.notificationPolicy;
   if (changes.overlap !== undefined) patch.overlap = changes.overlap;
   return patch;
 }
@@ -988,6 +996,7 @@ function revalidateOperation(operation: RoutineRequestOperation, manager: Routin
         || routine.durationMinutes !== definition.durationMinutes
         || routine.timeoutMinutes !== definition.timeoutMinutes
         || Boolean(routine.continuity) !== Boolean(definition.continuity)
+        || (routine.notificationPolicy ?? "all") !== (definition.notificationPolicy ?? "all")
         || (routine.overlap ?? "skip") !== (definition.overlap ?? "skip")
         || (routine.attachments?.length ?? 0) > 0) return false;
       // An omitted start means "every N minutes", not a new phase each time

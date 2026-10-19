@@ -1,21 +1,52 @@
 import path from 'node:path';
+import { agentPermission } from './browser-agent-policy.mjs';
 import { cookiePreview, importChromeCookies } from './chrome-cookies.mjs';
 import fs from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { createPrimaryBrowserStore, createBrowserVault, chromeProfiles, chromePreview, parsePasswordCSV, webURL, cleanTabs, chromeRoot } from './primary-browser.mjs';
 
 // Only wired to the main window's local-only IPC. No HTTP/tool/model access.
-export function createPrimaryBrowserController({ root, encryption, registry, sessionFromPartition, contentsFromId, dialog, owner, shell, chromeDirectory, contentBlocker, allowInsecureTestOrigins = [] }) {
+export function createPrimaryBrowserController({ root, encryption, registry, sessionFromPartition, contentsFromId, dialog, owner, shell, chromeDirectory, contentBlocker, agentBusy = () => false, allowInsecureTestOrigins = [] }) {
   const store = createPrimaryBrowserStore(root);
   const vault = createBrowserVault(root, encryption);
   const profiles = new Map(); const previews = new Map(); const downloadPaths = new Map();
   const partition = id => { store.fileFor(id); const p = registry.register(`primary:${id}`); profiles.set(p, id); return p; };
   const profileFor = p => profiles.get(p);
+  const agentApprovals = new Map();
+  const elementPickers = new Map();
   const confirm = async (message, detail, buttons = ['Cancel', 'Allow']) => (await dialog.showMessageBox(owner(), { type: 'question', message, detail, buttons, defaultId: 0, cancelId: 0 })).response === 1;
   const credentialOrigin = guest => { const url = webURL(guest.getURL()); if (!url) throw new Error('Open a secure sign-in page'); const u = new URL(url); if (u.protocol !== 'https:' && !allowInsecureTestOrigins.includes(u.origin)) throw new Error('Saved passwords require an HTTPS sign-in page'); return u.origin; };
+  const fillLogin = (guest, origin, record) => guest.executeJavaScript(`(() => { if(location.origin!==${JSON.stringify(origin)})return false; const passwords=[...document.querySelectorAll('input[type=password]')].filter(e=>e.getClientRects().length); if(passwords.length!==1)return false; const p=passwords[0];const scope=p.form||document;const u=scope.querySelector('input[autocomplete=username],input[type=email]')||[...scope.querySelectorAll('input[type=text]')].find(e=>e.getClientRects().length);const set=(e,v)=>{if(!e)return;Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(e,v);e.dispatchEvent(new Event('input',{bubbles:true}));e.dispatchEvent(new Event('change',{bubbles:true}));};set(u,${JSON.stringify(record.username)});set(p,${JSON.stringify(record.password)});return true;})()`);
   const guestFor = (id, guestId) => { const guest = contentsFromId(guestId); if (!guest || guest.isDestroyed() || registry.source(guest)?.partition !== partition(id)) throw new Error('This browser tab is no longer available'); return guest; };
   return {
     store, partition, profileFor,
+    agentPermission(id, url, action) { return agentPermission(store.read(id).agentRules, url, action); },
+    async authorizeAgent(id, guestId, url, action, detail = '', scope = '', { fullAccess = false } = {}) {
+      const guest = guestId == null && action === 'browse' ? null : guestFor(id, guestId);
+      const origin = new URL(url).origin;
+      const library = store.read(id);
+      const rules = JSON.stringify(library.agentRules);
+      const permission = agentPermission(library.agentRules, url, action);
+      if (permission === 'block') throw new Error(`Agent ${action} is blocked for ${origin} in this browser profile`);
+      if (permission === 'allow') return;
+      // A bot the person gave Full access acts without asking, unless this
+      // profile turned that off. Explicit block rules above still hold.
+      if (fullAccess === true && library.agentAskFullAccess !== true) return;
+      // One answer per site, tab and bot turn: a page fires many posts at once
+      // and asking for each one stalls sign-ins and verification checks.
+      const key = JSON.stringify([id, guestId, origin, action, rules, scope]);
+      const remembered = guest && (action === 'browse' || action === 'upload');
+      if (remembered && agentApprovals.get(key) === true) return;
+      if (remembered && agentApprovals.get(key)) return agentApprovals.get(key);
+      const before = guest?.getURL();
+      const ask = (async () => {
+        const allowed = await confirm(`Allow the bot to ${action} on ${origin}?`, detail || 'This permission applies to this action. Change saved site rules in browser settings.');
+        if (!allowed || (guest && (guest.isDestroyed() || guest.getURL() !== before)) || JSON.stringify(store.read(id).agentRules) !== rules) throw new Error('Site permission was declined or the page changed. Check the page before continuing.');
+      })();
+      if (!remembered) return ask;
+      agentApprovals.set(key, ask);
+      try { await ask; agentApprovals.set(key, true); } catch (error) { agentApprovals.delete(key); throw error; }
+    },
     visit(p, url, title) { const id = profileFor(p); if (id) store.visit(id, url, title); },
     download(p, row, file) { const id = profileFor(p); if (!id) return; if (file) downloadPaths.set(row.id, { profile: id, file }); store.download(id, { ...row, ...(file ? { file } : {}) }); },
     async permission(p, contents, permission, details = {}) {
@@ -34,11 +65,94 @@ export function createPrimaryBrowserController({ root, encryption, registry, ses
       const id = profileFor(p); if (!id || !contents || contents.isDestroyed()) return false;
       try { if (new URL(contents.getURL()).origin !== new URL(origin).origin) return false; return store.read(id).permissions[`${new URL(origin).origin}|${permission}`] === true; } catch { return false; }
     },
+    /** A bot's sign-in on its own tab: a saved login for this exact origin the
+     * person has not switched off for bots. The password stays in main. */
+    async botSignIn(id, guestId, username) {
+      const guest = guestFor(id, guestId); const origin = credentialOrigin(guest);
+      const record = vault.botCredential(id, origin, username);
+      if (!await fillLogin(guest, origin, record)) throw new Error('Could not find exactly one visible password field on this page. Open the sign-in page and try again.');
+      return { username: record.username, origin };
+    },
     async action(action, input = {}) {
       if (action === 'profiles') return store.profiles();
       if (action === 'create') return store.create(input.name);
       if (action === 'chrome-profiles') return chromeProfiles(chromeDirectory);
       const id = input.profileId; store.fileFor(id);
+      if (action === 'rename') return store.rename(id, input.name);
+      if (action === 'delete') {
+        const index = store.profiles(); const name = index.profiles.find(p => p.id === id).name;
+        if (index.profiles.length <= 1) throw new Error('Keep at least one browser profile');
+        if (agentBusy(id)) throw new Error('A bot is using this profile. Stop it or wait for it to finish, then delete.');
+        if (!await confirm(`Delete the browser profile “${name}”?`, 'This signs you out of every website in it and removes its bookmarks, history, tabs, downloads list, site permissions and saved passwords from bos. This cannot be undone.', ['Cancel', 'Delete profile'])) return null;
+        // The dialog is async: a bot may have started in the meantime.
+        if (agentBusy(id)) throw new Error('A bot started using this profile. Stop it or wait for it to finish, then delete.');
+        const p = partition(id); const ses = sessionFromPartition(p);
+        await ses.clearStorageData(); await ses.clearCache(); await ses.clearAuthCache?.();
+        const next = store.remove(id);
+        vault.destroy(id); fs.rmSync(path.join(root, `${id}.blocker.json`), { force: true });
+        profiles.delete(p);
+        for (const key of agentApprovals.keys()) if (JSON.parse(key)[0] === id) agentApprovals.delete(key);
+        for (const [token, preview] of previews) if (preview.profileId === id) previews.delete(token);
+        for (const [download, saved] of downloadPaths) if (saved.profile === id) downloadPaths.delete(download);
+        return next;
+      }
+      if (action === 'screenshot') {
+        const guest = guestFor(id, input.guestId);
+        // Capture before the dialog, so switching tabs while choosing a path cannot
+        // save a different page. Paths are chosen only through the native dialog.
+        const capture = await guest.capturePage();
+        const pick = await dialog.showSaveDialog(owner(), { title: 'Save screenshot', defaultPath: 'bos-screenshot.png', filters: [{ name: 'PNG image', extensions: ['png'] }] });
+        if (pick.canceled || !pick.filePath) return false;
+        fs.writeFileSync(pick.filePath, capture.toPNG(), { mode: 0o600 });
+        return true;
+      }
+      if (action === 'device-toolbar') {
+        const guest = guestFor(id, input.guestId);
+        const device = input.device;
+        if (!['desktop', 'mobile', 'tablet'].includes(device)) throw new Error('Choose desktop, mobile or tablet');
+        if (device === 'desktop') guest.disableDeviceEmulation();
+        else {
+          const size = device === 'mobile' ? { width: 390, height: 844 } : { width: 820, height: 1180 };
+          guest.enableDeviceEmulation({ screenPosition: 'mobile', screenSize: size, viewPosition: { x: 0, y: 0 }, viewSize: size, deviceScaleFactor: 1, scale: 1 });
+        }
+        return device;
+      }
+      if (action === 'inspect-element') {
+        const guest = guestFor(id, input.guestId);
+        await elementPickers.get(guest.id)?.();
+        const debug = guest.debugger;
+        const attachedHere = !debug.isAttached();
+        if (attachedHere) debug.attach('1.3');
+        let timer; let finished = false;
+        const cleanup = async () => {
+          if (finished) return;
+          finished = true; clearTimeout(timer);
+          elementPickers.delete(guest.id);
+          debug.removeListener('message', selected); debug.removeListener('detach', cleanup);
+          try { await debug.sendCommand('Overlay.setInspectMode', { mode: 'none' }); } catch { /* tab closed or devtools took over */ }
+          try { if (attachedHere && debug.isAttached()) debug.detach(); } catch { /* guest destroyed */ }
+        };
+        const selected = async (_event, method, params) => {
+          if (method !== 'Overlay.inspectNodeRequested' || finished) return;
+          try {
+            const { model } = await debug.sendCommand('DOM.getBoxModel', { backendNodeId: params.backendNodeId });
+            const points = model.border;
+            await cleanup();
+            // Revalidate the profile after the asynchronous CDP response.
+            if (guestFor(id, input.guestId) !== guest) return;
+            guest.inspectElement(Math.round((points[0] + points[4]) / 2), Math.round((points[1] + points[5]) / 2));
+          } catch { await cleanup(); }
+        };
+        elementPickers.set(guest.id, cleanup);
+        debug.on('message', selected); debug.once('detach', cleanup);
+        try {
+          await debug.sendCommand('DOM.enable');
+          await debug.sendCommand('Overlay.enable');
+          await debug.sendCommand('Overlay.setInspectMode', { mode: 'searchForNode', highlightConfig: { showInfo: true, contentColor: { r: 111, g: 168, b: 220, a: 0.35 }, borderColor: { r: 111, g: 168, b: 220, a: 0.8 } } });
+          timer = setTimeout(cleanup, 120000); timer.unref?.();
+          return true;
+        } catch (error) { await cleanup(); throw error; }
+      }
       if (action === 'blocker-status') return contentBlocker?.status(id, input.guestId ? guestFor(id,input.guestId) : undefined);
       if (action === 'blocker-toggle') return contentBlocker?.toggle(id, input.guestId ? guestFor(id,input.guestId) : undefined, {enabled:input.enabled,siteOnly:input.siteOnly===true});
       if (action === 'select') { store.select(id); return partition(id); }
@@ -48,6 +162,8 @@ export function createPrimaryBrowserController({ root, encryption, registry, ses
       if (action === 'remove-bookmark') { store.removeBookmark(id, input.id); return true; }
       if (action === 'clear-history') { store.clearHistory(id); return true; }
       if (action === 'reset-permissions') { store.clearPermissions(id); return true; }
+      if (action === 'agent-site-rule') { store.agentRule(id, input.origin, input.rule); agentApprovals.clear(); return true; }
+      if (action === 'agent-full-access') { store.agentAskFullAccess(id, input.ask === true); return true; }
       if (action === 'preview-chrome') {
         const data = await chromePreview(input.sourceId, chromeDirectory); const token = randomUUID();
         previews.clear(); previews.set(token, { profileId: id, sourceId: input.sourceId, data, expires: Date.now() + 5 * 60000 });
@@ -86,7 +202,7 @@ export function createPrimaryBrowserController({ root, encryption, registry, ses
         if (!await confirm(`Fill your saved password on ${new URL(origin).hostname}?`, `Account: ${record.username}`, ['Cancel', 'Fill'])) return false;
         // Recheck after the native confirmation and in the page itself.
         if (guest.isDestroyed() || new URL(guest.getURL()).origin !== origin) throw new Error('The page changed. Try again.');
-        return guest.executeJavaScript(`(() => { if(location.origin!==${JSON.stringify(origin)})return false; const passwords=[...document.querySelectorAll('input[type=password]')].filter(e=>e.getClientRects().length); if(passwords.length!==1)return false; const p=passwords[0];const scope=p.form||document;const u=scope.querySelector('input[autocomplete=username],input[type=email]')||[...scope.querySelectorAll('input[type=text]')].find(e=>e.getClientRects().length);const set=(e,v)=>{if(!e)return;Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(e,v);e.dispatchEvent(new Event('input',{bubbles:true}));e.dispatchEvent(new Event('change',{bubbles:true}));};set(u,${JSON.stringify(record.username)});set(p,${JSON.stringify(record.password)});return true;})()`);
+        return fillLogin(guest, origin, record);
       }
       if (action === 'save-password') {
         const guest = guestFor(id, input.guestId); const origin = credentialOrigin(guest);
@@ -96,6 +212,7 @@ export function createPrimaryBrowserController({ root, encryption, registry, ses
         if (!record || record.origin !== origin) throw new Error('No entered password found on this page');
         vault.import(id, [record]); return true;
       }
+      if (action === 'bot-sign-in') return vault.setBotSignIn(id, input.id, input.allowed !== false);
       if (action === 'remove-password') { if (!await confirm('Remove this saved password?', 'This removes it from the encrypted vault in this profile.', ['Cancel', 'Remove'])) return false; vault.remove(id, input.id); return true; }
       if (action === 'download-open' || action === 'download-reveal') {
         const row = store.read(id).downloads.find(d => d.id === input.id); const saved = downloadPaths.get(input.id); const file = saved?.profile === id ? saved.file : row?.file;

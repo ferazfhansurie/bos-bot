@@ -66,12 +66,22 @@ export interface UpdateProgress {
   log: string[];
 }
 export interface UpdateEvent { kind: "update.state"; type: "update.state"; state: UpdateState; updateId: string; detail: string }
+// electron/release-channel.mjs SERVER_PORTS for live and staging builds.
+export const SERVER_PORT_FAMILIES = [[8799, 18799, 28799], [38799, 48799, 58799]];
+export function serverPortFamily(port: number): number[] {
+  const family = SERVER_PORT_FAMILIES.find(ports => ports.includes(port)) ?? [];
+  return [port, ...family.filter(p => p !== port)];
+}
 export interface ApplyPlan {
   updateId: string; label: string; mode: UpdateMode; live: string; staged: string | null; backup: string | null;
   appPid: number | null; appIdentity: string | null; ports: number[]; health: string; expect: { server: string; ui: string } | null;
   old: { server: string; ui: string } | null; oldVersion: string; oldSha: string; version: string; sha: string; force: boolean;
   launch: string[]; resultPath: string; installedPath: string; gracefulSeconds: number; healthSeconds: number;
   codesign: boolean; selfBootout: boolean; requireLaunchd: boolean; uid: number | null; scriptSha256: string;
+  /** Every port the relaunched desktop may bind its server on (its family in
+   * electron/release-channel.mjs SERVER_PORTS), ports[0] first. The app takes
+   * the first free one, so it can come back on another port than it left. */
+  serverPorts?: number[];
   /** The no-downgrade guard the detached job runs ITSELF before it stops the
    * app: a copy of the shipped script beside apply.py (sha256 pinned here)
    * plus the ledger, repo and branches admission judged with. null = not
@@ -883,6 +893,7 @@ export function createDarwinExecutor(host: UpdaterHost, options: DarwinExecutorO
         launch: sandbox ? [] : ["/usr/bin/open", "{app}"],
         codesign: options.codesign ?? true, selfBootout: !sandbox, requireLaunchd: options.requireLaunchd ?? true,
         uid, scriptSha256: createHash("sha256").update(script).digest("hex"),
+        serverPorts: serverPortFamily(plan.ports[0]),
         guard, guardRequired: plan.mode === "update" && Boolean(options.noDowngrade?.require),
         ...(sandbox ? { sandbox: true, fault: sandbox.fault ?? null } : {}),
       };

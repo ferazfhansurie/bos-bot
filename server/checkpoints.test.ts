@@ -19,7 +19,7 @@ import { removeTempDir } from "./testing/cleanup.ts";
 const DATA_ROOT = mkdtempSync(join(tmpdir(), "omb-checkpoints-"));
 compatEnv.OMB_DATA_DIR = join(DATA_ROOT, "data");
 
-const { checkpointsEnabled, listCheckpoints, refusalReason, restore, snapshot } = await import(
+const { diffPatch, checkpointsEnabled, listCheckpoints, refusalReason, restore, snapshot } = await import(
   "./checkpoints.ts"
 );
 
@@ -319,6 +319,7 @@ describe("diffStat", () => {
       changed: ["edit.txt"],
       added: ["new.txt"],
       deleted: ["gone.txt"],
+      lines: { "edit.txt": [1, 1], "new.txt": [1, 0], "gone.txt": [0, 1] },
     });
   });
 
@@ -332,3 +333,62 @@ describe("diffStat", () => {
   });
 });
 // branding compatibility (electron/branding-compat.json): environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling
+
+
+describe("diffPatch", () => {
+  it("reads the exact two snapshots without reading or changing later working files", async () => {
+    const { bot, cwd } = workspace();
+    writeFileSync(join(cwd, "answer.txt"), "before\nshared\n");
+    const before = await snapshot(bot, cwd, "before diff");
+    writeFileSync(join(cwd, "answer.txt"), "after <script>alert(1)</script>\nshared\n");
+    const after = await snapshot(bot, cwd, "after diff");
+    writeFileSync(join(cwd, "answer.txt"), "later uncommitted work\n");
+    const list = await listCheckpoints(bot, cwd);
+    const diff = await diffPatch(bot, cwd, before!, after!);
+    expect(diff?.truncated).toBe(false);
+    expect(diff?.patch).toContain("diff --git a/answer.txt b/answer.txt");
+    expect(diff?.patch).toContain("-before");
+    expect(diff?.patch).toContain("+after <script>alert(1)</script>");
+    expect(diff?.patch).not.toContain("later uncommitted work");
+    expect(readFileSync(join(cwd, "answer.txt"), "utf8")).toBe("later uncommitted work\n");
+    expect(await listCheckpoints(bot, cwd)).toEqual(list);
+  });
+
+  it("rejects revspecs, options, malformed and nonexistent hashes in either position", async () => {
+    const { bot, cwd } = workspace();
+    writeFileSync(join(cwd, "a.txt"), "one\n");
+    const hash = (await snapshot(bot, cwd, "valid diff anchor"))!;
+    for (const invalid of ["HEAD", "HEAD~1", "--output=/tmp/unwanted", "a".repeat(39), "g".repeat(40), hash + "\n", "0".repeat(40)]) {
+      expect(await diffPatch(bot, cwd, invalid, hash)).toBeNull();
+      expect(await diffPatch(bot, cwd, hash, invalid)).toBeNull();
+    }
+    expect(await diffPatch(bot, homedir(), hash, hash)).toBeNull();
+  });
+
+  it("does not expose snapshots from another bot or folder, even with known hashes", async () => {
+    const { bot, cwd } = workspace();
+    writeFileSync(join(cwd, "private.txt"), "private before\n");
+    const before = (await snapshot(bot, cwd, "private before"))!;
+    writeFileSync(join(cwd, "private.txt"), "private after\n");
+    const after = (await snapshot(bot, cwd, "private after"))!;
+    const foreign = workspace();
+    writeFileSync(join(foreign.cwd, "unrelated.txt"), "foreign content\n");
+    await snapshot(foreign.bot, foreign.cwd, "foreign checkpoint");
+    expect(await diffPatch(foreign.bot, cwd, before, after)).toBeNull();
+    expect(await diffPatch(bot, foreign.cwd, before, after)).toBeNull();
+    expect(await diffPatch(foreign.bot, foreign.cwd, before, after)).toBeNull();
+    expect(await diffPatch(bot, cwd, before, after)).not.toBeNull();
+  });
+
+  it("caps a large textual patch at 200000 characters and reports truncation", async () => {
+    const { bot, cwd } = workspace();
+    writeFileSync(join(cwd, "large.txt"), "old\n");
+    const before = await snapshot(bot, cwd, "small before");
+    writeFileSync(join(cwd, "large.txt"), Array.from({ length: 6000 }, (_, i) => `${i}: synthetic changed line ${"x".repeat(30)}`).join("\n") + "\n");
+    const after = await snapshot(bot, cwd, "large after");
+    const diff = await diffPatch(bot, cwd, before!, after!);
+    expect(diff?.truncated).toBe(true);
+    expect(diff?.patch).toHaveLength(200000);
+    expect(diff?.patch).toContain("+0: synthetic changed line");
+  });
+});

@@ -16,6 +16,8 @@ export const READ_ONLY_AGENT_TOOL_NAMES: ReadonlySet<string> = new Set([
   "session_search",
   "session_read",
   "tool_result_read",
+  "pages_list",
+  "page_read",
   "list_routines",
   "skills_list",
 ]);

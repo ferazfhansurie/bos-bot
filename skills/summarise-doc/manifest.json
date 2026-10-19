@@ -1,0 +1,22 @@
+{
+  "id": "summarise-doc",
+  "name": "Summarise",
+  "version": "0.1.0",
+  "description": "Summarise a document, file, link, thread or recording into key points, numbers and actions.",
+  "defaultEnabled": true,
+  "triggerTerms": [
+    "summarise",
+    "summarize",
+    "summary",
+    "tldr",
+    "tl;dr",
+    "key points",
+    "recap",
+    "sum up",
+    "go through this",
+    "read this"
+  ],
+  "requiredCapabilities": [
+    "starterSkills"
+  ]
+}

@@ -101,6 +101,8 @@ const FILE_MIMES: Readonly<Record<string, string>> = {
   "video/x-m4v": ".m4v",
   "video/webm": ".webm",
   "text/plain": ".txt",
+  "text/vtt": ".vtt",
+  "application/x-subrip": ".srt",
   "text/markdown": ".md",
   "text/csv": ".csv",
   "text/tab-separated-values": ".tsv",

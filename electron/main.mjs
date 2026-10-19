@@ -12,12 +12,13 @@ import { stagingServerEnvironment } from "./staging-environment.mjs";
 import { STAGING, SERVER_PORTS, RELAY_PORTS, PACKAGE_SCHEMES } from "./release-channel.mjs";
 import { attachLaunchSplash, readSplashSquad, saveSplashSquad } from "./launch-splash.mjs";
 import { createSharedBrowser } from "./shared-browser.mjs";
+import { authorizeAgentNetwork, authorizeAgentDownload } from './browser-agent-policy.mjs';
 import { registerAttentionNotifications } from "./attention-notifications.mjs";
 import { createPrimaryBrowserController } from "./primary-browser-controller.mjs";
 import { createWorkspaceBrowserRegistry } from "./workspace-browser.mjs";
-import { TOOLS_BROWSER_PARTITION, noteBrowserKeyInput, attachToolsBrowserGuest, configureToolsBrowserSession, hardenWebviewAttach, toolsBrowserUrlAllowed } from "./tools-browser.mjs";
+import { TOOLS_BROWSER_PARTITION, chromeUserAgent, noteBrowserKeyInput, attachToolsBrowserGuest, configureToolsBrowserSession, hardenWebviewAttach, toolsBrowserUrlAllowed } from "./tools-browser.mjs";
 import { webURL } from "./primary-browser.mjs";
-import { app, autoUpdater as nativeAutoUpdater, BrowserWindow, WebContentsView, clipboard, desktopCapturer, dialog, ipcMain, Menu, nativeImage, powerMonitor, powerSaveBlocker, safeStorage, screen, session, shell, systemPreferences, Tray, utilityProcess, webContents } from "electron";
+import { app, autoUpdater as nativeAutoUpdater, BrowserWindow, WebContentsView, clipboard, desktopCapturer, dialog, globalShortcut, ipcMain, Menu, nativeImage, powerMonitor, powerSaveBlocker, safeStorage, screen, session, shell, systemPreferences, Tray, utilityProcess, webContents } from "electron";
 import { createRequire } from "node:module";
 import { randomBytes, randomUUID } from "node:crypto";
 import fs from "node:fs";
@@ -95,6 +96,7 @@ import environmentsModule from "./environments.cjs";
 import localOriginModule from "./local-origin.cjs";
 import { buildApplicationMenu } from "./menu.mjs";
 import { createComputerSharing, validateSharedFolders } from "./computer-sharing.mjs";
+import { reviewSharedComputerGrant } from "./computer-sharing-review.mjs";
 import { acquireDataDirLease } from "./data-dir-lease.mjs";
 import { createHostLifecycle } from "./host-lifecycle.mjs";
 import { createUpdateLifecycleClient } from "./update-lifecycle.mjs";
@@ -102,6 +104,8 @@ import { createWindowsUpdateContract, createWindowsUpdateResultWriter, createChe
 import { createManagedDesktopClient, createManagedDesktopRelay, createManagedDesktopStore } from "./managed-desktop.mjs";
 import { createCompanyBackups } from "./company-backups.mjs";
 import { createCompanyBackupSchedule } from "./company-backup-schedule.mjs";
+import { createAppshots } from "./appshot.mjs";
+import { confirmDone, provisioningDue, readProvisionFile, readReceipt, runEnterpriseProvisioning, setupMessages, setupPage } from "./enterprise-provision.mjs";
 
 const { desktopCapabilities, nativeDesktopActions } = capabilitiesModule;
 const nativeActions = nativeDesktopActions(process.platform);
@@ -1189,6 +1193,81 @@ function localBackupRequest(proc, route, init = {}) {
     headers: { ...Object.fromEntries(new Headers(init.headers)), [DESKTOP_MUTATION_HEADER]: desktopMutationToken } });
 }
 
+// Enterprise first-launch provisioning (electron/enterprise-provision.mjs).
+// `enterpriseSetup` is non-null only while this launch provisions or after it
+// failed; the window shows a plain status page instead of the app meanwhile.
+let enterpriseSetup = null;
+
+function enterpriseLocalRequest(route, init = {}) {
+  if (!serverProc || !serverReady || !/^\/api\/(?:workspace-backup\/(?:status|upload|preview|restore)|enterprise-provision\/(?:status|apply))$/.test(route)) {
+    return Promise.reject(new Error("The local server is not ready."));
+  }
+  return fetch(`http://127.0.0.1:${SERVER_PORT}${route}`, { ...init, redirect: "error", credentials: "omit",
+    headers: { ...Object.fromEntries(new Headers(init.headers)), [DESKTOP_MUTATION_HEADER]: desktopMutationToken } });
+}
+
+/** Stop the server child and resolve once the supervisor's replacement is
+ * ready — the boot that applies a committed restore. */
+function restartServerForProvisioning(timeoutMs = 15 * 60_000) {
+  const previous = serverProc;
+  if (!previous) return Promise.reject(new Error("The local server is not running."));
+  return new Promise((resolve, reject) => {
+    const poll = setInterval(() => {
+      if (serverReady && serverProc && serverProc !== previous) { clearInterval(poll); clearTimeout(deadline); resolve(); }
+    }, 250);
+    const deadline = setTimeout(() => { clearInterval(poll); reject(new Error("The local server did not come back after the restore.")); }, timeoutMs);
+    void stopUtilityServer(previous).then((stopped) => {
+      if (!stopped) { clearInterval(poll); clearTimeout(deadline); reject(new Error("The local server did not stop for the restore.")); }
+    });
+  });
+}
+
+function showEnterpriseSetup(text) {
+  if (mainWindow && !mainWindow.isDestroyed()) void mainWindow.loadURL(setupPage(text)).catch(() => {});
+}
+
+/** Decide, before the first window opens, whether this launch provisions.
+ * A build without a provision file returns null at once; a finished one only
+ * retries an owed /done in the background. */
+function prepareEnterpriseSetup() {
+  if (!app.isPackaged || desktopRemoteAccess || !serverReady) return null;
+  let provision;
+  try { provision = readProvisionFile(process.resourcesPath); }
+  catch (error) { slog(`enterprise: ${error?.message ?? error}`); return null; }
+  if (!provision) return null;
+  const dataDir = desktopDataDir();
+  if (!provisioningDue({ provision, dataDir })) {
+    if (readReceipt(dataDir)?.done === false) void confirmDone({ provision, dataDir, log: slog });
+    return null;
+  }
+  enterpriseSetup = { phase: "running", label: provision.label };
+  return provision;
+}
+
+/** Runs after the first window shows "Setting up …". Never replaces a
+ * workspace that already holds data; any failure leaves it as it was and the
+ * next launch tries again. */
+async function runEnterpriseSetup(provision) {
+  const dataDir = desktopDataDir();
+  try {
+    const result = await runEnterpriseProvisioning({
+      provision, dataDir,
+      localRequest: enterpriseLocalRequest,
+      restartServer: () => restartServerForProvisioning(),
+      tempRoot: path.join(app.getPath("temp"), "bos-enterprise-provision"),
+      appVersion: app.getVersion(),
+      log: slog,
+    });
+    slog(result?.skipped ? `enterprise: skipped (${result.skipped})` : `enterprise: provisioned ${provision.slug}`);
+    enterpriseSetup = null;
+    if (mainWindow && !mainWindow.isDestroyed()) void mainWindow.loadURL(`http://127.0.0.1:${SERVER_PORT}`).catch(() => {});
+  } catch (error) {
+    slog(`enterprise: setup failed (${error?.code ?? "error"}): ${error?.message ?? error}`);
+    enterpriseSetup = { phase: "failed", label: provision.label };
+    showEnterpriseSetup(setupMessages.failed);
+  }
+}
+
 async function localBackupStatus(proc) {
   const response = await localBackupRequest(proc, "/api/workspace-backup/status", { signal: AbortSignal.timeout(10_000) });
   if (!response.ok) throw new Error("Local backup status is unavailable. Try again when the workspace is ready.");
@@ -1286,12 +1365,15 @@ const sharedPrimaryBrowser = createSharedBrowser({
   },
   host: {
     available: () => Boolean(mainWindow && !mainWindow.isDestroyed() && mainWindowShowsLocalUi() && !mainWindow.webContents.isLoadingMainFrame()),
-    reveal: () => {
+    // A bot reveal carries its conversation; the renderer opens the pane only there.
+    reveal: origin => {
       if (!mainWindowShowsLocalUi()) return;
-      pendingBrowserView = true;
-      try { mainWindow.webContents.send("primary-browser:external-url", { profileId: primaryBrowser().store.profiles().selected, url: "", reveal: true }); } catch {}
+      pendingBrowserView = origin ?? true;
+      try { mainWindow.webContents.send("primary-browser:external-url", { profileId: primaryBrowser().store.profiles().selected, url: "", reveal: true, ...origin }); } catch {}
     },
     command: command => { if (!mainWindowShowsLocalUi() || !sharedPrimaryBrowser.mounted()) return false; mainWindow.webContents.send("primary-browser:agent-command", command); return true; },
+    signIn: ({ profileId, guestId, username }) => primaryBrowser().botSignIn(profileId, guestId, username),
+    authorize: ({ profileId, guestId, url, action, scope, fullAccess }) => primaryBrowser().authorizeAgent(profileId, guestId, url, action, '', scope, { fullAccess }),
   },
   notify: state => { if (mainWindowShowsLocalUi()) mainWindow.webContents.send("primary-browser:agent-state", state); },
 });
@@ -1300,7 +1382,7 @@ function contentBlocker() {
   return browserContentBlocker ??= createContentBlocker({ root:path.join(app.getPath("userData"),"browser"), filters:["easylist.txt","easyprivacy.txt"].map(file=>fs.readFileSync(new URL(`./resources/adblock/${file}`,import.meta.url),"utf8")).join("\n"), contentsFromId:id=>webContents.fromId(id) });
 }
 function primaryBrowser() {
-  return primaryBrowserController ??= createPrimaryBrowserController({ root: path.join(app.getPath("userData"), "browser"), encryption: safeStorage, registry: toolsBrowserRegistry, contentBlocker: contentBlocker(), sessionFromPartition: p => session.fromPartition(p), contentsFromId: id => webContents.fromId(id), dialog, owner: () => mainWindow, shell });
+  return primaryBrowserController ??= createPrimaryBrowserController({ root: path.join(app.getPath("userData"), "browser"), encryption: safeStorage, registry: toolsBrowserRegistry, contentBlocker: contentBlocker(), sessionFromPartition: p => session.fromPartition(p), contentsFromId: id => webContents.fromId(id), dialog, owner: () => mainWindow, shell, agentBusy: id => sharedPrimaryBrowser.hasAgentControl(id) });
 }
 const toolsBrowserRegistry = createWorkspaceBrowserRegistry({
   onDownload: (p, row, file) => primaryBrowserController?.download(p, row, file),
@@ -1309,10 +1391,14 @@ const toolsBrowserRegistry = createWorkspaceBrowserRegistry({
   },
 });
 const configuredBrowserPartitions = new Set();
+async function authorizePrimaryAgentRequest(details, partition) {
+  return authorizeAgentNetwork(details, { hasAgentControl: () => sharedPrimaryBrowser.hasAgentControl(primaryBrowserController?.profileFor(partition)), guestFromId: id => webContents.fromId(id), agentForGuest: id => sharedPrimaryBrowser.agentForGuest(id), authorize: (...args) => primaryBrowser().authorizeAgent(...args) });
+}
 function ensureToolsBrowserSession(partition) {
   if (configuredBrowserPartitions.has(partition)) return;
   const ses = session.fromPartition(partition);
-  configureToolsBrowserSession(ses, { appOrigins: toolsBrowserAppOrigins, shouldBlockRequest: details => { const id=primaryBrowserController?.profileFor(partition); return id ? contentBlocker().shouldBlock(id,details) : false; }, requestPermission: (contents, permission, details) => primaryBrowserController?.permission(partition, contents, permission, details) ?? false, checkPermission: (contents, permission, origin) => primaryBrowserController?.checkPermission(partition, contents, permission, origin) ?? false });
+  ses.setUserAgent(chromeUserAgent());
+  configureToolsBrowserSession(ses, { appOrigins: toolsBrowserAppOrigins, authorizeRequest: details => authorizePrimaryAgentRequest(details, partition), shouldBlockRequest: details => { const id=primaryBrowserController?.profileFor(partition); return id ? contentBlocker().shouldBlock(id,details) : false; }, requestPermission: (contents, permission, details) => primaryBrowserController?.permission(partition, contents, permission, details) ?? false, checkPermission: (contents, permission, origin) => primaryBrowserController?.checkPermission(partition, contents, permission, origin) ?? false });
   if (primaryBrowserController?.profileFor(partition)) ses.setDisplayMediaRequestHandler(async (request, callback) => {
     try {
       const contents=webContents.fromFrame(request.frame);
@@ -1324,7 +1410,13 @@ function ensureToolsBrowserSession(partition) {
       callback({video:sources[choice.response-1]});
     } catch { callback({}); }
   });
-  ses.on("will-download", (event, item, guest) => toolsBrowserRegistry.trackDownload(partition, event, item, guest));
+  ses.on("will-download", (event, item, guest) => {
+    const agent = guest && sharedPrimaryBrowser.agentForGuest(guest.id);
+    if (!agent) { toolsBrowserRegistry.trackDownload(partition, event, item, guest); return; }
+    item.pause();
+    toolsBrowserRegistry.trackDownload(partition, event, item, guest);
+    void authorizeAgentDownload(guest, item, { agentForGuest: id => sharedPrimaryBrowser.agentForGuest(id), authorize: (...args) => primaryBrowser().authorizeAgent(...args) }).then(allowed => { if (allowed) item.resume(); else item.cancel(); }, () => item.cancel());
+  });
   configuredBrowserPartitions.add(partition);
 }
 
@@ -1365,6 +1457,8 @@ app.on("web-contents-created", (_event, contents) => {
     toolsBrowserRegistry.attach(guest, partition);
     const registerPrimaryGuest = (contents) => {
       toolsBrowserRegistry.attach(contents, partition);
+      // Trackpad and touch pinch zoom like chrome; electron turns it off by default.
+      void Promise.resolve().then(() => contents.setVisualZoomLevelLimits(1, 4)).catch(() => {});
       contents.on("did-navigate", (_event, url) => primaryBrowserController?.visit(partition, url, contents.getTitle()));
       contents.on("did-navigate-in-page", (_event, url, isMainFrame) => { if (isMainFrame) primaryBrowserController?.visit(partition, url, contents.getTitle()); });
       contents.on("dom-ready", () => {const id=primaryBrowserController?.profileFor(partition);if(id)void contentBlocker().apply(id,contents).catch(()=>{});});
@@ -1508,7 +1602,7 @@ async function startServerOn(port) {
       if (receiveComputerPreview(message)) return;
       if (message?.type === "bos:shared-browser-request") {
         if (typeof message.requestId !== "string" || !Number.isFinite(message.deadline) || message.deadline < Date.now()) return;
-        void sharedPrimaryBrowser.rpc(message.botId, message.threadId, message.method, message.params, message.deadline, { generation: message.generation, profileId: message.profileId }).then(result => {
+        void sharedPrimaryBrowser.rpc(message.botId, message.threadId, message.method, message.params, message.deadline, { generation: message.generation, profileId: message.profileId, fullAccess: message.fullAccess === true }).then(result => {
           if (serverSupervisor.isCurrent(proc)) proc.postMessage({ type: "bos:shared-browser-result", requestId: message.requestId, ok: true, result });
         }, error => { if (serverSupervisor.isCurrent(proc)) proc.postMessage({ type: "bos:shared-browser-result", requestId: message.requestId, ok: false, error: error.message }); });
         return;
@@ -1982,9 +2076,9 @@ const sharingPrompts = new Set();
 // Opt-in computer sharing is gated by the server this desktop runs, the same
 // way every other server setting reaches this process: the booleans-only
 // /api/config status (server/index.ts configStatus → features). It is read
-// before the connector could start and again whenever a workspace control is
-// used, so a maintainer who edits config.json and restarts the server does not
-// have to reinstall the app. Unreachable or older server → off.
+// before the connector starts and while jobs run. Local sharing settings remain
+// discoverable while off; exact-scope native owner review can enable the flag.
+// Unreachable or older server → off.
 let sharedComputersAllowed = false;
 
 async function refreshSharedComputersAllowed() {
@@ -1995,10 +2089,20 @@ async function refreshSharedComputersAllowed() {
   return sharedComputersAllowed;
 }
 
-/** Refuse a workspace sharing control the server would refuse anyway. */
-async function requireSharedComputers() {
+/** Called only after the local owner accepted the exact native scope review. */
+async function enableReviewedComputerSharing() {
   if (await refreshSharedComputersAllowed()) return;
-  throw new Error("Computer sharing is turned off on this server.");
+  const response = await fetch(`http://127.0.0.1:${SERVER_PORT}/api/config`, {
+    method: "PATCH",
+    headers: desktopServerHeaders({ "content-type": "application/json" }, { packaged: app.isPackaged, token: desktopMutationToken }),
+    body: JSON.stringify({ features: { sharedComputers: true } }),
+    signal: AbortSignal.timeout(3_000),
+  });
+  if (!response.ok || !(await refreshSharedComputersAllowed())) throw new Error("Could not enable sharing on this computer. Try again.");
+  // A previous disabled-feature check permanently closes that controller.
+  // Recreate it only after explicit owner review, preserving saved grants.
+  computerSharing?.close();
+  computerSharing = undefined;
 }
 
 function sharingController() {
@@ -2505,6 +2609,8 @@ function createWindow() {
     win.loadURL(serverReady ? `http://127.0.0.1:${SERVER_PORT}` : buildErrorPage({ allPortsOccupied: serverStartConflictOnly }));
   } else if (remote) {
     void win.loadURL(remote.origin).catch(() => {});
+  } else if (app.isPackaged && enterpriseSetup) {
+    win.loadURL(setupPage(enterpriseSetup.phase === "running" ? setupMessages.running(enterpriseSetup.label) : setupMessages.failed));
   } else if (app.isPackaged) {
     win.loadURL(serverReady ? `http://127.0.0.1:${SERVER_PORT}` : buildErrorPage({ allPortsOccupied: serverStartConflictOnly }));
   } else {
@@ -2525,6 +2631,25 @@ ipcMain.handle("screen:frame", localOnly("screen:frame", async () => {
   });
   return sources[0]?.thumbnail.toDataURL() ?? null;
 }));
+
+// Appshots (electron/appshot.mjs): list windows as thumbnails, capture the
+// one the person picks. Local UI only, like screen:frame.
+const appshots = createAppshots({
+  desktopCapturer, systemPreferences, globalShortcut, BrowserWindow, screen, shell,
+  platform: process.platform,
+  mainWindow: () => mainWindow,
+  showsLocalUi: () => mainWindowShowsLocalUi(),
+  focusMain: (win) => {
+    if (win.isMinimized()) win.restore();
+    if (!win.isVisible()) win.show();
+    win.focus();
+    if (process.platform === "darwin") app.focus({ steal: true });
+  },
+  log: slog,
+});
+ipcMain.handle("appshot:list", localOnly("appshot:list", (event) => { requireMainWindowSender(event); return appshots.list(); }));
+ipcMain.handle("appshot:capture", localOnly("appshot:capture", (event, id) => { requireMainWindowSender(event); return appshots.capture(id); }));
+ipcMain.handle("appshot:open-settings", localOnly("appshot:open-settings", (event) => { requireMainWindowSender(event); return appshots.openSettings(); }));
 
 // Onboarding permission checks. Status reads are free; the mic request
 // pops the real TCC prompt attributed to the app.
@@ -2686,8 +2811,17 @@ ipcMain.handle("window:state", (event) => {
   return { maximized: Boolean(win && !win.isDestroyed() && win.isMaximized()) };
 });
 
+// When BOS itself is the default browser, "open externally" would land back
+// here; on a mac it goes to Safari, the person's second browser for sites that
+// refuse an embedded one.
 ipcMain.handle("desktop:open-external", localOnly("desktop:open-external", async (_event, rawUrl) => {
-  await shell.openExternal(externalWebUrl(rawUrl));
+  const url = externalWebUrl(rawUrl);
+  if (process.platform === "darwin" && /^https?:/i.test(url) && app.isDefaultProtocolClient("https")) {
+    const { execFile } = await import("node:child_process");
+    await new Promise((resolve, reject) => execFile("/usr/bin/open", ["-a", "Safari", url], error => error ? reject(error) : resolve()));
+    return true;
+  }
+  await shell.openExternal(url);
   return true;
 }));
 
@@ -3005,35 +3139,24 @@ const savedWorkspace = id => {
   return env;
 };
 ipcMain.handle("sharing:state", localWorkspaceOnly("sharing:state", async (_event, id) => {
-  await requireSharedComputers();
   return sharingController().state(savedWorkspace(id).id);
 }));
 ipcMain.handle("sharing:folder", localWorkspaceOnly("sharing:folder", async () => {
-  await requireSharedComputers();
   const picked = await dialog.showOpenDialog(mainWindow, { title: "Choose a folder to share", properties: ["openDirectory"] });
   if (picked.canceled || !picked.filePaths[0]) return null;
   return (await validateSharedFolders([{ id: randomUUID(), path: picked.filePaths[0], write: false }]))[0];
 }));
 ipcMain.handle("sharing:revoke", localWorkspaceOnly("sharing:revoke", async (_event, id) => {
-  await requireSharedComputers();
   return sharingController().revoke(savedWorkspace(id));
 }));
 ipcMain.handle("sharing:save", localWorkspaceOnly("sharing:save", async (_event, id, input) => {
-  await requireSharedComputers();
-  const env = savedWorkspace(id);
-  const info = await sharingController().identity(env);
-  const folders = await validateSharedFolders(input?.folders);
-  const detail = [
-    `Workspace: ${env.origin}`,
-    ...folders.map(folder => `${folder.write ? "Read and write" : "Read only"}: ${folder.path}`),
-    input?.terminal === true ? "Terminal: UNRESTRICTED commands as your user. Can access files outside the folders above, including credentials." : "Terminal: off",
-    input?.computer === true ? "Computer control: can view your screen and operate logged-in apps. Can access information outside the folders above." : "Computer control: off",
-    "Shared content is sent to this hosted workspace and may reach its model provider. Bots from this workspace can use these permissions until you revoke them. Closing the desktop stops access.",
-  ].join("\n\n");
-  const confirmation = await dialog.showMessageBox(mainWindow, { type: "warning", message: `Allow computer access for ${env.name}?`, detail, buttons: ["Allow access", "Cancel"], defaultId: 1, cancelId: 1 });
-  if (confirmation.response !== 0) return null;
-  savedWorkspace(id);
-  return sharingController().save(env, { folders, terminal: input?.terminal === true, computer: input?.computer === true }, info);
+  return reviewSharedComputerGrant({
+    env: savedWorkspace(id), input, controller: sharingController,
+    validateFolders: validateSharedFolders,
+    confirm: options => dialog.showMessageBox(mainWindow, options),
+    enable: enableReviewedComputerSharing,
+    assertWorkspace: () => savedWorkspace(id),
+  });
 }));
 
 ipcMain.handle("environments:state", localWorkspaceOnly("environments:state", (event) => ({
@@ -3082,6 +3205,7 @@ const CREDENTIAL_PATCH = {
   xaiApiKey: (value) => ({ xai: { key: value } }),
   xaiManagementKey: (value) => ({ xai: { managementKey: value } }),
   boxToken: (value) => ({ box: { token: value } }),
+  boxComputeApiKey: (value) => ({ boxCompute: { token: value } }),
   opencodeGoApiKey: (value) => ({ opencodeGo: { apiKey: value } }),
   ttsKey: (value) => ({ tts: { key: value } }),
   fishAudioKey: (value) => ({ tts: { fishKey: value } }),
@@ -3376,7 +3500,11 @@ app.whenReady().then(async () => {
       log: slog,
     });
   }
+  const enterpriseProvision = prepareEnterpriseSetup();
   createWindow();
+  if (enterpriseProvision) void runEnterpriseSetup(enterpriseProvision);
+  // Registered only while the app runs; never prompts (see appshot.mjs).
+  if (!desktopRemoteAccess) appshots.register();
   // Reconcile incomplete setup and resume interrupted sign-out only after the
   // local app is usable. This background network work never gates LAN pairing
   // or the first window.
@@ -3513,6 +3641,7 @@ function releaseDesktopDataDirLease() {
 // before-quit is deliberately too early: this app defers it while owned
 // helpers shut down. will-quit is the final Electron lifecycle boundary; the
 // process hook covers app.exit()/fatal exits that bypass it.
+app.on("will-quit", () => appshots.unregister());
 app.on("will-quit", releaseDesktopDataDirLease);
 process.once("exit", releaseDesktopDataDirLease);
 // branding compatibility (electron/branding-compat.json): data-home: existing desktop and companion homes, backups and lease recovery must open the same data; pairing: old QR codes remain readable; server emission stays old until both native apps have shipped support; ipc: IPC and updater restart arguments preserve mixed-version desktop recovery; environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { launchVerificationServer } from "../scripts/control-omb.ts";
-import { initialOnboardingState, onboardingScript, type OnboardingChatMessage, type OnboardingChatState } from "../shared/onboarding-chat.ts";
+import { initialOnboardingState, type OnboardingChatMessage, type OnboardingChatState } from "../shared/onboarding-chat.ts";
 import { applyOnboardingChatEvent, parseOnboardingChatEvent, type OnboardingChatHost } from "./onboarding-chat.ts";
 
 type Fixture = Awaited<ReturnType<typeof launchVerificationServer>>;
@@ -37,39 +37,25 @@ it("walks a fresh workspace from start to first task, posting each scripted line
     const started = await event({ type: "start" });
     expect(started.status).toBe(200);
     let state: OnboardingChatState = started.body.state;
-    expect(state).toMatchObject({ step: "name", botName: "BOS", connected: [], completedAt: "" });
+    expect(state).toMatchObject({ botName: "BOS", connected: [], completedAt: "" });
+    expect(["engine", "apps"]).toContain(state.step);
     expect((await api("GET", "/api/config")).body.onboarding.chat).toEqual(state);
     const thread = () => api("GET", `/api/threads/${state.threadId}/messages`).then((r) => r.body.messages as any[]);
-    const ctx = () => ({ personName: "Ada Lovelace", botName: state.botName, engineReady: state.engineReady, connected: state.connected });
-    expect(onboardingLines(await thread()).map(lineKey)).toEqual([...onboardingScript("greet", ctx()), ...onboardingScript("name", ctx())].map(lineKey));
-    // the first-run seed greeting is taken over, not left above the new one
     const opening = await thread();
+    // one greeting with the starter jobs, then the one thing to do next
+    const lines = onboardingLines(opening);
+    expect(lines[0]).toMatchObject({ step: "greet", card: { kind: "suggestions" } });
+    expect(lines[0].text).toContain("Hi Ada, I'm BOS");
+    expect(lines[1].step).toBe(state.step);
+    // the first-run seed greeting is taken over, not left above the new one
     expect(opening.some((row) => row.text?.startsWith("I'm BOS, your first AI teammate"))).toBe(false);
     expect(opening.every((row) => row.onboarding)).toBe(true);
     expect((await event({ type: "start" })).body.state).toEqual(state);
-
-    state = (await event({ type: "name", value: "  Jarvis  " })).body.state;
-    expect(state.botName).toBe("Jarvis");
-    expect((await api("GET", "/api/bots")).body.bots.find((bot: any) => bot.id === state.botId).name).toBe("Jarvis");
+    expect((await event({ type: "name", value: "Other" })).body.state).toEqual(state);
     if (state.step === "engine") state = (await event({ type: "engine-ready" })).body.state;
     expect(state.step).toBe("apps");
-    expect((await event({ type: "name", value: "Other" })).body.state).toEqual(state);
-    const nameCard = onboardingLines(await thread()).find((line) => line.card?.kind === "name-input");
-    expect(nameCard?.card).toMatchObject({ kind: "name-input", value: "Jarvis", submitted: true });
-
-    state = (await event({ type: "connected", app: "gmail" })).body.state;
-    expect(state).toMatchObject({ step: "first-task", connected: ["gmail"] });
-    expect((await event({ type: "connected", app: "gmail" })).body.state).toEqual(state);
-    const gmailCard = onboardingLines(await thread()).find((line) => line.card?.kind === "connect" && line.card.app === "gmail");
-    expect(gmailCard?.card).toMatchObject({ connected: true });
 
     const before = onboardingLines(await thread());
-    const steps = new Set(before.map((line) => line.step));
-    expect([...steps]).toEqual(["greet", "name", "about", ...(steps.has("engine") ? ["engine"] : []), "apps", "first-task"]);
-    for (const step of steps) {
-      const expected = onboardingScript(step, { ...ctx(), connected: [] }).length;
-      expect(before.filter((line) => line.step === step)).toHaveLength(expected);
-    }
     // each line exactly once
     expect(new Set(before.map(lineKey)).size).toBe(before.length);
 
@@ -85,24 +71,6 @@ it("walks a fresh workspace from start to first task, posting each scripted line
       expect((await event(replay)).body.state).toEqual(done);
     }
     expect(onboardingLines(await thread())).toHaveLength(before.length);
-  } finally { await fixture.close(); }
-}, 40000);
-
-it("treats early typing as the first task and posts nothing after it", async () => {
-  const fixture = await launchVerificationServer({ ...process.env, FAKE_CLAUDE_REPLIES: JSON.stringify(["Sure."]), FAKE_CLAUDE_TOOL_CALLS: "[]" });
-  const api = client(fixture);
-  try {
-    const state: OnboardingChatState = (await api("POST", "/api/onboarding/chat", { event: { type: "start" } })).body.state;
-    expect(state.step).toBe("name");
-    const thread = () => api("GET", `/api/threads/${state.threadId}/messages`).then((r) => r.body.messages as any[]);
-    const lines = onboardingLines(await thread());
-    expect(lines.map((line) => line.step)).toEqual(["greet", "name"]);
-    expect((await api("POST", `/api/bots/${state.botId}/messages`, { text: "book me a dentist", threadId: state.threadId })).status).toBeLessThan(300);
-    await expect.poll(async () => (await api("GET", "/api/config")).body.onboarding.chat.step, { timeout: 10000, interval: 100 }).toBe("done");
-    await expect.poll(async () => (await thread()).some((row) => row.role === "bot" && row.text.includes("Sure.")), { timeout: 15000, interval: 100 }).toBe(true);
-    expect(onboardingLines(await thread())).toHaveLength(lines.length);
-    expect((await api("POST", "/api/onboarding/chat", { event: { type: "name", value: "Late" } })).body.state.step).toBe("done");
-    expect(onboardingLines(await thread())).toHaveLength(lines.length);
   } finally { await fixture.close(); }
 }, 40000);
 
@@ -124,9 +92,8 @@ describe("applyOnboardingChatEvent", () => {
     const { host, rows } = memoryHost();
     let state = initialOnboardingState("b1", "t1", "BOS", false);
     state = applyOnboardingChatEvent(host, state, { type: "start" });
-    state = applyOnboardingChatEvent(host, state, { type: "name", value: "Max" });
     expect(state.step).toBe("engine");
-    expect(rows.filter((r) => r.onboarding?.step === "engine")).toHaveLength(1);
+    expect(rows.map((r) => r.onboarding?.step)).toEqual(["greet", "engine"]);
     state = applyOnboardingChatEvent(host, state, { type: "engine-ready" });
     expect(state.step).toBe("apps");
     const count = rows.length;
@@ -134,12 +101,13 @@ describe("applyOnboardingChatEvent", () => {
     expect(rows).toHaveLength(count);
   });
 
-  it("skipping the name walks past about without a second about", () => {
+  it("with an engine ready, greets then offers apps, and passing on them ends setup", () => {
     const { host, rows } = memoryHost();
     let state = applyOnboardingChatEvent(host, initialOnboardingState("b1", "t1", "BOS", true), { type: "start" });
+    expect(rows.map((r) => r.onboarding?.step)).toEqual(["greet", "apps", "apps", "apps"]);
     state = applyOnboardingChatEvent(host, state, { type: "skip" });
-    expect(state.step).toBe("apps");
-    expect(rows.map((r) => r.onboarding?.step)).toEqual(["greet", "name", "about", "about", "apps", "apps", "apps"]);
+    expect(state.step).toBe("done");
+    expect(rows).toHaveLength(4);
   });
 
   it("does not save an unchanged record", () => {

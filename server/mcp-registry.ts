@@ -93,6 +93,8 @@ const RESERVED_MCP_NAMES = new Set([
   "dweb",
   "openmausbot_connectors",
   "openmausbot_phone",
+  "sandbox",
+  "openmausbot_sandbox",
 ]);
 
 const stdioEntrySchema = z.object({

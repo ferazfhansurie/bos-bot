@@ -18,6 +18,9 @@ export interface BotOverview {
   /** Optional setup ideas, each pointing at the relevant settings section.
    * These are customization suggestions, not requirements for chatting. */
   setup: SetupStep[];
+  connections: OverviewFacts["connectedApps"];
+  requirements?: BotRecord["installedPackage"];
+  toolAvailability?: { browser: boolean; computer: boolean };
 }
 
 export type SetupStepId = "identity" | "soul" | "folder" | "apps" | "schedule";
@@ -49,6 +52,7 @@ export interface OverviewFacts {
     | "browser"
     | "chiefOfStaff"
     | "managedSections"
+    | "installedPackage"
   >;
   routines: Array<{
     id: string;
@@ -62,7 +66,7 @@ export interface OverviewFacts {
   skills: Array<{ name: string; description: string; enabled: boolean }>;
   engine: { agentsMcp?: boolean; composioMcp?: boolean; browserMcp?: boolean; computerMcp?: boolean } | null;
   browserEnabled?: boolean;
-  connectedApps: { configured: boolean; authoritative: boolean; services: string[] };
+  connectedApps: { configured: boolean; authoritative: boolean; services: string[]; pending?: string[]; reconnect?: string[] };
   sectionPeers: number;
   timeZone: string;
   recent: Array<{ at: number; summary: string }>;
@@ -174,20 +178,26 @@ function doesLines(facts: OverviewFacts): string[] {
 export async function connectedAppsFacts(
   configured: boolean,
   availability: "configured" | "unconfigured" | "unreadable",
-  read: () => Promise<Record<string, { connected: boolean }>>,
+  read: () => Promise<Record<string, { connected: boolean; pending?: boolean; status?: string }>>,
 ): Promise<OverviewFacts["connectedApps"]> {
   let authoritative = availability !== "unreadable";
   let services: string[] = [];
+  let pending: string[] = [];
+  let reconnect: string[] = [];
   if (configured && authoritative) {
     try {
-      services = Object.entries(await read())
+      const inventory = Object.entries(await read());
+      services = inventory
         .filter(([, state]) => state.connected)
         .map(([slug]) => slug);
+      pending = inventory.filter(([, state]) => !state.connected && state.pending).map(([slug]) => slug);
+      reconnect = inventory.filter(([, state]) => !state.connected && !state.pending &&
+        /^(expired|failed|inactive|revoked|disconnected)$/i.test(state.status ?? "")).map(([slug]) => slug);
     } catch {
       authoritative = false;
     }
   }
-  return { configured, authoritative, services };
+  return { configured, authoritative, services, ...(pending.length ? { pending } : {}), ...(reconnect.length ? { reconnect } : {}) };
 }
 
 /** Whether this bot could use connected apps at all: apps on for the bot,
@@ -273,6 +283,12 @@ export function buildBotOverview(facts: OverviewFacts): BotOverview {
     wont: wontLines(facts),
     recent: facts.recent,
     setup: setupSteps(facts),
+    connections: facts.connectedApps,
+    ...(facts.bot.installedPackage ? { requirements: facts.bot.installedPackage } : {}),
+    toolAvailability: {
+      browser: facts.browserEnabled === true && facts.bot.browser !== false && facts.engine?.browserMcp === true,
+      computer: Boolean(facts.bot.computer && facts.bot.computer !== "off" && facts.bot.computer !== "browser") && facts.engine?.computerMcp === true,
+    },
   };
 }
 

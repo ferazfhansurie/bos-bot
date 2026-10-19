@@ -7,6 +7,7 @@ import {
   pairWithCode,
   readSessionState,
   reasonWorthShowing,
+  signInWithPassword,
   startEmailSignIn,
   verifyEmailSignIn,
   type EnvironmentDescriptor,
@@ -15,12 +16,15 @@ import {
 
 const input = "mt-1 w-full rounded-md border border-line bg-surface px-3 py-2 text-[14px] text-ink outline-none focus:border-accent-border";
 const button = "mt-5 w-full rounded-md bg-accent px-4 py-2 text-[14px] font-medium text-accent-ink disabled:opacity-50";
+type Mode = "password" | "email" | "code";
+
 const fieldLabel = "mt-4 block text-[12px] font-medium text-ink-secondary";
 
 /** The page a pairing link opens: /pair#code=XXXX-XXXX-XXXX. Also what the
  * app shows instead of itself when a remote browser has no session yet.
- * When the server has a sign-in allow-list, "sign in with your email" comes
- * first and the pairing code stays one link away. */
+ * When the server has staff logins, username and password comes first; with
+ * a sign-in allow-list, "sign in with your email" does. The pairing code
+ * stays one link away. */
 export function PairPage({ initialCode, initialEmail = null, reason }: { initialCode: string | null; initialEmail?: string | null; reason?: string }) {
   const [code, setCode] = useState(initialCode ?? "");
   const [label, setLabel] = useState(defaultDeviceLabel());
@@ -30,17 +34,19 @@ export function PairPage({ initialCode, initialEmail = null, reason }: { initial
   const [error, setError] = useState<string | null>(null);
   // one id per code typed: a retry after a lost response reuses it, a new code gets a new one
   const [attemptId, setAttemptId] = useState(() => newAttemptId());
-  const [mode, setMode] = useState<"email" | "code" | null>(initialCode ? "code" : null);
+  const [mode, setMode] = useState<Mode | null>(initialCode ? "code" : null);
   const [email, setEmail] = useState(initialEmail ?? "");
   const [otp, setOtp] = useState("");
   const [sent, setSent] = useState(false);
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
 
   useEffect(() => {
     void fetch("/.well-known/openmausbot/environment")
       .then((r) => (r.ok ? r.json() : null))
       .then((d: EnvironmentDescriptor | null) => {
         setEnvironment(d);
-        setMode((current) => current ?? (d?.capabilities.emailSignIn ? "email" : "code"));
+        setMode((current) => current ?? (d?.capabilities.passwordSignIn ? "password" : d?.capabilities.emailSignIn ? "email" : "code"));
       })
       .catch(() => {
         setEnvironment(null);
@@ -51,6 +57,7 @@ export function PairPage({ initialCode, initialEmail = null, reason }: { initial
 
   const connected = session?.kind === "loopback" || session?.kind === "session";
   const emailOffered = environment?.capabilities.emailSignIn === true;
+  const passwordOffered = environment?.capabilities.passwordSignIn === true;
 
   async function submitCode(e: React.FormEvent) {
     e.preventDefault();
@@ -82,7 +89,20 @@ export function PairPage({ initialCode, initialEmail = null, reason }: { initial
     setSent(true);
   }
 
-  function switchMode(next: "email" | "code") {
+  async function submitPassword(e: React.FormEvent) {
+    e.preventDefault();
+    setBusy(true);
+    setError(null);
+    const result = await signInWithPassword({ username, password });
+    setBusy(false);
+    if (result.ok) {
+      location.replace("/");
+      return;
+    }
+    setError(result.error);
+  }
+
+  function switchMode(next: Mode) {
     setMode(next);
     setError(null);
   }
@@ -91,10 +111,12 @@ export function PairPage({ initialCode, initialEmail = null, reason }: { initial
     <main className="flex min-h-screen items-center justify-center bg-app px-6 text-ink">
       <div className="absolute left-3 top-12 max-w-[280px]"><DesktopWorkspaceSwitcher /></div>
       <div className="w-full max-w-[420px]">
-        <h1 className="text-[20px] font-semibold">{mode === "email" ? "Sign in to" : "Connect to"} {environment?.label ?? "this BOS Bot"}</h1>
+        <h1 className="text-[20px] font-semibold">{mode === "code" ? "Connect to" : "Sign in to"} {environment?.label ?? "this BOS Bot"}</h1>
         <p className="mt-1.5 text-[13.5px] leading-relaxed text-ink-secondary">
           {environment ? `Version ${environment.version} on ${environment.platform}. ` : ""}
-          {mode === "email"
+          {mode === "password"
+            ? "Sign in with the username or phone number and password you were given."
+            : mode === "email"
             ? sent
               ? `We emailed an 8-digit code to ${email}. It works once and expires in ten minutes.`
               : "Enter your email and we will send you a one-time code."
@@ -108,6 +130,46 @@ export function PairPage({ initialCode, initialEmail = null, reason }: { initial
               Open the app
             </a>
           </p>
+        ) : mode === "password" ? (
+          <form onSubmit={submitPassword}>
+            <label className={fieldLabel} htmlFor="signin-username">
+              Username or phone
+            </label>
+            <input
+              id="signin-username"
+              value={username}
+              onChange={(e) => setUsername(e.target.value)}
+              autoComplete="username"
+              autoCapitalize="none"
+              spellCheck={false}
+              className={input}
+            />
+            <label className={fieldLabel} htmlFor="signin-password">
+              Password
+            </label>
+            <input
+              id="signin-password"
+              type="password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              autoComplete="current-password"
+              autoCapitalize="none"
+              spellCheck={false}
+              className={input}
+            />
+            {error ? <p className="mt-3 text-[13px] text-danger">{error}</p> : null}
+            <button type="submit" disabled={busy || !username.trim() || !password} className={button}>
+              {busy ? "Signing in…" : "Sign in"}
+            </button>
+            {emailOffered ? (
+              <button type="button" onClick={() => switchMode("email")} className="mt-3 w-full text-[13px] text-ink-secondary underline">
+                Sign in with your email instead
+              </button>
+            ) : null}
+            <button type="button" onClick={() => switchMode("code")} className="mt-3 w-full text-[13px] text-ink-secondary underline">
+              Have a pairing code instead?
+            </button>
+          </form>
         ) : mode === "email" ? (
           <form onSubmit={submitEmail}>
             <label className={fieldLabel} htmlFor="signin-email">
@@ -157,6 +219,11 @@ export function PairPage({ initialCode, initialEmail = null, reason }: { initial
                 Send a new code
               </button>
             ) : null}
+            {passwordOffered ? (
+              <button type="button" onClick={() => switchMode("password")} className="mt-3 w-full text-[13px] text-ink-secondary underline">
+                Sign in with a username instead
+              </button>
+            ) : null}
             <button type="button" onClick={() => switchMode("code")} className="mt-3 w-full text-[13px] text-ink-secondary underline">
               Have a pairing code instead?
             </button>
@@ -190,6 +257,11 @@ export function PairPage({ initialCode, initialEmail = null, reason }: { initial
             {emailOffered ? (
               <button type="button" onClick={() => switchMode("email")} className="mt-3 w-full text-[13px] text-ink-secondary underline">
                 Sign in with your email instead
+              </button>
+            ) : null}
+            {passwordOffered ? (
+              <button type="button" onClick={() => switchMode("password")} className="mt-3 w-full text-[13px] text-ink-secondary underline">
+                Sign in with a username instead
               </button>
             ) : null}
           </form>

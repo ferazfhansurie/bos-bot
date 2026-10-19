@@ -8,7 +8,8 @@ vi.mock("@/state/store", () => ({
   useStore: () => ({ state: { pluginsSurface: fixture.surface }, dispatch: fixture.dispatch }),
 }));
 vi.mock("./McpServersPanel", () => ({ McpServersPanel: () => createElement("div", null, "MCP inventory") }));
-import { PluginsPanel } from "./PluginsPanel";
+import { PluginsPanel, preloadConnectedApps } from "./PluginsPanel";
+import { api } from "@/state/store";
 
 type Node = ReactElement<{ children?: ReactNode; role?: string; "aria-selected"?: boolean; onClick?: () => void }>;
 function nodes(value: ReactNode): Node[] {
@@ -42,5 +43,17 @@ describe("Plugins surface navigation", () => {
     expect(fixture.dispatch).toHaveBeenLastCalledWith({ type: "togglePlugins", open: true, surface: "mcp" });
     fixture.surface = "mcp";
     expect(render().html).toContain("MCP inventory");
+  });
+});
+
+
+describe("connected apps inventory failures", () => {
+  it("does not disguise an authorization failure as an unreadable credential store", async () => {
+    vi.mocked(api).mockRejectedValueOnce(new Error("forbidden: this session lacks the admin scope"));
+    await expect(preloadConnectedApps(true)).rejects.toThrow("admin scope");
+    vi.mocked(api).mockResolvedValueOnce({ services: {}, credentialStore: "unavailable" });
+    await expect(preloadConnectedApps(true)).resolves.toEqual({ services: {}, authoritative: false });
+    vi.mocked(api).mockResolvedValueOnce({ services: {}, credentialStore: "ok" });
+    await expect(preloadConnectedApps(true)).resolves.toEqual({ services: {}, authoritative: true });
   });
 });

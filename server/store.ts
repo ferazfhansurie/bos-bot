@@ -5,7 +5,8 @@ import { BOS_STARTER } from "../shared/bos-onboarding.ts";
 // one). messages-<threadId>.json holds the folded transcript.
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync, mkdirSync, rmSync, unlinkSync } from "node:fs";
-import { join } from "node:path";
+import { homedir } from "node:os";
+import { isAbsolute, join, relative, resolve } from "node:path";
 
 import { writeFileAtomic } from "./atomic.ts";
 import { ensureSections, readSections, changeEmptySection } from "./section-context.ts";
@@ -493,6 +494,18 @@ function newBotApprovalMode(): ApprovalMode {
 
 /** The first-run seed line. 2.0 chat onboarding takes it over in place. */
 export const BOS_SEED_GREETING = "I'm BOS, your first AI teammate. Tell me what your business does and who you help. We'll choose a useful first task, and I can work with you or help you recruit a specialist.";
+
+/** A saved folder from another computer's home: a workspace restored on this
+ * machine keeps the old machine's paths (/home/firaz/... on a mac). It is
+ * missing, sits in a home folder that is not this user's, and so can never
+ * come back here. Anything else that is missing (an unplugged drive, a
+ * deleted project) still fails loudly instead of moving the thread. */
+export function foreignFolder(path: string, home = homedir()): boolean {
+  if (!isAbsolute(path) || existsSync(path)) return false;
+  const rel = relative(resolve(home), resolve(path));
+  if (rel === "" || (!rel.startsWith("..") && !isAbsolute(rel))) return false;
+  return /^(?:\/home\/[^/]+|\/Users\/[^/]+|\/root)(?:\/|$)/.test(resolve(path));
+}
 
 export class Store {
   bots: BotRecord[] = [];
@@ -2033,8 +2046,18 @@ export class Store {
       }
       return null;
     }
+    const botCwd = bot.cwd && !foreignFolder(bot.cwd) ? bot.cwd : undefined;
     if (task.cwd === undefined) {
-      task.cwd = Object.keys(task.resumeCursors).length === 0 ? (bot.cwd ?? fallbackCwd ?? null) : null;
+      task.cwd = Object.keys(task.resumeCursors).length === 0 ? (botCwd ?? fallbackCwd ?? null) : null;
+      this.saveBots();
+      this.emit({ type: "bot", botId });
+    } else if (task.cwd && foreignFolder(task.cwd)) {
+      // A workspace restored from another machine keeps that machine's
+      // folders (/home/... on a mac). Nothing here can ever bring it back,
+      // so the thread moves to the bot's folder; its engine session lived
+      // over there too, so it starts fresh.
+      task.cwd = botCwd ?? fallbackCwd ?? null;
+      task.resumeCursors = {};
       this.saveBots();
       this.emit({ type: "bot", botId });
     }

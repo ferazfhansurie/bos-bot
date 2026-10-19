@@ -1,5 +1,5 @@
 import { parse as parseYaml } from "yaml";
-import { parseTeamBackup, TEAM_BACKUP_CONTENTS } from "../../shared/team-backup";
+import { parseTeamBackup, TEAM_BACKUP_CONTENTS } from "../../shared/team-backup.js";
 
 export interface PendingTeamImport {
   manifest: unknown;
@@ -11,8 +11,12 @@ export interface PendingTeamImport {
   rooms: number;
   playbooks: number;
   routines: number;
-  apps: Array<{ label: string; optional: boolean }>;
+  apps: Array<{ label: string; optional: boolean; reason?: string }>;
   skills?: string[];
+  instructions?: Array<{ name: string; text: string }>;
+  routineNames?: string[];
+  tools?: Array<{ label: string; reason: string; optional: boolean }>;
+  capabilities?: string[];
   conversations?: number;
   archivedBots?: number;
   warnings?: string[];
@@ -128,7 +132,7 @@ function packagePreview(root: Record<string, unknown>, manifest: unknown): Pendi
         if (!app || typeof app !== "object" || Array.isArray(app)) return [];
         const value = app as Record<string, unknown>;
         return typeof value.label === "string"
-          ? [{ label: value.label.trim(), optional: value.optional === true }]
+          ? [{ label: value.label.trim(), optional: value.optional === true, reason: typeof value.reason === "string" ? value.reason : undefined }]
           : [];
       })
     : [];
@@ -146,6 +150,13 @@ function packagePreview(root: Record<string, unknown>, manifest: unknown): Pendi
     playbooks: Array.isArray(pkg.playbooks) ? pkg.playbooks.length : 0,
     routines: Array.isArray(pkg.routines) ? pkg.routines.length : 0,
     apps,
+    instructions: (pkg.agents as Array<Record<string, unknown>>).flatMap(agent => typeof agent.soul === "string" && agent.soul.trim() ? [{ name: String(agent.name), text: agent.soul }] : []),
+    routineNames: Array.isArray(pkg.routines) ? pkg.routines.flatMap(routine => routine && typeof routine === "object" && typeof routine.name === "string" ? [routine.name] : []) : [],
+    capabilities: Array.isArray(requirements.capabilities) ? requirements.capabilities.filter((value): value is string => typeof value === "string") : [],
+    tools: Array.isArray(requirements.tools) ? requirements.tools.flatMap(tool => {
+      if (!tool || typeof tool !== "object" || typeof tool.label !== "string") return [];
+      return [{ label: tool.label, reason: typeof tool.reason === "string" ? tool.reason : "", optional: tool.optional === true }];
+    }) : [],
     skills: Array.isArray(skills) ? skills.flatMap((skill) => {
       if (!skill || typeof skill !== "object" || Array.isArray(skill)) return [];
       const { name } = skill as Record<string, unknown>;

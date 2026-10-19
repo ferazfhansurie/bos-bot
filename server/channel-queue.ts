@@ -8,7 +8,7 @@ import { assertQueueAttachmentsUnchanged } from "./queue-edit.ts";
 // never saw.
 
 import { newId } from "./contracts.ts";
-import { chatFollowups, editChatFollowup, reorderChatFollowups, saveChatFollowup, settleChatFollowups } from "./message-db.ts";
+import { chatQueuePaused, setChatQueuePaused, chatFollowups, editChatFollowup, reorderChatFollowups, saveChatFollowup, settleChatFollowups } from "./message-db.ts";
 import { sameAttachedSend } from "./steer-queue.ts";
 
 interface ChannelQueueItem {
@@ -35,9 +35,9 @@ const changed = () => { for (const listener of listeners) listener(); };
 export function onChannelQueueChange(listener: () => void): () => void {
   listeners.add(listener); return () => { listeners.delete(listener); };
 }
-export function queuedChannelSnapshot(ownsThread: (groupId: string, threadId: string) => boolean): Record<string, Array<{ queueId: string; text: string }>> {
+export function queuedChannelSnapshot(ownsThread: (groupId: string, threadId: string) => boolean): Record<string, Array<{ queueId: string; text: string; paused?: boolean }>> {
   return Object.fromEntries([...queues].filter(([threadId, entry]) => ownsThread(entry.groupId, threadId))
-    .map(([threadId, entry]) => [threadId, entry.items.map(item => ({ queueId: item.id, text: item.text }))]));
+    .map(([threadId, entry]) => [threadId, entry.items.map(item => ({ queueId: item.id, text: item.text, ...(chatQueuePaused("channel", entry.groupId, threadId) ? { paused: true } : {}) }))]));
 }
 
 
@@ -161,6 +161,7 @@ export function cancelChannelMessage(groupId: string, queueId: string): boolean 
 /** A channel thread's queue lifted out of the map while a live steer is
  * attempted against the room's running speaker. */
 export interface HeldChannelQueue {
+  originalOrder?: string[];
   groupId: string;
   threadId: string;
   items: ChannelQueueItem[];
@@ -173,12 +174,15 @@ export interface HeldChannelQueue {
  * a request naming a later item must not lift the queue at all (it would
  * steer and delete a different message's words). The caller must either
  * restore the held queue or settle its head. */
-export function holdChannelQueue(groupId: string, threadId: string, queueId: string): HeldChannelQueue | null {
+export function holdChannelQueue(groupId: string, threadId: string, queueId: string, onlyThis = false): HeldChannelQueue | null {
   const entry = queues.get(threadId);
-  if (!entry || entry.groupId !== groupId || entry.items[0]?.id !== queueId) return null;
-  queues.delete(threadId);
+  if (!entry || entry.groupId !== groupId || !(onlyThis ? entry.items.some(item => item.id === queueId) : entry.items[0]?.id === queueId)) return null;
+  const items = onlyThis ? entry.items.filter(item => item.id === queueId) : entry.items;
+  const rest = entry.items.filter(item => !items.includes(item));
+  if (rest.length) queues.set(threadId, { groupId, items: rest });
+  else queues.delete(threadId);
   changed();
-  return { groupId, threadId, items: entry.items };
+  return { groupId, threadId, items, ...(onlyThis ? { originalOrder: entry.items.map(item => item.id) } : {}) };
 }
 
 /** Put a held queue back after the steer was refused. Words queued while the
@@ -186,9 +190,14 @@ export function holdChannelQueue(groupId: string, threadId: string, queueId: str
 export function restoreHeldChannelQueue(held: HeldChannelQueue): void {
   const existing = queues.get(held.threadId);
   if (existing && existing.groupId !== held.groupId) throw new Error("queued task belongs to another channel");
+  const items = existing ? [...held.items, ...existing.items] : held.items;
+  if (held.originalOrder) {
+    const order = new Map(held.originalOrder.map((id, i) => [id, i]));
+    items.sort((a, b) => (order.get(a.id) ?? Infinity) - (order.get(b.id) ?? Infinity));
+  }
   queues.set(held.threadId, {
     groupId: held.groupId,
-    items: existing ? [...held.items, ...existing.items] : held.items,
+    items,
   });
   changed();
 }
@@ -238,7 +247,7 @@ export function drainChannelMessages(
   run: (input: ChannelQueueItem & { groupId: string; threadId: string }) => void | Promise<void>,
 ): void {
   for (const [threadId, entry] of queues) {
-    if (isWorking(entry.groupId)) continue;
+    if (chatQueuePaused("channel", entry.groupId, threadId) || isWorking(entry.groupId)) continue;
     const item = entry.items[0];
     if (!item) {
       queues.delete(threadId);
@@ -294,4 +303,9 @@ export function noteUndeliveredChannelMessage(
   }
   transcript.appendMessage(input.threadId, { role: "bot", kind: "activity", tool: { name: notice, ok: false } });
   return "noted";
+}
+
+export function setChannelQueuePaused(groupId: string, threadId: string, paused: boolean): void {
+  setChatQueuePaused("channel", groupId, threadId, paused);
+  changed();
 }

@@ -566,7 +566,7 @@ final class Session: ObservableObject {
         }
         if (arguments.contains("-store-preview") || arguments.contains("-computer-switcher-preview")),
            let url = Bundle.main.url(
-               forResource: arguments.contains("-room-preview") ? "RoomPreview" : arguments.contains("-images-preview") ? "ImagePreview" : (arguments.contains("-threads-preview") ? "ThreadPreview" : "StorePreview"),
+               forResource: arguments.contains("-chatgpt-preview") ? "ChatGPTPreview" : arguments.contains("-room-preview") ? "RoomPreview" : arguments.contains("-images-preview") ? "ImagePreview" : (arguments.contains("-threads-preview") ? "ThreadPreview" : "StorePreview"),
                withExtension: "json"
            ),
            let data = try? Data(contentsOf: url),
@@ -609,6 +609,11 @@ final class Session: ObservableObject {
                 let config = URLSessionConfiguration.ephemeral
                 config.protocolClasses = [ImagePreviewProtocol.self]
                 client = CompanionClient(connection: preview, token: "image-fixture-token", session: URLSession(configuration: config))
+            }
+            if arguments.contains("-chatgpt-preview") {
+                let config = URLSessionConfiguration.ephemeral
+                config.protocolClasses = [ChatGPTPreviewProtocol.self]
+                client = CompanionClient(connection: preview, token: "chatgpt-fixture-token", session: URLSession(configuration: config))
             }
             if arguments.contains("-steering-preview-refusal") {
                 let config = URLSessionConfiguration.ephemeral
@@ -2197,7 +2202,7 @@ final class Session: ObservableObject {
         attachments: [PendingMessageAttachment],
         to chat: Chat,
         replyToId: String? = nil,
-        priority: MessagePriority = .queue,
+        priority: MessagePriority = .steer,
         durableSendID: String? = nil,
         uploadProgress: ((String, Int, Int) -> Void)? = nil,
         byteProgress: (@MainActor (Double) -> Void)? = nil,
@@ -2384,6 +2389,15 @@ final class Session: ObservableObject {
     /// an entry that already drained counts as agreement.
     func setThreadSettlement(days: Int) async {
         await perform { _ = try await $0.setThreadSettlement(days: days) }
+    }
+
+    func resumeQueued(threadId: String, in chat: Chat) async {
+        let destination: MessageDestination
+        switch chat {
+        case let .bot(bot): destination = .bot(id: bot.id, threadId: threadId)
+        case let .room(room): destination = .room(id: room.id, threadId: threadId)
+        }
+        await perform { try await $0.resumeQueued(to: destination) }
     }
 
     func steerQueued(_ send: QueuedSend, threadId: String, in chat: Chat, botId: String? = nil) async -> String? {
@@ -3565,9 +3579,9 @@ final class Session: ObservableObject {
                         visible: visible, blocking: target.isBlocking)
     }
 
-    func openNotification(_ target: NotificationTarget) async {
+    func openNotification(_ target: NotificationTarget, requirePending: Bool = false) async {
         let home = home(for: target.connectionId)
-        if home !== self { return await home.openNotification(target) }
+        if home !== self { return await home.openNotification(target, requirePending: requirePending) }
         let ownID = isSatellite ? connection?.id : client?.connection.id ?? registry.activeConnectionID
         guard target.belongs(to: ownID) else {
             actionError = "This notification belongs to another or an older connection. Select its computer and open the conversation there."
@@ -3602,6 +3616,11 @@ final class Session: ObservableObject {
             guard notificationOpenID == openID, streamGeneration == generation, target.belongs(to: self.client?.connection.id) else { throw CancellationError() }
             // A tap opens history, it does not answer a request. Settled
             // approval notifications still lead to their original thread.
+            if requirePending {
+                guard case .pending = target.requestState(in: page.messages) else {
+                    throw APIError.status(code: 410, message: "This request was resolved or is no longer available.")
+                }
+            }
             let focus = target.requestState(in: page.messages) == .unavailable ? nil : target.messageId
             state.merge(page, intoThread: target.threadId)
             if var room = state.rooms.first(where: {
@@ -3739,6 +3758,25 @@ final class Session: ObservableObject {
         if let botId, let bot = bots.first(where: { $0.id == botId }) { return bot }
         guard let name = name?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(), !name.isEmpty else { return nil }
         return bots.first { $0.name.lowercased() == name } ?? bots.first { $0.name.lowercased().hasPrefix(name) }
+    }
+
+    /// Resolve on the currently paired computer. Never sign in or switch
+    /// accounts because a link supplied a home identifier.
+    func openRequestLink(_ link: RequestContinuation) async {
+        guard await botAfterLaunch(link.botId) != nil, let client else { return }
+        do {
+            let resolved = try await client.requestContinuation(link)
+            guard self.client?.connection.id == client.connection.id,
+                  resolved.botId == link.botId, resolved.threadId == link.threadId,
+                  resolved.messageId == link.messageId, resolved.requestId == link.requestId,
+                  let target = NotificationTarget(botId: resolved.botId, threadId: resolved.threadId,
+                    connectionId: client.connection.id, requestId: resolved.requestId,
+                    messageId: resolved.messageId, kind: resolved.kind) else {
+                actionError = "This request link could not be verified."
+                return
+            }
+            await openNotification(target, requirePending: true)
+        } catch { actionError = error.localizedDescription }
     }
 
     /// A tapped Live Activity: the exact thread it was showing.

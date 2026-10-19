@@ -91,7 +91,7 @@ function Workspace({target,onClose}: {target:TerminalTarget;onClose:()=>void}) {
 
 function DailyTools({target,onClose,browserTarget}: {target:TerminalTarget;onClose:()=>void;browserTarget:TerminalTarget;browserBot?:Bot}) {
   const [mode,setMode]=useState<"home"|"browser"|"terminal"|"files"|"file">("browser");
-  useEffect(()=>window.ogb?.primaryBrowser?.onExternalURL(()=>setMode("browser")),[]);
+  useEffect(()=>window.ogb?.primaryBrowser?.onExternalURL(value=>{if(!value.threadId||value.threadId===target.threadId)setMode("browser");}),[target.threadId]);
   const [file,setFile]=useState(""); const [expanded,setExpanded]=useState(false);
   const expand=()=>{const next=!expanded;setExpanded(next);window.dispatchEvent(new CustomEvent("bos-browser-expand",{detail:next}));};
   return <section aria-label="Tools" data-testid="tools-panel" className="relative flex h-full min-w-0 flex-1 flex-col border-l border-hairline bg-app">

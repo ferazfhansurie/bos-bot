@@ -30,6 +30,14 @@ function request(headers: Record<string, string>, method = "GET"): IncomingMessa
 }
 
 describe("loopback rules (moved from the server entry, behaviour unchanged)", () => {
+  it("exposes only scoped queue resume to paired clients", () => {
+    for (const owner of ["bots", "groups"]) {
+      expect(requiredScope("POST", `/api/${owner}/owner/queue/resume`)).toBe("client");
+      expect(requiredScope("GET", `/api/${owner}/owner/queue/resume`)).toBe("admin");
+      expect(requiredScope("POST", `/api/${owner}/owner/queue/resume-all`)).toBe("admin");
+    }
+  });
+
   it("grants clients only scoped resume while review remains admin-only", () => {
     const path = "/api/bots/b/threads/t/recovery/r/resume";
     expect(requiredScope("POST", path)).toBe("client");
@@ -101,20 +109,21 @@ describe("scopes", () => {
   });
   it("is default deny: chat, approvals, rooms, attachments, routines and own session are client; everything else admin", () => {
     for (const [method, path] of [
+      ["GET", "/api/bots/x/request-continuation"],
       ["POST", "/api/bots/x/messages"], ["POST", "/api/bots/x/respond"], ["POST", "/api/threads/t/respond"],
       ["POST", "/api/bots/x/compact"],
       ["PATCH", "/api/bots/x/cards/m"], ["POST", "/api/groups/g/messages"], ["PATCH", "/api/groups/g"],
       ["PATCH", "/api/bots/x"], ["PATCH", "/api/bots/x/profile"], ["POST", "/api/attachments"],
       ["GET", "/api/attachments/a.png"], ["POST", "/api/routines"], ["POST", "/api/routines/r/run"],
       ["GET", "/api/bots"], ["GET", "/api/threads/t/messages"], ["GET", "/api/search"], ["GET", "/api/events"], ["GET", "/api/groups/g/events"],
-      ["GET", "/api/config"], ["GET", "/api/webhooks"], ["POST", "/api/tts/speak"], ["POST", "/api/voice/call"],
+      ["GET", "/api/config"], ["GET", "/api/instances"], ["GET", "/api/webhooks"], ["POST", "/api/tts/speak"], ["POST", "/api/voice/call"],
       ["GET", "/api/multiplayer/rooms/r/files"], ["GET", "/api/multiplayer/rooms/r/search"],
       ["GET", "/api/multiplayer/rooms/r/requests"], ["POST", "/api/multiplayer/rooms/r/requests/q/cancel"],
       ["GET", "/api/auth/session"], ["POST", "/api/auth/stream-ticket"], ["POST", "/api/auth/logout"],
       ["GET", "/api/inbox"], ["GET", "/api/digest"], ["POST", "/api/inbox/clear"],
     ] as const) expect(requiredScope(method, path), `${method} ${path}`).toBe("client");
     for (const [method, path] of [
-      ["POST", "/api/cli-test"], ["GET", "/api/cli-candidates"], ["GET", "/api/instances"], ["PATCH", "/api/instances/claude"],
+      ["POST", "/api/cli-test"], ["GET", "/api/cli-candidates"], ["POST", "/api/instances"], ["PATCH", "/api/instances/claude"],
       ["POST", "/api/bots/x/computer/exec"], ["POST", "/api/bots/x/computer/join"], ["POST", "/api/local-computer/run"],
       ["GET", "/api/computers/boxes"], ["POST", "/api/computers/boxes/bx_23456789/delete"],
       ["POST", "/api/webhooks"], ["POST", "/api/webhooks/w/rotate"], ["POST", "/api/bots/x/skills"], ["PATCH", "/api/bots/x/skills/s"],

@@ -1,0 +1,24 @@
+{
+  "id": "connect-apps",
+  "name": "Connect Apps",
+  "version": "0.1.0",
+  "description": "Get the person's apps (Gmail, Google Calendar, Drive, Outlook, Notion, Slack and others) connected, including a second account, without dead ends.",
+  "defaultEnabled": true,
+  "triggerTerms": [
+    "connect",
+    "gmail",
+    "calendar",
+    "google",
+    "outlook",
+    "drive",
+    "notion",
+    "slack",
+    "account",
+    "sign in",
+    "log in",
+    "link my"
+  ],
+  "requiredCapabilities": [
+    "starterSkills"
+  ]
+}

@@ -113,6 +113,7 @@ export interface OptionCardData {
   skillRequest?: SkillRequestCardData;
   /** Persisted profile proposal used by the server when the user confirms it. */
   profileRequest?: ProfileRequestCardData;
+  outboundReview?: import("../../shared/outbound-review").OutboundReview;
   teamSetupRequest?: import("../../shared/team-setup").TeamSetupRequest;
   /** The model's own questions and options (Claude's AskUserQuestion), so
    * the card offers choices instead of an unanswerable Allow/Deny. */
@@ -145,6 +146,7 @@ export interface SecretRequestCardData {
 }
 
 export interface Message {
+  outputDraft?: import("../../shared/output-draft").OutputDraft;
   leadAction?: import("../../shared/wire").LeadActionSummary;
   id: string;
   role: "bot" | "user";
@@ -159,6 +161,8 @@ export interface Message {
   sharedAttachments?: Array<{ id: string; name: string; mime: string; size: number }>;
   card?: OptionCardData;
   connector?: ConnectorCardData;
+  /** 2.0 chat onboarding: a scripted line from the first bot, with its card. */
+  onboarding?: import("../../shared/onboarding-chat").OnboardingChatMessage;
   secret?: SecretRequestCardData;
   /** Lifecycle mirror for a routine whose real work lives in a fresh task. */
   routineRun?: RoutineRunCardData;
@@ -352,7 +356,7 @@ export interface Task {
   /** where this conversation works, when pinned: by the person from the
    * composer, or by its first Auto turn to the place it reached. Wins over
    * the bot's Works on (except Off); absent = follows the bot. */
-  surface?: "cloud" | "vm" | "local" | "browser";
+  surface?: "cloud" | "vm" | "local" | "browser" | "boxcompute";
   /** set when a bot (not the person) started this thread — its own or a
    * teammate's; the sidebar shows a quiet "opened by <name>" under the title */
   openedBy?: ThreadOpener;
@@ -435,7 +439,7 @@ export interface Bot {
   modelSelection: ModelSelection;
   /** Where this bot works: a computer, only the built-in browser tab, or
    * nowhere; unset = auto (cloud box if one exists, else local). */
-  computer?: "cloud" | "vm" | "local" | "browser" | "off";
+  computer?: "cloud" | "vm" | "local" | "browser" | "boxcompute" | "off";
   sharedWorkComputer?: { id: string; name: string };
   /** Which cloud computer backs `computer: "cloud"`; absent means Box. */
   cloudBackend?: CloudBackend;
@@ -511,6 +515,16 @@ export type ProjectUpdatePatch = { name?: string; emoji?: string | null };
 
 /** A conversation uses its own execution settings; the sidebar keeps the
  * original bot's aggregate presence and profile defaults. */
+/** Every engine this computer has answered for is signed out and none can
+ * run: a message would only wait for a sign-in, so it is not sent. Unknown or
+ * missing engines never lock, and a remote bot runs on its own machine. */
+export function signInBeforeSend(state: { instances: InstanceInfo[]; bots: Bot[] }, botId?: string): boolean {
+  if (botId && state.bots.find((bot) => bot.id === botId)?.remote) return false;
+  const ready = state.instances.some((instance) => instance.snapshot.state === "available" &&
+    (instance.access === "custom" || instance.snapshot.authenticated !== false));
+  return !ready && state.instances.some((instance) => instance.snapshot.state === "available" && instance.snapshot.authenticated === false);
+}
+
 export function currentTaskBot(bot: Bot, threadId = bot.threadId): Bot {
   const task = bot.tasks?.find((candidate) => candidate.threadId === threadId);
   if (!task) return bot;
@@ -591,6 +605,7 @@ export interface ConfigStatus {
   billing?: { currency?: string; prices?: Record<string, { inputPerMillion: number; outputPerMillion: number; cachedInputPerMillion?: number }> };
   composio: { configured: boolean; mode?: "managed" | "self-hosted" | "unavailable" };
   box: { configured: boolean };
+  boxCompute?: { configured: boolean };
   vps: { configured: boolean; sshAlias: string };
   rooms: { turnTimeoutMinutes: number };
   threads?: { autoSettleDays?: number; maxConcurrentPerBot: number; parallelProjectFolder?: boolean };
@@ -612,6 +627,9 @@ export interface ConfigStatus {
     baseUrl?: string;
     model?: string;
   };
+  /** Speech-to-text for browser voice messages: the home has a relay
+   * address and token. Neither is ever echoed back. */
+  stt?: { available: boolean };
   /** Shared write-only credential for on-demand GPT Image avatars. */
   imageGen?: {
     configured: boolean;
@@ -695,7 +713,7 @@ export interface EngineInstall {
   docsUrl?: string;
   signInCommand?: string;
   needsNode?: boolean;
-  managed?: { label: string; downloadBytes: number };
+  managed?: { label: string; downloadBytes: number; vendor?: "google" | "openai" | "anthropic" };
   /** the server can install or update this engine itself, no terminal */
   server?: { package: string };
 }
@@ -760,6 +778,10 @@ export interface InstanceInfo {
   cliDefault?: string;
   /** Absolute paths of every default binary found on PATH, PATH order. */
   cliCandidates?: string[];
+  /** A runtime BOS Bot installed and keeps updated itself (the Codex CLI on
+   * machines without npm). `pending` is verified and waits for running
+   * turns to finish. */
+  managedRuntime?: { active: boolean; version: string | null; latest: string | null; pending: string | null; autoUpdates: true };
   /** Server-owned Claude profile; a saved directory does not prove sign-in. */
   claudeAccount?: { configDir: string; signInCommand: string; signInShell: "powershell" | "sh"; isDefault: boolean };
 }
@@ -846,6 +868,8 @@ export interface AppState {
   welcomeOpen: boolean;
   /** the guided tour on the live interface that follows the welcome flow */
   tourOpen: boolean;
+  /** a hosted bos (free web) before its engine sign-in: the guided tour runs first, covering the computer's wake */
+  hostedSignIn: boolean;
   botSettingsSection: BotSettingsSection;
   /** True only when the open action named a section — accordion expands that row. */
   botSettingsExpandAccordion: boolean;
@@ -878,7 +902,7 @@ export interface AppState {
   } | null;
   /** Queued follow-up lines waiting for drain; keyed by threadId.
    * Each entry is identified by the server queueId, not by text. */
-  pendingQueued: Record<string, Array<{ queueId: string; text: string; reason?: "capacity" }>>;
+  pendingQueued: Record<string, Array<{ queueId: string; text: string; paused?: boolean; reason?: "capacity" }>>;
   /** queueIds whose drain frame beat the POST continuation. One-shot and
    * bounded to a short event window so other clients cannot grow it forever. */
   consumedQueueIds: Record<string, true>;
@@ -986,6 +1010,10 @@ export interface CachedThread {
   hasMore?: boolean;
   at: number;
 }
+
+/** pendingThreadSwitch's value while a new thread is being created: the
+ * chat swaps to an empty shell at once instead of waiting on the server. */
+export const NEW_THREAD_PENDING = "new-thread-pending";
 
 /** Threads whose transcripts stay in memory after being left. */
 export const THREAD_CACHE_MAX = 8;
@@ -1121,6 +1149,8 @@ export type Action =
       /** "block" interrupts the running turn; omitted or "queue" waits. */
       priority?: SendPriority;
       onError?: () => void;
+      /** The server accepted the message (stored, queued or steered). */
+      onSent?: () => void;
     }
   | {
       type: "patchGroup";
@@ -1147,10 +1177,13 @@ export type Action =
       /** "block" interrupts the running turn; omitted or "queue" waits. */
       priority?: SendPriority;
       onError?: () => void;
+      /** The server accepted the message (stored, queued or steered). */
+      onSent?: () => void;
     }
-  | { type: "pendingQueued"; threadId: string; queueId: string; text: string; reason?: "capacity" }
+  | { type: "pendingQueued"; threadId: string; queueId: string; text: string; paused?: boolean; reason?: "capacity" }
   | { type: "consumePendingQueued"; threadId: string; queueId: string }
   | { type: "cancelQueued"; botId: string; queueId: string; threadId?: string }
+  | { type: "resumeQueued"; botId?: string; groupId?: string; threadId: string }
   | { type: "steerQueued"; botId: string; queueId: string; threadId?: string; onError?: () => void; onSettled?: () => void }
   | { type: "cancelGroupQueued"; groupId: string; threadId: string; queueId: string }
   | { type: "steerGroupQueued"; groupId: string; queueId: string; threadId?: string; botId?: string; onError?: () => void; onSettled?: () => void }
@@ -1163,6 +1196,9 @@ export type Action =
   | { type: "threadActive"; threadId: string; activeLeafId: string }
   // scrollback: ask the server for the page before the oldest message held
   | { type: "loadOlderMessages"; threadId: string }
+  /** warms the thread cache on hover so the click renders at once */
+  | { type: "prefetchThread"; threadId: string }
+  | { type: "threadPrefetched"; threadId: string; messages: Message[]; hasMore: boolean; activeLeafId?: string | null }
   | { type: "olderMessages"; threadId: string; generation: number; messages: Message[]; hasMore: boolean }
   // `threadId` is the thread the card was shown in; `groupId` when the card
   // is in a room: the message lives on the room's list, and the answer goes
@@ -1232,6 +1268,7 @@ export type Action =
   | { type: "toggleShortcuts"; open?: boolean }
   | { type: "toggleWelcome"; open?: boolean }
   | { type: "toggleTour"; open?: boolean }
+  | { type: "hostedSignIn"; on: boolean }
   | {
       type: "updateBot";
       botId: string;
@@ -1531,6 +1568,12 @@ export function reducer(state: AppState, action: Action): AppState {
       const { [action.threadId]: _closed, ...threadPanes } = state.threadPanes;
       return { ...state, threadPanes };
     }
+    case "prefetchThread":
+      return state;
+    case "threadPrefetched":
+      // the live transcript or an earlier copy already owns this thread
+      if (state.threadCache[action.threadId] || state.bots.some((bot) => bot.threadId === action.threadId)) return state;
+      return { ...state, threadCache: cacheThread(state.threadCache, action.threadId, { messages: action.messages, hasMore: action.hasMore, activeLeafId: action.activeLeafId }) };
     case "loadOlderMessages":
       return state.loadingOlder[action.threadId]
         ? state
@@ -2128,6 +2171,8 @@ export function reducer(state: AppState, action: Action): AppState {
         shortcutsOpen: open,
       };
     }
+    case "hostedSignIn":
+      return state.hostedSignIn === action.on ? state : { ...state, hostedSignIn: action.on };
     case "toggleTour": {
       const open = action.open ?? !state.tourOpen;
       return { ...state, tourOpen: open, appSettingsOpen: open ? false : state.appSettingsOpen };
@@ -2249,6 +2294,8 @@ export function reducer(state: AppState, action: Action): AppState {
       else delete pendingQueued[threadId];
       return { ...state, pendingQueued, consumedQueueIds: rememberConsumedQueueId(state.consumedQueueIds, action.queueId) };
     }
+    case "resumeQueued":
+      return state;
     case "steerQueued":
       // API-only: the effect folds in messageAdded/consumePendingQueued on
       // success, so the chips clear exactly when the words truly landed.
@@ -2311,8 +2358,7 @@ export function reducer(state: AppState, action: Action): AppState {
     case "deleteGroupTask":
       return state;
     case "newTask": {
-      const { [action.botId]: _cancelled, ...pendingThreadSwitch } = state.pendingThreadSwitch;
-      return { ...state, pendingThreadSwitch, selectedId: action.botId, activeView: "chat" };
+      return { ...state, pendingThreadSwitch: { ...state.pendingThreadSwitch, [action.botId]: NEW_THREAD_PENDING }, selectedId: action.botId, activeView: "chat" };
     }
     case "switchTask": {
       // Older background frames are already represented by the next server
@@ -2384,7 +2430,7 @@ export function reducer(state: AppState, action: Action): AppState {
       for (const frame of state.backgroundThreadEvents[action.bot.threadId] ?? []) switched = reducer(switched, frame);
       const { [action.bot.threadId]: _settled, ...backgroundThreadEvents } = switched.backgroundThreadEvents;
       const pendingThreadSwitch = { ...switched.pendingThreadSwitch };
-      if (pendingThreadSwitch[action.bot.id] === action.bot.threadId) delete pendingThreadSwitch[action.bot.id];
+      if (pendingThreadSwitch[action.bot.id] === action.bot.threadId || pendingThreadSwitch[action.bot.id] === NEW_THREAD_PENDING) delete pendingThreadSwitch[action.bot.id];
       switched = { ...switched, backgroundThreadEvents, pendingThreadSwitch };
       return reconcileModelVariantSessions(reconcileSnapshotQueues(switched, [action.bot]));
     }
@@ -2468,6 +2514,7 @@ export const initialState: AppState = {
   shortcutsOpen: false,
   welcomeOpen: false,
   tourOpen: false,
+  hostedSignIn: false,
   botSettingsSection: "overview",
   botSettingsExpandAccordion: false,
   screens: {},
@@ -2964,6 +3011,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const dispatch = useMemo(() => {
     const navigation = new Map<string, number>();
     const olderPagesInFlight = new Set<string>();
+    const prefetching = new Set<string>();
     let creatingBot = false;
     const showError = (e: unknown) => {
       rawDispatch({ type: "error", message: e instanceof Error ? e.message : String(e) });
@@ -3116,6 +3164,11 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       if ((action.type === "send" || action.type === "sendGroup") && !action.sendId) {
         action = { ...action, sendId: crypto.randomUUID() };
       }
+      if (action.type === "send" && signInBeforeSend(stateRef.current, action.botId)) {
+        rawDispatch({ type: "error", message: "Sign in with Claude or ChatGPT first, then send." });
+        action.onError?.();
+        return;
+      }
       const botBeforeUpdate =
         action.type === "updateBot" || action.type === "setModel"
           ? stateRef.current.bots.find((candidate) => candidate.id === action.botId)
@@ -3175,6 +3228,18 @@ export function StoreProvider({ children }: { children: ReactNode }) {
               rawDispatch({ type: "threadPaneClose", threadId: action.threadId });
               showError(error);
             });
+          break;
+        }
+        case "prefetchThread": {
+          const current = stateRef.current;
+          if (prefetching.has(action.threadId) || current.threadCache[action.threadId] || current.bots.some((bot) => bot.threadId === action.threadId)) break;
+          prefetching.add(action.threadId);
+          // the same page the switch asks for, so the swap does not reflow
+          api<{ messages?: Message[]; hasMore?: boolean; activeLeafId?: string | null }>(`/api/threads/${action.threadId}/messages?limit=${THREAD_SWITCH_PAGE_SIZE}&turns=${THREAD_PAGE_TURNS}`)
+            .then((page) => rawDispatch({ type: "threadPrefetched", threadId: action.threadId, messages: page.messages ?? [], hasMore: Boolean(page.hasMore), activeLeafId: page.activeLeafId }))
+            // a warm-up only: the click still loads the thread the normal way
+            .catch(() => undefined)
+            .finally(() => prefetching.delete(action.threadId));
           break;
         }
         case "loadOlderMessages": {
@@ -3251,6 +3316,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
             .then(() => rawDispatch(action))
             .catch(showError);
           break;
+        case "resumeQueued":
+          void api(`/api/${action.groupId ? `groups/${action.groupId}` : `bots/${action.botId}`}/queue/resume`, { method: "POST", body: JSON.stringify({ threadId: action.threadId }) }).catch(showError);
+          break;
         case "steerQueued":
           void api(`/api/bots/${action.botId}/queue/${action.queueId}/steer`, { method: "POST", body: JSON.stringify({ threadId: action.threadId }) })
             .then((body) => {
@@ -3323,6 +3391,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
                 )),
               }))
             .then((body) => {
+              try { action.onSent?.(); } catch { /* a caller's bookkeeping never fails the send */ }
+              if (body?.steered || body?.outcomeUnknown) foldSteerResult(body);
               if (body?.message && typeof body.threadId === "string") {
                 rawDispatch({ type: "messageAdded", threadId: body.threadId, message: body.message });
               }
@@ -3345,7 +3415,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
                 });
                 // follow-ups set to steer: fold it into the running turn
                 // now. An engine that cannot steer just keeps it queued.
-                if (action.priority !== "block" && body.reason !== "capacity" && attentionPreferences().followUps === "steer") {
+                if (action.priority === undefined && body.reason !== "capacity" && attentionPreferences().followUps === "steer") {
                   void api(`/api/bots/${action.botId}/queue/${body.queueId}/steer`, { method: "POST", body: JSON.stringify({ threadId: body.threadId }) })
                     .then((result) => foldSteerResult(result ? { ...result, queued: false } : result))
                     .catch(() => {});
@@ -3601,6 +3671,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
               }, action.priority)),
             }))
             .then((body) => {
+              try { action.onSent?.(); } catch { /* a caller's bookkeeping never fails the send */ }
+              if (body?.steered || body?.outcomeUnknown) foldSteerResult(body);
               if (body?.message && typeof body.threadId === "string") {
                 rawDispatch({ type: "messageAdded", threadId: body.threadId, message: body.message });
               }
@@ -3620,7 +3692,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
                   queueId: body.queueId,
                   text: action.text,
                 });
-                if (action.priority !== "block" && attentionPreferences().followUps === "steer") {
+                if (action.priority === undefined && attentionPreferences().followUps === "steer") {
                   void api(`/api/groups/${action.groupId}/queue/${body.queueId}/steer`, { method: "POST", body: JSON.stringify({ threadId: body.threadId }) })
                     .then((result) => foldSteerResult(result ? { ...result, queued: false } : result))
                     .catch(() => {});
@@ -3719,7 +3791,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
             })
             .catch((error) => {
               if (navigation.get(action.botId) !== revision) return;
-              if (action.type === "switchTask") rawDispatch({ type: "threadSwitchFailed", botId: action.botId, threadId: action.threadId });
+              rawDispatch({ type: "threadSwitchFailed", botId: action.botId, threadId: action.type === "switchTask" ? action.threadId : NEW_THREAD_PENDING });
               showError(error);
             });
           break;
@@ -3980,6 +4052,12 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         bumpPeripheralVersion("webhooks");
       }
       switch (frame.kind) {
+        case "page":
+          window.dispatchEvent(new CustomEvent("bos-page-changed", { detail: frame }));
+          break;
+        case "video":
+          window.dispatchEvent(new CustomEvent("bos-video-changed", { detail: frame }));
+          break;
         case "sections":
           rawDispatch({ type: "sections", sections: frame.sections });
           break;

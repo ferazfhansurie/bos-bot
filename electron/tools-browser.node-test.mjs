@@ -7,6 +7,7 @@ import {
   configureToolsBrowserSession,
   hardenWebviewAttach,
   toolsBrowserUrlAllowed,
+  chromeUserAgent,
 } from "./tools-browser.mjs";
 
 const appOrigins = ["http://127.0.0.1:8799", "http://localhost:5173"];
@@ -165,4 +166,10 @@ test("session denies every permission and cancels app-origin requests", () => {
   assert.deepEqual(result, { cancel: true });
   ses.before({ url: "https://example.com/" }, (r) => { result = r; });
   assert.deepEqual(result, { cancel: false });
+});
+
+test("the tools browser presents a plain chrome user agent", () => {
+  assert.equal(chromeUserAgent("darwin", "140.0.7339.80"), "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36");
+  assert.match(chromeUserAgent("win32", "141.1"), /Windows NT 10\.0; Win64; x64.*Chrome\/141\.0\.0\.0 Safari/);
+  assert.doesNotMatch(chromeUserAgent(), /Electron|bos/i);
 });

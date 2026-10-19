@@ -11,6 +11,29 @@ export function isProviderLimit(message: string): boolean {
   return /\b429\b|\brate.?limit\b|\btoo many requests\b|\bquota (?:exceeded|exhausted)\b|\b(?:usage|spend|credit|token) limit\b|\bhit your .{0,80}limit\b/i.test(message);
 }
 
+/** The signed-in account cannot use this model at all: a plan gate (Codex on
+ * a free ChatGPT account has no Sol models) or a retired id. Unlike a quota
+ * limit it never resets, so the switch it triggers is permanent. */
+export function isModelUnavailable(message: string): boolean {
+  if (!message || isProviderSafetyBlock(message) || isProviderLimit(message)) return false;
+  return /\bmodel is not supported when using codex\b|\bnot supported when using codex with a chatgpt account\b|\b(?:does not|do not|don't) have access to (?:the )?model\b|\bmodel_not_found\b|\bmodel not found\b|\bunknown model\b|\bmodel (?:is )?not available (?:on|for) (?:your|this) (?:plan|account)\b/i.test(message);
+}
+
+/** The model id a provider named in its refusal ("The 'gpt-6.1-sol' model is
+ * not supported ..."), when it named one. */
+export function unavailableModelIn(message: string): string | null {
+  const match = /['"`]([\w][\w./:+-]*)['"`]\s+model\b|\bmodel\s+['"`]([\w][\w./:+-]*)['"`]/i.exec(message);
+  return match ? (match[1] ?? match[2]) : null;
+}
+
+/** Best replacement the same subscription offers: its own default, else the
+ * first official row. Custom/local rows and known-refused ids never qualify. */
+export function replacementModel(instance: ProviderInstance, refused: ReadonlySet<string>): string | null {
+  const official = instance.models.options.filter(option => !option.custom && !refused.has(option.id));
+  if (!refused.has(instance.models.default) && official.some(option => option.id === instance.models.default)) return instance.models.default;
+  return official[0]?.id ?? null;
+}
+
 export function fallbackSelection(model: string, instances: readonly ProviderInstance[], preferred?: string): ModelSelection | null {
   const source = instances.find(instance => instance.instanceId === preferred);
   // A model-only fallback never authorizes borrowing a sibling subscription.
@@ -190,7 +213,53 @@ export class ModelFallbackService {
     }
     return restored;
   }
-  private event(botId: string, threadId: string, from: ModelSelection, to: ModelSelection, reason: "provider_limit" | "provider_reset") {
+  /** Instance → model ids its account refused outright. */
+  private readonly refused = new Map<string, Set<string>>();
+  refusedModels(instanceId: string): ReadonlySet<string> { return this.refused.get(instanceId) ?? new Set(); }
+  /** The account refused `failed`: move every bot default and thread pinned to
+   * it on that instance to the best model the account does offer, so neither
+   * this conversation nor any other hits the same refusal again. Returns the
+   * replacement when this thread now runs on a usable model (already switched
+   * by an earlier copy of the same error counts), else null. */
+  replaceUnavailable(botId: string, threadId: string | null, failed: ModelSelection, message: string): ModelSelection | null {
+    const named = unavailableModelIn(message);
+    const model = named ?? failed.model;
+    const instance = this.options.instances().find(candidate => candidate.instanceId === failed.instanceId);
+    if (!instance) return null;
+    const refused = this.refused.get(instance.instanceId) ?? new Set<string>();
+    refused.add(model);
+    this.refused.set(instance.instanceId, refused);
+    if (failed.model !== model) {
+      // A second copy of the same refusal after the switch already landed.
+      return failed.model && !refused.has(failed.model) ? failed : null;
+    }
+    const target = replacementModel(instance, refused);
+    if (!target) return null;
+    const pinned = (selection?: ModelSelection) => selection?.instanceId === instance.instanceId && selection.model === model;
+    const current = threadId ? this.options.store.projectBotForTask(botId, threadId)?.modelSelection : this.options.store.bot(botId)?.modelSelection;
+    // The provider repeats one refusal (an error notification, then the failed
+    // turn): the first copy switched it, later copies only confirm.
+    if (current && !pinned(current) && !refused.has(current.model)) return current;
+    const next = (selection: ModelSelection): ModelSelection => ({ instanceId: instance.instanceId, model: target, ...(selection.effort ? { effort: selection.effort } : {}) });
+    for (const bot of this.options.store.bots) {
+      if (pinned(bot.modelSelection)) this.options.store.patchBot(bot.id, { modelSelection: next(bot.modelSelection) });
+      for (const task of bot.tasks ?? []) {
+        if (pinned(task.modelSelection)) this.options.store.patchTask(bot.id, task.threadId, { modelSelection: next(task.modelSelection!), modelFallback: undefined });
+      }
+      const rooms = Object.entries(bot.roomModelFallbacks ?? {}).filter(([, marker]) => pinned(marker.to));
+      if (rooms.length) {
+        const kept = { ...bot.roomModelFallbacks };
+        for (const [room] of rooms) delete kept[room];
+        this.options.store.patchBot(bot.id, { roomModelFallbacks: kept });
+      }
+    }
+    const to = (threadId ? this.options.store.projectBotForTask(botId, threadId)?.modelSelection : null) ??
+      this.options.store.bot(botId)?.modelSelection ?? null;
+    if (!to || pinned(to)) return null;
+    if (threadId) this.event(botId, threadId, failed, to, "model_unavailable");
+    return to;
+  }
+  private event(botId: string, threadId: string, from: ModelSelection, to: ModelSelection, reason: "provider_limit" | "provider_reset" | "model_unavailable") {
     this.options.publish({ type: "model.switched", eventId: newId(), provider: "harness", createdAt: new Date(this.now()).toISOString(), botId, threadId, from: from.model, to: to.model, reason });
   }
 }

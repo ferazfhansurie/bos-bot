@@ -40,9 +40,11 @@ It checks:
   name, not the list) and `menu` (the user selects in Electron's native menu).
 - Computer access starts off, selected folders start read-only, cancelled
   confirmation grants nothing, and Stop sharing immediately updates the state.
-- With the feature flag absent, no sharing controls appear, including through
-  an old post-pair deep link. The smoke then explicitly enables the flag only
-  in its disposable server to exercise the unfinished feature's enabled path.
+- The local owner can discover sharing while the feature is off. The single
+  Share this computer switch proposes terminal and screen scope to native review.
+  Cancellation leaves both grant and local feature off; acceptance enables the
+  disposable server feature and saves that grant. Switching off revokes access.
+  Limited folder selection remains available and read-only by default.
 - The post-pair deep link opens access for the correct saved workspace. Hosted
   renderers receive **no** `computerSharing` permission bridge.
 - A real pairing exchange sets Chromium's HttpOnly session cookie. The native
@@ -89,13 +91,19 @@ connections or directly invoke switching, forgetting, or host-only controls.
 
 ## Optional computer sharing
 
-**Computer sharing is disabled by default pending security hardening.**
-Connecting and switching hosted workspaces still works, but does not offer
-local file, terminal, or screen access. The flow below is maintainer-only
-verification with `features.sharedComputers: true` on both servers, not a
-recommended production setup or a Settings switch.
+Computer sharing starts off. Open **Settings → Connected workspaces →
+Computer access** beside the intended hosted workspace, then use **Share this
+computer**. First-time sharing proposes unrestricted terminal and screen/app
+control; the native dialog names the workspace and exact scope, and defaults
+to Cancel. Only its acceptance enables the local feature and saves the grant.
+Use **Limited access and shared folders** for folder-only or narrower access.
+Each desktop needs its own local approval. Bots can select among all granted
+computers; this switch does not pin a bot to one computer. The hosted workspace
+must advertise shared-computer support, and local computer control/OS screen
+permissions must already be enabled for screen access to work.
 
-After pairing or signing in successfully, a native **Share this computer?**
+When the local feature is already enabled, pairing or signing in successfully
+can show a native **Share this computer?**
 dialog offers **Choose access** or **Not now** (the default). This choice is
 remembered for that workspace identity and paired session, not repeated on
 every switch. A different sign-in or server identity requires a new review.
@@ -145,8 +153,7 @@ retrying. A sleeping/offline laptop cannot service requests.
 The local feature flag is rechecked before reconnecting a saved grant,
 accepting consent, dispatching a remote job, and on the existing one-second
 job lease. A disabled or unreachable local server aborts the connector;
-an in-flight check may take up to its three-second request deadline. Restart
-the desktop after re-enabling the flag. Turning it off does not erase grants,
+an in-flight check may take up to its three-second request deadline. An explicit native owner review can re-enable the local feature without a desktop restart. Turning it off does not erase grants,
 and a native operation already admitted may have completed.
 
 ## Connector and authority tests

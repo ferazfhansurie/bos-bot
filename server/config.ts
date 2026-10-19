@@ -298,6 +298,15 @@ const featureConfigSchema = z.object({
    * the publisher's own machine; there is no Settings toggle — see
    * marketplacePublisherEnabled. */
   marketplacePublisher: z.boolean().optional(),
+  /** Run the Codex CLI BOS Bot downloads and updates itself (official
+   * openai/codex release, digest-checked) ahead of any other copy on PATH.
+   * Without the flag the managed copy is still used when this machine has no
+   * codex at all — see managedCodexRequested and server/codex-managed.ts.
+   * Enterprise provisioning's /setup may also turn it on. */
+  managedCodex: z.boolean().optional(),
+  /** The same for Claude Code: Anthropic's standalone binary, checksum-checked
+   * against its release manifest — see server/claude-managed.ts. */
+  managedClaude: z.boolean().optional(),
 });
 /** First-run progress. Kept in the workspace config rather than a browser so
  * it survives cleared site data and is shared by every paired client. Hint
@@ -396,6 +405,10 @@ const appConfigSchema = z.object({
    * are non-secret local identifiers used to reuse one Composio Session. */
   composio: z.object({ apiKey: optionalText, userId: optionalText, sessionId: optionalText }).optional(),
   box: z.object({ token: optionalText }).optional(),
+  /** BoxCompute (boxcompute.ai, Malaysia-hosted) sandboxes: one per bot.
+   * The key stays in this process; agents reach it only through the
+   * harness-relayed sandbox tools. */
+  boxCompute: z.object({ token: optionalText, size: z.enum(["small", "large"]).optional() }).optional(),
   vps: vpsConfigSchema.optional(),
   /** Optional OpenCode key; persisted write-only and passed only to its child. */
   opencodeGo: z.object({ apiKey: optionalText }).optional(),
@@ -467,6 +480,21 @@ const appConfigSchema = z.object({
   browserEngine: browserEngineConfigSchema.optional(),
   browserProfiles: browserProfilesSchema.optional(),
   instances: instanceConfigMapSchema.optional(),
+  /** Speech-to-text relay for browser voice messages and attached voice
+   * notes. Operator-set only (not in the settings patch): the relay holds
+   * the provider keys, this home holds just its address and a per-home
+   * token, so no transcription key ever lives in a workspace. */
+  stt: z.object({
+    relayUrl: z
+      .string()
+      .trim()
+      .max(2048)
+      .refine((value) => !value || /^https?:\/\//i.test(value), "the speech relay address must start with http:// or https://")
+      .optional(),
+    token: optionalText,
+    /** Off switch for transcribing audio that arrives as a plain attachment. */
+    autoTranscribe: z.boolean().optional(),
+  }).optional(),
   /** User-configured MCP servers, mounted into every capable engine. Kept
    * loosely typed HERE on purpose: parseStoredConfig throws away the whole
    * file on a schema error, and one bad server entry must degrade to a
@@ -476,7 +504,7 @@ const appConfigSchema = z.object({
 const storedAppConfigSchema = appConfigSchema.extend({
   browserProfiles: storedBrowserProfilesSchema.optional(),
 });
-const appConfigPatchSchema = appConfigSchema.omit({ instances: true, mcpServers: true, cliStartup: true, customDomain: true }).extend({
+const appConfigPatchSchema = appConfigSchema.omit({ instances: true, mcpServers: true, cliStartup: true, customDomain: true, stt: true }).extend({
   // the chat onboarding record moves only through its own event route
   onboarding: onboardingConfigSchema.omit({ chat: true }).optional(),
 });
@@ -502,10 +530,13 @@ export interface AppConfig {
   openaiCompat?: { key?: string; url?: string; model?: string; provider?: string };
   composio?: { apiKey?: string; userId?: string; sessionId?: string };
   box?: { token?: string };
+  boxCompute?: { token?: string; size?: "small" | "large" };
   /** A named host from the user's SSH config. Authentication stays with SSH. */
   vps?: { sshAlias?: string };
   opencodeGo?: { apiKey?: string };
   tts?: { key?: string; fishKey?: string; voice?: string; provider?: "elevenlabs" | "fish" | "system" | "chatterbox"; baseUrl?: string; model?: string };
+  /** Speech-to-text relay (see appConfigSchema.stt). */
+  stt?: { relayUrl?: string; token?: string; autoTranscribe?: boolean };
   imageGen?: ImageGenerationConfig;
   profile?: { name?: string; email?: string; avatarUrl?: string };
   approvals?: { defaultMode?: ApprovalMode; keepAcrossModelSwitch?: boolean };
@@ -518,7 +549,7 @@ export interface AppConfig {
    * separate container, durable workspace, viewer and lease. */
   localVm?: { mode?: "shared" | "per-bot"; maxInstances?: number };
   /** Opt-in product experiments. Every flag defaults to disabled. */
-  features?: { skillAuthoring?: boolean; showToolCalls?: boolean; browser?: boolean; sharedComputers?: boolean; claudeUserMcp?: boolean; llmThreadTitles?: boolean; marketplacePublisher?: boolean };
+  features?: { skillAuthoring?: boolean; showToolCalls?: boolean; browser?: boolean; sharedComputers?: boolean; claudeUserMcp?: boolean; llmThreadTitles?: boolean; marketplacePublisher?: boolean; managedCodex?: boolean; managedClaude?: boolean };
   /** First-run progress; see onboardingConfigSchema. */
   onboarding?: { pendingOffer?: "generic" | "digital-marketer"; marketerAssignment?: import("../shared/bos-onboarding.ts").FirstAssignment; marketerBrief?: import("../shared/bos-onboarding.ts").BusinessBrief; firstAssignment?: import("../shared/bos-onboarding.ts").FirstAssignment; businessBrief?: import("../shared/bos-onboarding.ts").BusinessBrief; completedAt?: string; version?: number; reelSeen?: boolean; hintsSeen?: string[]; chat?: import("../shared/onboarding-chat.ts").OnboardingChatState };
   /** Named browser sessions any bot can be pointed at. */
@@ -762,6 +793,18 @@ export function marketplacePublisherEnabled(cfg: AppConfig): boolean {
   return cfg.features?.marketplacePublisher === true;
 }
 
+/** The owner asked for the BOS-managed Codex CLI by hand
+ * (`{"features": {"managedCodex": true}}`). It is also used, flag or not,
+ * when no other codex is installed — see managedCodexWanted. */
+export function managedCodexRequested(cfg: AppConfig): boolean {
+  return cfg.features?.managedCodex === true;
+}
+
+/** `managedCodexRequested` for Claude Code (`features.managedClaude`). */
+export function managedClaudeRequested(cfg: AppConfig): boolean {
+  return cfg.features?.managedClaude === true;
+}
+
 /** Config sections no provider driver reads. A write that touches only
  * these must not rebuild the fleet: rebuilding disposes every engine child
  * and reloads it, seconds of work that would also interrupt in-flight
@@ -772,6 +815,7 @@ export const FLEET_NEUTRAL_KEYS: ReadonlySet<string> = new Set([
   "profile",
   "language",
   "tts",
+  "stt",
   "imageGen",
   "vps",
   "rooms",
@@ -868,6 +912,8 @@ export function loadConfig(): AppConfig {
   if (compatEnv.COMPOSIO_API_KEY !== undefined) cfg.composio.apiKey = compatEnv.COMPOSIO_API_KEY;
   cfg.box = { ...cfg.box };
   if (compatEnv.BOX_TOKEN !== undefined) cfg.box.token = compatEnv.BOX_TOKEN;
+  cfg.boxCompute = { ...cfg.boxCompute };
+  if (compatEnv.BOXCOMPUTE_API_KEY !== undefined) cfg.boxCompute.token = compatEnv.BOXCOMPUTE_API_KEY;
   cfg.opencodeGo = { ...cfg.opencodeGo };
   if (compatEnv.OPENCODE_API_KEY !== undefined) cfg.opencodeGo.apiKey = compatEnv.OPENCODE_API_KEY;
   cfg.tts = { ...cfg.tts };
@@ -902,6 +948,7 @@ export function syncCredentialEnv(patch: Partial<AppConfig>): void {
     [patch.openaiCompat?.key, "OPENAI_COMPAT_API_KEY"],
     [patch.composio?.apiKey, "COMPOSIO_API_KEY"],
     [patch.box?.token, "BOX_TOKEN"],
+    [patch.boxCompute?.token, "BOXCOMPUTE_API_KEY"],
     [patch.opencodeGo?.apiKey, "OPENCODE_API_KEY"],
     [patch.tts?.key, "OMB_TTS_KEY"],
     [patch.tts?.fishKey, "OMB_FISH_AUDIO_API_KEY"],
@@ -941,6 +988,7 @@ export const WORKSPACE_CREDENTIAL_ENV = expandEnvNames([
   "OPENAI_COMPAT_API_KEY",
   "OPENAI_COMPAT_URL",
   "BOX_TOKEN",
+  "BOXCOMPUTE_API_KEY",
   "OPENCODE_API_KEY",
   "OMB_TTS_KEY",
   "OMB_FISH_AUDIO_API_KEY",
@@ -955,6 +1003,9 @@ export const WORKSPACE_CREDENTIAL_ENV = expandEnvNames([
   "OMB_USER_DATA",
   "OMB_CUA_WINDOWS_DESCRIPTOR",
   "OMB_CUA_WINDOWS_SUPERVISED",
+  "OMB_STANDALONE_DIR",
+  "OMB_STANDALONE_SUPERVISED",
+  "OMB_STANDALONE_SUPERVISOR_PID",
 ] as const);
 
 /** Drop every workspace credential from a child-process env (in place). */
@@ -998,7 +1049,7 @@ export function saveConfig(patch: Partial<AppConfig>, options: { replaceInstance
   // back after we have successfully recognized the legacy list.
   const storedProfiles = storedBrowserProfilesSchema.safeParse(disk.browserProfiles);
   if (storedProfiles.success) disk.browserProfiles = storedProfiles.data;
-  for (const key of ["anonymousUsage", "xai", "anthropic", "openaiCompat", "composio", "box", "opencodeGo", "tts", "imageGen", "profile", "approvals", "rooms", "threads", "digest", "context", "localVm", "features", "budgets", "billing", "onboarding", "browserEngine"] as const) {
+  for (const key of ["anonymousUsage", "xai", "anthropic", "openaiCompat", "composio", "box", "boxCompute", "opencodeGo", "tts", "imageGen", "profile", "approvals", "rooms", "threads", "digest", "context", "localVm", "features", "budgets", "billing", "onboarding", "browserEngine"] as const) {
     const section = checkedPatch[key];
     if (!section) continue;
     const current = jsonObjectSchema.safeParse(disk[key]);

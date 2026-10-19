@@ -13,6 +13,7 @@ import { readCachedInventory, writeCachedInventory } from "@/lib/connected-apps-
 import { managedConnectorUnavailableReason } from "../../shared/connector-availability";
 import { McpServersPanel } from "./McpServersPanel";
 import { NativeWhatsAppTile } from "./NativeWhatsAppTile";
+import { reserveConnectionWindow } from "@/lib/connection-window";
 
 export interface ToolkitCard {
   slug: string;
@@ -76,7 +77,6 @@ export function preloadConnectedApps(force = false): Promise<ConnectorInventory>
       writeCachedInventory(services, Date.now());
       return { services, authoritative: true };
     })
-    .catch(() => ({ services: readCachedInventory()?.services ?? {}, authoritative: false }))
     .finally(() => {
       connectorStatusRequest = null;
     });
@@ -343,7 +343,8 @@ export function PluginsPanel() {
         return services;
       })
       .catch((cause) => {
-        if (!hadCachedInventory) setInventoryPhase("error");
+        setStale(false);
+        setInventoryPhase("error");
         setError(cause instanceof Error ? cause.message : String(cause));
         return {};
       });
@@ -423,25 +424,6 @@ export function PluginsPanel() {
     };
   }, [dispatch]);
 
-  const openConnectUrl = async (url: string) => {
-    if (window.ogb?.openExternal) {
-      await window.ogb.openExternal(url);
-      return;
-    }
-    // Browser development fallback. If a popup blocker rejects the first
-    // asynchronous open, the visible Continue button retries from a direct
-    // user gesture using the URL retained in pendingUrls.
-    const opened = window.open("", "_blank");
-    if (!opened) {
-      setError({ key: "connectors.popupBlockedContinue" });
-      return;
-    }
-    // Open a same-origin blank page first so the OAuth origin never receives
-    // an opener reference, while a real null remains a reliable blocked signal.
-    opened.opener = null;
-    opened.location.replace(url);
-  };
-
   const startPolling = (slug: string) => {
     const old = pollTimers.current.get(slug);
     if (old) clearInterval(old);
@@ -458,7 +440,15 @@ export function PluginsPanel() {
     pollTimers.current.set(slug, timer);
   };
 
+  const connectWindows = useRef(new Set<ReturnType<typeof reserveConnectionWindow>>());
+  useEffect(() => () => {
+    for (const reserved of connectWindows.current) reserved.cancel();
+    connectWindows.current.clear();
+  }, []);
+
   const connect = async (slug: string, alias?: string) => {
+    const reserved = reserveConnectionWindow();
+    connectWindows.current.add(reserved);
     statusGenerations.current.set(slug, (statusGenerations.current.get(slug) ?? 0) + 1);
     setBusySlug(slug);
     setError(null);
@@ -479,8 +469,9 @@ export function PluginsPanel() {
       setAliasSlug(null);
       setAliasDraft("");
       startPolling(slug);
-      await openConnectUrl(url);
+      if (!await reserved.navigate(url)) setError({ key: "connectors.popupBlockedContinue" });
     } catch (e) {
+      reserved.cancel();
       const message = e instanceof Error ? e.message : String(e);
       if (requiresAccountAlias(message)) {
         // Recover gracefully if an existing account was discovered after the
@@ -493,6 +484,7 @@ export function PluginsPanel() {
         setError(message);
       }
     } finally {
+      connectWindows.current.delete(reserved);
       setBusySlug(null);
     }
   };
@@ -511,7 +503,7 @@ export function PluginsPanel() {
   const visible = matching.filter((card) =>
     tab === "marketplace" || status[card.slug]?.connected || Boolean(status[card.slug]?.accounts?.length)
   );
-  const connectedCount = Object.values(status).filter((service) => service.connected || service.accounts?.length).length;
+  const connectedCount = Object.values(status).filter((service) => service.connected).length;
   const connectedEmptyCopy = connectedInventoryCopy(inventoryPhase);
   const close = () => dispatch({ type: "togglePlugins", open: false });
   // Only worth saying once an app is actually connected and reachable.
@@ -736,21 +728,26 @@ export function PluginsPanel() {
                         )}
                       </div>
                     </div>
-                    <button
+                    {pending && pendingUrls[card.slug] ? (
+                      <a
+                        href={pendingUrls[card.slug]}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        onClick={() => setError(null)}
+                        className="flex min-w-[88px] items-center justify-center rounded-full bg-raised px-3 py-2 text-[13px] text-ink hover:bg-raised-hover"
+                      >
+                        {t("connectors.action.continue")}
+                      </a>
+                    ) : <button
                       type="button"
                       disabled={!configured || inventoryPhase !== "ready" || busy || included || Boolean(unavailableReason)}
                       title={unavailableReason ?? undefined}
                       onClick={() => {
                         if (pending) {
-                          if (pendingUrls[card.slug]) {
-                            setError(null);
-                            void openConnectUrl(pendingUrls[card.slug]).catch((e) => setError(e.message));
-                          } else {
-                            setAliasSlug(null);
-                            setError(null);
-                            void refreshStatus([card.slug]);
-                            startPolling(card.slug);
-                          }
+                          setAliasSlug(null);
+                          setError(null);
+                          void refreshStatus([card.slug]);
+                          startPolling(card.slug);
                         } else {
                           setAliasSlug((current) => current === card.slug ? null : card.slug);
                           setAliasDraft("");
@@ -772,7 +769,7 @@ export function PluginsPanel() {
                           failed: Boolean(failed),
                         })
                       )}
-                    </button>
+                    </button>}
                   </div>
                   {accounts.length > 0 && (
                     <div className="ml-14 mt-3 space-y-2">

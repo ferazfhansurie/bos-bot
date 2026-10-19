@@ -98,7 +98,7 @@ export function orderedSidebarThreads<T extends ThreadRowTask>(tasks: T[], activ
 
 /** One quiet row for bot and group histories. Surface denotes selection;
  * working/waiting/unread remain independent signals, never different cards. */
-export function SidebarThreadRow({ task, ownerId, current, compact, dense, trailing, pinned, folders, onSelect, onRename, onDelete, onMove, onArchive, onReopen, onTogglePin, onOpenBeside, splitId }: {
+export function SidebarThreadRow({ task, ownerId, current, compact, dense, trailing, pinned, folders, onSelect, onPrefetch, onRename, onDelete, onMove, onArchive, onReopen, onTogglePin, onOpenBeside, splitId }: {
   task: ThreadRowTask;
   /** the bot or room that owns the thread: the link's ?bot= */
   ownerId: string;
@@ -111,6 +111,8 @@ export function SidebarThreadRow({ task, ownerId, current, compact, dense, trail
   pinned?: boolean;
   folders?: BotProject[];
   onSelect: () => void;
+  /** a hover that settles warms the thread so the click renders at once */
+  onPrefetch?: () => void;
   onRename: (title: string) => void;
   onDelete: () => void;
   onMove?: (folderId: string | null) => void;
@@ -128,6 +130,8 @@ export function SidebarThreadRow({ task, ownerId, current, compact, dense, trail
   const [draft, setDraft] = useState(task.title);
   const [deleting, setDeleting] = useState(false);
   const finishing = useRef(false);
+  const warm = useRef<number | undefined>(undefined);
+  useEffect(() => () => window.clearTimeout(warm.current), []);
   const menuRef = useRef<HTMLDivElement>(null);
   const actionRef = useRef<HTMLButtonElement>(null);
   const status = task.activity === "waiting-on-you" ? t("task.waiting") : isWorking(task) ? t("chat.activity.working") : task.queued ? t("task.queued") : null;
@@ -169,6 +173,8 @@ export function SidebarThreadRow({ task, ownerId, current, compact, dense, trail
         title={[task.title, status, closed ? t("task.closed") : null, archived ? t("task.archived") : null, task.unread ? t("task.unread") : null].filter(Boolean).join(" · ")}
         draggable={Boolean(splitId)} onDragStart={splitId ? (event) => { event.stopPropagation(); event.dataTransfer.setData(SPLIT_DRAG_TYPE, splitId); event.dataTransfer.effectAllowed = "copy"; } : undefined}
         onClick={onSelect} onDoubleClick={startRename}
+        onPointerEnter={onPrefetch && !current ? (event) => { if (event.pointerType !== "touch") { window.clearTimeout(warm.current); warm.current = window.setTimeout(onPrefetch, 120); } } : undefined}
+        onPointerLeave={onPrefetch ? () => window.clearTimeout(warm.current) : undefined}
         onContextMenu={(event) => { event.preventDefault(); openMenu(event.clientX, event.clientY); }}
         onKeyDown={(event) => { if (event.key === "ContextMenu" || event.shiftKey && event.key === "F10") { event.preventDefault(); const rect = event.currentTarget.getBoundingClientRect(); openMenu(rect.left, rect.bottom); } }}
         className={cn("flex min-w-0 flex-1 items-center gap-2 rounded-[10px] pl-3 pr-1 text-left font-medium outline-none focus-visible:ring-1 focus-visible:ring-hairline", dense ? "text-[12px]" : "text-[13px]", compact || dense ? "min-h-7 py-1" : "min-h-8 py-1.5", dimRunning && "opacity-50", current ? "font-semibold text-ink" : "text-ink-secondary hover:text-ink")}>

@@ -25,7 +25,7 @@ export const DEFAULT_ATTENTION_PREFERENCES: AttentionPreferences = {
   message: true,
   done: "unfocused",
   sound: "default",
-  followUps: "queue",
+  followUps: "steer",
 };
 
 export const NOTIFY_SOUNDS: readonly NotifySound[] = ["none", "default", "Glass", "Ping", "Tink", "Pop"];
@@ -51,7 +51,7 @@ function normalize(raw: unknown): AttentionPreferences {
     message: flag("message"),
     done: value.done === "always" || value.done === "off" ? value.done : "unfocused",
     sound: NOTIFY_SOUNDS.includes(value.sound as NotifySound) ? (value.sound as NotifySound) : "default",
-    followUps: value.followUps === "steer" ? "steer" : "queue",
+    followUps: value.followUps === "queue" ? "queue" : "steer",
   };
 }
 

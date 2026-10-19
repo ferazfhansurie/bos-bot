@@ -15,6 +15,8 @@ describe("built-in agent tool read policy", () => {
       "session_search",
       "session_read",
       "tool_result_read",
+      "pages_list",
+      "page_read",
       "list_routines",
       "skills_list",
     ]);

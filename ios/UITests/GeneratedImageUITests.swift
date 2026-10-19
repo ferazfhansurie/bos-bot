@@ -14,24 +14,20 @@ final class GeneratedImageUITests: XCTestCase {
         let chat = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Pepper,")).firstMatch
         XCTAssertTrue(chat.waitForExistence(timeout: 15))
         chat.tap()
-        let image = app.buttons["Image: screenshot.png"]
+        let image = app.buttons["Image 1: screenshot.png"]
         let appeared = image.waitForExistence(timeout: 5)
         record("Agent image in transcript", app)
         XCTAssertTrue(appeared)
         guard appeared else { return }
-        XCTAssertEqual(app.buttons.matching(identifier: "Image: screenshot.png").count, 1,
+        XCTAssertEqual(app.buttons.matching(identifier: "Image 1: screenshot.png").count, 1,
                        "A generated image repeated in a transport tag must appear only once")
         XCTAssertFalse(app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "<attached-image")).firstMatch.exists)
-        let loaded = NSPredicate(format: "enabled == true AND value == %@", "Loaded")
-        expectation(for: loaded, evaluatedWith: image)
-        waitForExpectations(timeout: 10)
         image.tap()
-        XCTAssertTrue(app.buttons["Done"].waitForExistence(timeout: 10))
-        XCTAssertTrue(app.otherElements["Image canvas"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.buttons["Close"].waitForExistence(timeout: 10))
         record("Agent image full screen", app)
-        app.buttons["Done"].tap()
+        app.buttons["Close"].tap()
         XCTAssertTrue(image.waitForExistence(timeout: 5))
-        let file = app.buttons["File: notes.txt"]
+        let file = app.buttons["Text: notes.txt"]
         XCTAssertTrue(file.exists)
         if !file.isHittable { app.swipeUp() }
         file.tap()
@@ -43,7 +39,7 @@ final class GeneratedImageUITests: XCTestCase {
         let expanders = app.buttons.matching(identifier: "Expand bot reply")
         if expanders.count > 0 { expanders.element(boundBy: expanders.count - 1).tap() }
         XCTAssertTrue(app.buttons["Copy code"].waitForExistence(timeout: 3))
-        record("Formatted reply in the existing bubble", app)
+        record("Formatted reply without a bubble", app)
     }
 
     @MainActor
@@ -59,14 +55,11 @@ final class GeneratedImageUITests: XCTestCase {
         let chat = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Pepper,")).firstMatch
         XCTAssertTrue(chat.waitForExistence(timeout: 15))
         chat.tap()
-        let cover = app.buttons["Image: cover-a.png"]
+        let cover = app.buttons["Image 1: cover-a.png"]
         for _ in 0..<4 where !(cover.exists && cover.isHittable) { app.swipeDown() }
         XCTAssertTrue(cover.waitForExistence(timeout: 5))
-        let loaded = NSPredicate(format: "enabled == true AND value == %@", "Loaded")
-        expectation(for: loaded, evaluatedWith: cover)
-        expectation(for: loaded, evaluatedWith: app.buttons["Image: cover-b.png"])
-        waitForExpectations(timeout: 10)
-        XCTAssertEqual(app.buttons.matching(identifier: "Image: cover-a.png").count, 1)
+        XCTAssertTrue(app.buttons["Image 2: cover-b.png"].waitForExistence(timeout: 10))
+        XCTAssertEqual(app.buttons.matching(identifier: "Image 1: cover-a.png").count, 1)
         XCTAssertFalse(app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "![")).firstMatch.exists,
                        "An embedded local image must not stay in the prose as Markdown")
         record("Markdown images in a collapsed bot reply", app)

@@ -41,6 +41,8 @@ export interface EnvironmentDescriptor {
     selfUpdate: "desktop-managed" | "operator";
     /** Whether /pair offers "sign in with your email" (an allow-list is set). */
     emailSignIn?: boolean;
+    /** Whether /pair offers a username + password form (a login exists). */
+    passwordSignIn?: boolean;
   };
   /** BOS 2.0 cloud move (server/cloud-authority.ts): the state and epoch of
    * cloud-authority.json while this install's chats are frozen, else null. */
@@ -129,7 +131,7 @@ export function serverVersion(): string {
   return "unknown";
 }
 
-export function environmentDescriptor(input: { environmentId: string; desktopManaged: boolean; emailSignIn?: boolean; sharedComputers?: boolean; authority?: EnvironmentAuthority | null }): EnvironmentDescriptor {
+export function environmentDescriptor(input: { environmentId: string; desktopManaged: boolean; emailSignIn?: boolean; passwordSignIn?: boolean; sharedComputers?: boolean; authority?: EnvironmentAuthority | null }): EnvironmentDescriptor {
   return {
     environmentId: input.environmentId,
     label: compatEnv.OMB_ENVIRONMENT_LABEL?.trim() || hostname(),
@@ -146,6 +148,7 @@ export function environmentDescriptor(input: { environmentId: string; desktopMan
       ...(input.sharedComputers === true ? { sharedComputers: true as const } : {}),
       selfUpdate: input.desktopManaged ? "desktop-managed" : "operator",
       emailSignIn: input.emailSignIn === true,
+      ...(input.passwordSignIn === true ? { passwordSignIn: true } : {}),
     },
     authority: input.authority ? { state: input.authority.state, epoch: input.authority.epoch } : null,
   };

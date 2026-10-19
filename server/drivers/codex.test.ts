@@ -653,6 +653,9 @@ describe("CodexDriver turns (fake app-server)", () => {
     // server does NOT — its tool calls arrive as approval cards
     expect(argv).toContain('mcp_servers.openmausbot_connectors.default_tools_approval_mode');
     expect(argv).not.toContain('mcp_servers.notes.default_tools_approval_mode');
+    // the connect tools must be in the first step's catalog, not pending
+    expect(argv).toContain("mcp_servers.openmausbot_connectors.required=true");
+    expect(argv).not.toContain("mcp_servers.notes.required");
   });
 
   it("mounts a url server for codex to connect to, header values off argv", async () => {

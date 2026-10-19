@@ -30,6 +30,7 @@ import {
 } from "lucide-react";
 import { api, ApiError, currentTaskBot, useStore, type Bot } from "@/state/store";
 import { effectivePlace, isComputerPlace, placeLabelKey } from "@/lib/place";
+import { BoxComputeMark } from "./BoxComputeMark";
 import type { CloudBackend } from "../../shared/wire";
 import { ApiKeyRow } from "./ApiKeys";
 import { cn } from "@/lib/cn";
@@ -389,6 +390,10 @@ export function ComputerPanel({
     browserAvailableHere &&
     selectedInstance?.capabilities?.browserMcp === true &&
     selectedInstance.driverKind !== "boxAgent";
+  // The bot's BoxCompute sandbox and cloud desktop: needs the key and a local engine,
+  // the same gate the server applies before mounting the sandbox tools.
+  const boxComputeSelectable = state.config?.boxCompute?.configured === true &&
+    Boolean(selectedInstance) && selectedInstance?.driverKind !== "boxAgent";
   const browserDisabledReason = !browserAvailableHere
     ? browserUnavailableReason(state.config)
     : !builtInBrowserEnabled(state.config)
@@ -1690,6 +1695,7 @@ export function ComputerPanel({
             {([
               [null, "vm.dest.auto", "computer.dest.autoDesc", Sparkles],
               ["cloud", "vm.dest.cloud", "computer.dest.cloudDesc", Cloud],
+              ["boxcompute", "vm.dest.boxcompute", "computer.dest.boxcomputeDesc", BoxComputeMark],
               ["vm", "vm.dest.vm", "computer.dest.vmDesc", Box],
               ["local", "vm.dest.local", "computer.dest.localDesc", Monitor],
               ["browser", "vm.dest.browser", "computer.dest.browserDesc", Globe],
@@ -1700,7 +1706,8 @@ export function ComputerPanel({
                   (mode === "cloud" && !cloudSupported) ||
                   (mode === "vm" && !vmSupported) ||
                   (mode === "local" && !localSelectable) ||
-                  (mode === "browser" && !browserSelectable);
+                  (mode === "browser" && !browserSelectable) ||
+                  (mode === "boxcompute" && !boxComputeSelectable);
                 const unavailableTitle =
                   mode === "vm" && !vmSupported
                     ? t("computer.unavailableVm")
@@ -1710,7 +1717,9 @@ export function ComputerPanel({
                         ? localDisabledReason ?? t("computer.unavailableLocal")
                         : mode === "browser"
                           ? browserSelectable ? t("computer.browserOnlyTitle") : browserDisabledReason
-                          : undefined;
+                          : mode === "boxcompute" && !boxComputeSelectable
+                            ? t("computer.unavailableBoxCompute")
+                            : undefined;
                 return (
               <button
                 key={mode ?? "auto"}

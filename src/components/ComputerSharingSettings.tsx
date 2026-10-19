@@ -1,16 +1,10 @@
 import { useEffect, useRef, useState } from "react";
 import { FolderPlus, X } from "lucide-react";
-import { Card } from "./SettingsPrimitives";
-import { useStore } from "@/state/store";
-import { sharedComputersEnabled } from "@/lib/feature-flags";
+import { Card, Switch } from "./SettingsPrimitives";
 
 /** Grants are edited locally and confirmed by a native dialog, never by the hosted page. */
 export function ComputerSharingSettings({ workspace, onClose }: { workspace: { id: string; name: string; origin: string }; onClose: () => void }) {
-  // `state` below is this grant's desktop status; appState is the workspace
-  // config, which says whether this server offers computer sharing at all.
-  const { state: appState } = useStore();
-  const offered = sharedComputersEnabled(appState.config);
-  const bridge = offered ? window.ogb?.computerSharing : undefined;
+  const bridge = window.ogb?.computerSharing;
   const [state, setState] = useState<DesktopComputerSharing | null>(null);
   const [folders, setFolders] = useState<DesktopSharedFolder[]>([]);
   const [terminal, setTerminal] = useState(false);
@@ -48,6 +42,20 @@ export function ComputerSharingSettings({ workspace, onClose }: { workspace: { i
         <p role="status" className="text-ink-secondary">{!state ? "Loading access…" : !state.enabled ? "Not shared" : state.connected ? "Sharing while this desktop is open" : "Waiting for the workspace to connect"}</p>
         <button type="button" aria-label="Close computer access" onClick={onClose} className="rounded p-1 text-ink-secondary hover:bg-control"><X size={16} /></button>
       </div>
+      <div className="flex items-start justify-between gap-4 rounded-lg border border-hairline/40 p-3">
+        <span className="font-medium text-ink">Share this computer<span className="mt-1 block text-[12px] font-normal text-ink-secondary">Let {workspace.name}’s bots search and work here. First-time sharing requests terminal commands as you, plus your screen and signed-in apps. A native review shows the exact access before you approve. Use limited access below for selected folders.</span></span>
+        <Switch aria-label={`Share this computer with ${workspace.name}`} checked={state?.enabled === true} disabled={busy || !state} onClick={() => void perform(async () => {
+          if (!state) return;
+          const hasSavedScope = state.folders.length > 0 || state.terminal || state.computer;
+          const next = state.enabled ? await bridge.revoke(workspace.id) : await bridge.save(workspace.id, hasSavedScope
+            ? { folders: state.folders, terminal: state.terminal, computer: state.computer }
+            : { folders: [], terminal: true, computer: true });
+          if (mounted.current && next) apply(next);
+        })} />
+      </div>
+      <p className="text-[12px] text-ink-secondary">Each computer needs its own approval. Bots can choose among all computers shared with this workspace. Keep client and personal workspaces separate.</p>
+      {(error || state?.error) && <p role="alert" className="text-[12px] text-danger">{error || state?.error}</p>}
+      <details><summary className="cursor-pointer text-ink">Limited access and shared folders</summary><div className="mt-3 flex flex-col gap-4">
       <p className="text-ink-secondary">Choose what this workspace’s bots can use. Shared files and screen content may be sent to its AI provider. Access stays on when you switch workspaces, until you stop sharing or close the desktop app.</p>
       <fieldset disabled={busy || !state} className="flex flex-col gap-3 disabled:opacity-50">
         <legend className="mb-2 font-medium text-ink">Shared folders</legend>
@@ -68,7 +76,6 @@ export function ComputerSharingSettings({ workspace, onClose }: { workspace: { i
         <label className="flex items-start gap-2"><input className="mt-1" type="checkbox" checked={terminal} onChange={event => setTerminal(event.target.checked)} /><span className="text-ink">Unrestricted terminal<span className="mt-1 block text-[12px] text-ink-secondary">Run commands as you. This can access or delete files anywhere you can, including credentials—not just the folders above.</span></span></label>
         <label className="flex items-start gap-2"><input className="mt-1" type="checkbox" checked={computer} onChange={event => setComputer(event.target.checked)} /><span className="text-ink">Computer control<span className="mt-1 block text-[12px] text-ink-secondary">View your screen and operate your signed-in apps, outside the shared folders. Requires local computer control and OS permissions.</span></span></label>
       </fieldset>
-      {(error || state?.error) && <p role="alert" className="text-[12px] text-danger">{error || state?.error}</p>}
       <div className="flex flex-wrap gap-2">
         <button type="button" disabled={busy || !state || (!folders.length && !terminal && !computer)} onClick={() => void perform(async () => {
           const next = await bridge.save(workspace.id, { folders, terminal, computer });
@@ -78,6 +85,7 @@ export function ComputerSharingSettings({ workspace, onClose }: { workspace: { i
           const next = await bridge.revoke(workspace.id); if (mounted.current) apply(next);
         })} className="rounded-lg border border-hairline/40 px-3 py-2 text-danger disabled:opacity-50">Stop sharing</button>}
       </div>
+      </div></details>
       {state?.enabled && <p className="text-[12px] text-ink-secondary">Stopping blocks new requests and cancels running work where possible. An action already sent to an app may still finish.</p>}
     </div>
   </Card></div>;

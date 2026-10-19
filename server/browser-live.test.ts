@@ -153,6 +153,25 @@ describe("authenticated browser viewer relay", () => {
     expect(other.res.writableEnded).toBe(false);
     expect(other.socket.readyState).toBe(1);
   });
+  it("aims frames at the page's measured viewport, not the engine's configured size", async () => {
+    // Windows headless Chrome: --window-size=1280,720 leaves a 1264x569 page.
+    execute.mockResolvedValueOnce(output(ready)).mockResolvedValueOnce(output({ result: "[1264,569]", origin: "https://example.com/" }));
+    SocketFixture.initialMessages = [frame];
+    const a = await open();
+    expect(a.res.events("frame")[0].metadata).toMatchObject({ deviceWidth: 1264, deviceHeight: 569 });
+    await a.action({ type: "ack", seq: 1 }); await a.action({ type: "take" });
+    await expect(a.action({ type: "tap", seq: 1, x: 1270, y: 300 })).rejects.toThrow("outside the browser page");
+    execute.mockResolvedValueOnce(output({ result: "[800,600]" }));
+    a.socket.receive({ type: "status", connected: true, viewportWidth: 800, viewportHeight: 600 });
+    await vi.waitFor(() => expect(execute).toHaveBeenCalledTimes(3));
+    await vi.waitFor(() => { a.socket.receive({ ...frame, seq: 2 }); expect(a.res.events("frame").at(-1).metadata).toMatchObject({ deviceWidth: 800, deviceHeight: 600 }); });
+  });
+  it("keeps the engine's frame size when the page cannot be measured", async () => {
+    execute.mockResolvedValueOnce(output(ready)).mockRejectedValueOnce(new Error("busy"));
+    SocketFixture.initialMessages = [frame];
+    const a = await open();
+    expect(a.res.events("frame")[0].metadata).toMatchObject({ deviceWidth: 1280, deviceHeight: 720 });
+  });
   it("keeps opening status, tabs and the seed frame even if they arrive immediately with the WebSocket upgrade", async () => {
     SocketFixture.initialMessages = [{ type: "status", connected: true }, { type: "tabs", tabs: [] }, frame];
     const a = await open();
@@ -184,7 +203,7 @@ describe("authenticated browser viewer relay", () => {
     expect(res.id).toMatch(/^[a-f0-9-]{36}$/);
     expect(res.headers).toMatchObject({ "Cache-Control": "no-store", "Content-Type": "text/event-stream" });
     expect(socket.url).toBe("ws://127.0.0.1:43210/?pacing=ack&maxFps=15");
-    expect(execute).toHaveBeenCalledTimes(1);
+    expect(execute.mock.calls.map((call) => call[1][0])).toEqual(["stream", "eval"]);
     expect(execute.mock.calls[0]?.[1]).toEqual(["stream", "status", "--json", "--no-webmcp"]);
     expect(execute.mock.calls[0]?.[2].env).toMatchObject({ AGENT_BROWSER_SESSION: "profile-a", AGENT_BROWSER_SOCKET_DIR: "/isolated/socket" });
     expect(execute.mock.calls[0]?.[2].env).not.toHaveProperty("PRIVATE_SERVER_SECRET");
@@ -196,6 +215,7 @@ describe("authenticated browser viewer relay", () => {
     await open();
     expect(execute.mock.calls.map((call) => call[1])).toEqual([
       ["stream", "status", "--json", "--no-webmcp"], ["stream", "enable", "--json", "--no-webmcp"], ["open", "--json", "--no-webmcp"],
+      ["eval", "JSON.stringify([innerWidth, innerHeight])", "--json", "--no-webmcp"],
     ]);
   });
   it("fails closed on missing ports and sanitizes CLI errors without ending an unwritten error response", async () => {
@@ -295,7 +315,8 @@ describe("authenticated browser viewer relay", () => {
     expect(JSON.parse(nativeInput.mock.calls[0]?.[1].body)).toEqual({ action: "input_keyboard", type: "keyDown", key: "a", text: "a" });
     expect(a.socket.messages).toHaveLength(0);
     a.socket.close(); expect(held.has("profile-a")).toBe(false);
-    expect(execute).toHaveBeenCalledTimes(2); // No close command: logins/browser survive viewers.
+    // Only status + viewport reads, no close command: logins/browser survive viewers.
+    expect(execute.mock.calls.map((call) => call[1][0])).toEqual(["stream", "eval", "stream", "eval"]);
   });
   it("withholds login frames/tabs/URLs from other views, advances their upstream ACK and restores the newest frame on release", async () => {
     const a = await open(); const b = await open({ botId: "bot-b" });

@@ -1,3 +1,4 @@
+import type { RoutineEventSource } from "./routine-events.ts";
 /** Webhook wire shapes — triggers and delivery attempts as they ride the
  * REST snapshot and the `webhook` / `webhook.attempt` live frames. Moved
  * verbatim from the client's mirrors (src/lib/webhooks.ts); the client file
@@ -20,6 +21,7 @@ export interface WebhookTrigger {
   verificationPending?: boolean;
   verifiedAt?: number;
   verificationSample?: WebhookVerificationSample;
+  eventSource?: RoutineEventSource | null;
   eventTypes?: string[];
 }
 
@@ -30,6 +32,7 @@ export interface WebhookTriggerInput {
   runOn?: RoutineRunOn;
   enabled?: boolean;
   verificationPending?: boolean;
+  eventSource?: RoutineEventSource | null;
   eventTypes?: string[];
 }
 

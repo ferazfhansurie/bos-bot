@@ -13,6 +13,7 @@ import { noBrowserReason, resolveWhatsAppBrowser } from "./whatsapp-browser.ts";
 import {
   loadReadOnlyClientFactory,
   WhatsAppNative,
+  sessionDirFor,
   type WhatsAppNativeOptions,
   type WhatsAppNativeSnapshot,
 } from "./whatsapp-native.ts";
@@ -87,7 +88,7 @@ export class WhatsAppService {
       authDir: this.paths.authDir,
       clientId: WHATSAPP_CLIENT_ID,
       loadFactory: loadReadOnlyClientFactory,
-      resolveBrowser: () => resolveWhatsAppBrowser({ env }),
+      resolveBrowser: () => resolveWhatsAppBrowser({ env, profileDir: sessionDirFor(this.paths.authDir, WHATSAPP_CLIENT_ID) }),
       noBrowserReason: () => noBrowserReason(env),
       store: this.store,
       ...options.native,

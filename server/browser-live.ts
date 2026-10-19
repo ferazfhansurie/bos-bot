@@ -9,6 +9,11 @@ const execute = promisify(execFile);
 const MAX_FRAME = 3 * 1024 * 1024;
 const MAX_BUFFER = 4 * 1024 * 1024;
 const HEARTBEAT_MS = 10_000;
+// agent-browser reports its configured size (1280x720) as every frame's
+// deviceWidth/deviceHeight, not the page's. On Windows headless Chrome the
+// window frame comes off --window-size, so the real viewport is ~1264x569 and
+// every click lands low. Measure the page itself and aim input at that.
+const VIEWPORT_SCRIPT = "JSON.stringify([innerWidth, innerHeight])";
 // The native press resolver supplies the virtual key codes and Enter/Tab text
 // that its raw input_keyboard relay omits. Keep unknown keys literal.
 const DISCRETE_KEYS = new Set(["Backspace", "Enter", "Tab", "Escape", "Delete", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Home", "End", "PageUp", "PageDown"]);
@@ -161,6 +166,7 @@ interface Viewer extends OpenOptions {
   pressedKeys: Set<string>;
   pressedButtons: Set<string>;
   port?: number;
+  viewport?: { width: number; height: number };
   restarting: boolean;
 }
 
@@ -303,6 +309,16 @@ export class BrowserLive {
     }
   }
 
+  /** The page's own CSS viewport, or undefined to keep the engine's size. */
+  private async measureViewport(viewer: Viewer): Promise<{ width: number; height: number } | undefined> {
+    try {
+      const data = await this.command(viewer, ["eval", VIEWPORT_SCRIPT], 5_000);
+      const value: unknown = typeof data.result === "string" ? JSON.parse(data.result) : data.result;
+      if (!Array.isArray(value) || !integer(value[0], 1, 8192) || !integer(value[1], 1, 8192)) return undefined;
+      return { width: value[0], height: value[1] };
+    } catch { return undefined; }
+  }
+
   private async input(viewer: Viewer, message: ObjectValue): Promise<void> {
     if (!viewer.port) throw new BrowserLiveError("The browser stream is not connected.", 409);
     let command: ObjectValue;
@@ -367,6 +383,8 @@ export class BrowserLive {
       viewer.port = port;
       // `open` without a URL is an idempotent launch, never navigation away from the bot's page.
       if (status.connected !== true) await this.command(viewer, ["open"]);
+      // Before the socket: a static page may send only its seed frame.
+      viewer.viewport = await this.measureViewport(viewer);
       const socket = new WebSocket(`ws://127.0.0.1:${port}/?pacing=ack&maxFps=15`);
       viewer.socket = socket;
       options.res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-store", "X-Accel-Buffering": "no", Connection: "keep-alive" });
@@ -382,8 +400,16 @@ export class BrowserLive {
         if (!message) { if (raw?.type === "frame") this.close(viewer); return; }
         const heldBy = this.runtime.heldBy(viewer.session);
         if (heldBy && heldBy !== viewer.id && ["tabs", "url"].includes(String(message.type))) return;
-        if (message.type === "frame") this.frame(viewer, message);
-        else this.send(viewer, message);
+        if (message.type === "frame") {
+          const meta = object(message.metadata);
+          if (viewer.viewport && meta) message.metadata = { ...meta, deviceWidth: viewer.viewport.width, deviceHeight: viewer.viewport.height };
+          this.frame(viewer, message);
+        } else {
+          if (message.type === "status" && message.connected === true) {
+            void this.measureViewport(viewer).then((size) => { if (size && !viewer.closed) viewer.viewport = size; });
+          }
+          this.send(viewer, message);
+        }
       });
       socket.addEventListener("error", () => { if (!viewer.restarting) { this.send(viewer, { type: "error", retryable: true, message: "The browser stream disconnected." }); this.close(viewer); } });
       socket.addEventListener("close", () => { if (!viewer.restarting) this.close(viewer); });

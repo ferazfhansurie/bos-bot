@@ -2,10 +2,11 @@ import { RemoteFullAccess } from "./RemoteFullAccess";
 import { useSharedDelivery } from "@/lib/shared-delivery";
 import { track } from "@/lib/analytics";
 import { useCallback, useEffect, useMemo, useRef, useState, type SetStateAction } from "react";
-import { ArrowUp, AudioLines, BookOpen, Clock, Loader2, Mic, Paperclip, Square, Target, Users, X } from "lucide-react";
+import { ArrowUp, AudioLines, BookOpen, Clock, Folder, ListEnd, Loader2, Mic, Paperclip, Square, Target, Users, X } from "lucide-react";
 import { startRealtimeCall, useRealtimeCall } from "@/lib/voice-call/session";
 import { callIsOn, useCallSnapshot } from "./voice-call/VoiceCall";
-import { useStore, visibleMessages, currentTaskBot, type Bot, type Group, type Message } from "@/state/store";
+import { useStore, visibleMessages, currentTaskBot, signInBeforeSend, type Bot, type Group, type Message } from "@/state/store";
+import { EnginesBeat } from "./onboarding/beats/EnginesBeat";
 import { cn } from "@/lib/cn";
 import { activeLocale, t } from "@/lib/i18n";
 import {
@@ -31,8 +32,15 @@ import { BotAvatar, PersonPhoto } from "./Avatar";
 import { ConversationComposerFrame, ConversationTools } from "./ConversationChrome";
 import { MentionTextarea } from "./MentionTextarea";
 import { ComposerAttachments, pathForFile, uploadOnlyIntake } from "./ComposerAttachments";
+import { AppshotMenuItem, AppshotPicker } from "./AppshotPicker";
+import { appshotsAvailable, useAppshotHost } from "@/lib/appshot";
 import { LocalComputerAutoWarning } from "./LocalComputerAutoWarning";
 import { PlaceChip } from "./PlaceChip";
+import { ModelPicker } from "./ModelPicker";
+import { ComposerDictation } from "./ComposerDictation";
+import { ComposerVoicePending, ComposerVoiceRecorder } from "./ComposerVoiceRecorder";
+import { micProblem, micSettingsPlace, VoiceRecording, voiceRecordingSupported } from "@/lib/voice-recorder";
+import { deliverVoice, discardPendingVoice, queueVoiceMessage, restorePendingVoice, usePendingVoice, type VoiceDispatch, type VoiceTarget } from "@/lib/voice-send";
 import { FullAccessWarning } from "./FullAccessWarning";
 import { ApprovalModeSelector } from "./ApprovalModeSelector";
 import { approvalModeFor, type ApprovalMode } from "../../shared/approval-mode";
@@ -62,6 +70,7 @@ import {
   composerCanSteerQueuedMessages,
 } from "./ComposerQueuedMessages";
 import { skillAuthoringEnabled } from "@/lib/feature-flags";
+import { attentionPreferences } from "@/lib/attention-preferences";
 import { composerPriorityVisible, effectiveSendPriority, type SendPriority } from "@/lib/composer-priority";
 import { mentionChoicesForQuery, mentionMatchRange } from "@/lib/mentions";
 import { roomMentionPool, roomBotSupportsImages } from "@/lib/room-members";
@@ -124,6 +133,9 @@ export function Composer({
   const bot = profile ? currentTaskBot(profile) : undefined;
   const locked = setupLocked || Boolean(bot?.awaitingThreadSnapshot);
   const { state, dispatch } = useStore();
+  // no engine is signed in: the message stays in the composer until one is
+  const needsSignIn = Boolean(bot && !group && !shared) && signInBeforeSend(state, bot?.id);
+  const signInCardInThread = Boolean(bot?.messages.some((m) => m.onboarding?.card?.kind === "engine"));
   const { threads, currentBotId } = useThreadRefs();
   const { capabilities } = useDesktopCapabilities();
   // Grok's composer ends in the voice button: a 1:1 chat with xAI voice set
@@ -233,7 +245,22 @@ export function Composer({
     [text, editText, editAttachments],
   );
   const [recording, setRecording] = useState(false);
+  const [speechFinishing, setSpeechFinishing] = useState(false);
+  const speechDraft = useRef("");
+  const speechCancelled = useRef(false);
+  const speechSendRequested = useRef(false);
+  const latestSend = useRef<(dictatedText?: string) => void>(() => {});
+  const speechText = useRef("");
+  const speechDraftId = useRef(draftId);
+  const latestDraftId = useRef(draftId);
+  latestDraftId.current = draftId;
   const [speechError, setSpeechError] = useState<string | null>(null);
+  // Browser voice messages (no native dictation here): record, then the
+  // recording is sent as audio plus its transcript by lib/voice-send.
+  const [voice, setVoice] = useState<{ recording: VoiceRecording | null; draftId: string; target: VoiceTarget; reply: boolean } | null>(null);
+  const voiceRef = useRef(voice);
+  voiceRef.current = voice;
+  const pendingVoice = usePendingVoice(draftId);
   const editSharedFiles = (change: (previous: File[]) => File[]) => {
     markDraftEdited(draftId);
     sharedDelivery.setFiles(change);
@@ -487,16 +514,16 @@ export function Composer({
   // Queue vs block only means something while a turn is running. It is
   // one-shot: every send, and every end of the busy spell, puts it back on
   // queue so an interrupt is never left armed for a later message.
-  const [priority, setPriority] = useState<SendPriority>("queue");
+  const [priority, setPriority] = useState<SendPriority>(() => attentionPreferences().followUps);
   const priorityVisible = composerPriorityVisible({
     busy,
     locked,
     shared: Boolean(shared),
     approvalPending: Boolean(approval),
   });
-  const blockArmed = effectiveSendPriority(priority, priorityVisible) === "block";
+  const blockArmed = effectiveSendPriority(priority, priorityVisible) === "queue";
   useEffect(() => {
-    if (!priorityVisible) setPriority("queue");
+    if (!priorityVisible) setPriority(attentionPreferences().followUps);
   }, [priorityVisible]);
   // Most engines acknowledge interruption quickly, but a lost response must
   // not leave a control claiming to steer forever. Queue drain or turn end
@@ -549,7 +576,7 @@ export function Composer({
       throw error;
     }
   }, [draftId]);
-  const pickFiles = async (picked: FileList | null) => {
+  const pickFiles = async (picked: FileList | File[] | null) => {
     if (!picked?.length) return;
     if (shared) {
       const next = Array.from(picked);
@@ -574,6 +601,12 @@ export function Composer({
       changeDraftAttachmentPending(draftId, false);
     }
   };
+  // Appshots land through the same path as picked files (images upload, a
+  // text-only engine gets the usual notice). Only the top composer hosts it.
+  const appshotListing = useAppshotHost((file) => {
+    void pickFiles([file]);
+    requestAnimationFrame(() => inputRef.current?.focus());
+  }, !locked);
   const setApprovalMode = (mode: ApprovalMode) => {
     if (!modeBot || modeBot.busy || mode === approvalModeFor(modeBot)) return;
     if ((mode === "full" || mode === "custom") && !trustedThreadAccess) return;
@@ -619,13 +652,17 @@ export function Composer({
       dispatch({ type: "send", botId: bot.id, ...retry });
     }
   };
-  const send = (override?: SendPriority) => {
-    if (locked || attachmentPending) return;
+  const send = (override?: SendPriority, dictatedText?: string) => {
+    const sendText = dictatedText ?? text;
+    const sendGoal = group && !group.dm ? goalTextFromComposer(sendText) : null;
+    const sendEffectiveText = sendGoal ?? sendText;
+    const sendChannelMode = sendGoal !== null ? "goal" : channelMode;
+    if (locked || attachmentPending || needsSignIn) return;
     if (shared) {
-      if ((!text.trim() && !sharedFiles.length) || sharedSending) return;
+      if ((!sendText.trim() && !sharedFiles.length) || sharedSending) return;
       const sentReplyId = replyTo?.id;
       const revision = draftRevision(draftId);
-      void sharedDelivery.send(text.trim(), sentReplyId,
+      void sharedDelivery.send(sendText.trim(), sentReplyId,
         snapshot => shared.send(snapshot.text, snapshot.files, snapshot.sendId, snapshot.replyTo ? { replyTo: snapshot.replyTo } : undefined),
         () => {
           // Notify a newly mounted composer too, and never overwrite edits
@@ -637,7 +674,7 @@ export function Composer({
     }
     if (
       attachments.some((attachment) => attachment.kind === "image") &&
-      !imageTargetsSupport(effectiveText, effectiveChannelMode)
+      !imageTargetsSupport(sendEffectiveText, sendChannelMode)
     ) {
       dispatch({ type: "error", message: t("composer.error.noImages") });
       return;
@@ -645,19 +682,19 @@ export function Composer({
     // named `body`, not `t` — that name belongs to the catalog lookup now
     // resolvable "#Title" runs leave as canonical links, so the thread id
     // stays machine-readable in the stored send and the model's context
-    const body = composeMessage(serializeThreadRefs(effectiveText, threads, currentBotId), attachments);
+    const body = composeMessage(serializeThreadRefs(sendEffectiveText, threads, currentBotId), attachments);
     if (!body) return;
     const sentDraft: ComposerDraftSnapshot = {
       draftId,
       revision: draftRevision(draftId),
       sendId: restoredSendId(draftId) ?? crypto.randomUUID(),
-      text,
+      text: sendText,
       requestText: body,
       attachments: [...attachments],
       reply: replyTo ?? null,
       replyToId: replyTo?.id,
       threadId,
-      channelMode: group ? effectiveChannelMode : undefined,
+      channelMode: group ? sendChannelMode : undefined,
     };
     // An older server ignores "block" and still queues: the chip shows as before.
     const sendPriority = effectiveSendPriority(override ?? priority, priorityVisible);
@@ -669,11 +706,11 @@ export function Composer({
         sendId: sentDraft.sendId,
         replyToId: replyTo?.id,
         threadId,
-        mode: effectiveChannelMode,
+        mode: sendChannelMode,
         priority: sendPriority,
         onError: () => restoreDraft(sentDraft),
       });
-      track("message_sent", { room: true, mode: effectiveChannelMode, queued: busy });
+      track("message_sent", { room: true, mode: sendChannelMode, queued: busy });
     } else if (bot) {
       dispatch({
         type: "send",
@@ -689,7 +726,7 @@ export function Composer({
     }
     setText("");
     setAttachments([]);
-    setPriority("queue");
+    setPriority(attentionPreferences().followUps);
     onConsumeReply?.();
     if (group) setChannelMode("chat");
   };
@@ -783,10 +820,19 @@ export function Composer({
     editAttachments((prev) => [...prev, pasteAttachment(pasted)]);
   };
 
+  latestSend.current = (dictatedText) => send(undefined, dictatedText);
+
   // native dictation: partials stream into the input while the Swift
   // helper runs; the final transcript stays in the box, ready to edit/send
   useEffect(() => {
     if (!recording) return;
+    if (speechDraftId.current !== draftId) {
+      speechCancelled.current = true;
+      speechSendRequested.current = false;
+      setRecording(false);
+      return;
+    }
+    const originDraftId = draftId;
     const bridge = window.ogb;
     if (!bridge) {
       setRecording(false);
@@ -794,35 +840,137 @@ export function Composer({
     }
     setSpeechError(null);
     const offTranscript = bridge.onSpeechTranscript((line) => {
-      if (typeof line.text === "string") {
+      if (!speechCancelled.current && latestDraftId.current === originDraftId && typeof line.text === "string") {
         const base = baseText.current;
-        editText(base ? `${base} ${line.text}` : line.text);
+        speechText.current = base ? `${base} ${line.text}` : line.text;
+        editText(speechText.current);
       }
     });
     const offEnd = bridge.onSpeechEnd(({ code }) => {
       setRecording(false);
+      setSpeechFinishing(false);
+      const submit = speechSendRequested.current && !speechCancelled.current && code === 0;
+      speechSendRequested.current = false;
+      if (submit) requestAnimationFrame(() => { if (latestDraftId.current === originDraftId) latestSend.current(speechText.current); });
       if (code === 2) {
         setSpeechError(t("composer.dictation.macOnly"));
       } else if (code === 1) {
         setSpeechError(t("composer.dictation.permission"));
       }
     });
-    void bridge.speechStart();
+    void bridge.speechStart().catch(() => { setRecording(false); setSpeechError(t("composer.dictation.unavailable")); });
     return () => {
       offTranscript();
       offEnd();
       void bridge.speechStop();
     };
-  }, [recording, editText]);
+  }, [recording, editText, draftId]);
 
   const toggleMic = () => {
     if (!capabilities.dictation.available || !window.ogb) {
       setSpeechError(t("composer.dictation.unavailable"));
       return;
     }
+    speechDraftId.current = draftId;
+    speechDraft.current = text;
+    speechText.current = text;
+    speechCancelled.current = false;
+    speechSendRequested.current = false;
+    setSpeechFinishing(false);
     baseText.current = text.trim();
-    setRecording((r) => !r);
+    setRecording(true);
   };
+
+  const cancelDictation = () => {
+    speechCancelled.current = true;
+    speechSendRequested.current = false;
+    setSpeechFinishing(false);
+    setRecording(false);
+    editText(speechDraft.current);
+  };
+  const finishDictation = (submit: boolean) => {
+    if (speechFinishing) return;
+    speechSendRequested.current = submit;
+    setSpeechFinishing(true);
+    const finish = window.ogb?.speechFinish;
+    if (finish) void finish().catch(() => {
+      speechSendRequested.current = false;
+      setRecording(false);
+      setSpeechFinishing(false);
+      setSpeechError(t("composer.dictation.unavailable"));
+    });
+    else {
+      setRecording(false);
+      setSpeechFinishing(false);
+      speechSendRequested.current = false;
+      const originDraftId = draftId;
+      if (submit) requestAnimationFrame(() => { if (latestDraftId.current === originDraftId) latestSend.current(speechText.current); });
+    }
+  };
+
+  // ── browser voice messages ──────────────────────────────────────────
+  const voiceDispatch: VoiceDispatch = useCallback((action) => dispatch(action), [dispatch]);
+  const browserVoice = !capabilities.dictation.available && voiceRecordingSupported() &&
+    state.config?.stt?.available === true && !shared && !bot?.remote && !group?.home && Boolean(group || bot);
+  useEffect(() => { if (browserVoice) void restorePendingVoice(); }, [browserVoice]);
+  const micBlockedLine = (error: unknown) => {
+    const problem = micProblem(error);
+    if (problem === "denied") return t(`composer.voice.denied.${micSettingsPlace(navigator.userAgent)}`);
+    if (problem === "missing") return t("composer.voice.missing");
+    if (problem === "busy") return t("composer.voice.busy");
+    if (problem === "insecure") return t("composer.voice.insecure");
+    return t("composer.voice.failedStart");
+  };
+  const finishVoice = async (send: boolean, hold?: string) => {
+    const current = voiceRef.current;
+    if (!current?.recording) {
+      if (current) setVoice(null);
+      return;
+    }
+    voiceRef.current = null;
+    setVoice(null);
+    if (!send) {
+      current.recording.cancel();
+      return;
+    }
+    const finished = await current.recording.stop();
+    if (finished.blob.size < 800 || finished.durationMs < 600) {
+      setSpeechError(t("composer.voice.tooShort"));
+      return;
+    }
+    await queueVoiceMessage({ draftId: current.draftId, target: current.target, ...finished, hold }, voiceDispatch);
+    if (current.reply && !hold) onConsumeReply?.();
+  };
+  const latestFinishVoice = useRef(finishVoice);
+  latestFinishVoice.current = finishVoice;
+  const startVoice = () => {
+    if (voiceRef.current || !(group || bot)) return;
+    setSpeechError(null);
+    const target: VoiceTarget = group
+      ? { groupId: group.id, threadId, mode: channelMode, replyToId: replyTo?.id }
+      : { botId: bot!.id, threadId, replyToId: replyTo?.id };
+    const pending = { recording: null, draftId, target, reply: Boolean(replyTo) };
+    voiceRef.current = pending;
+    setVoice(pending);
+    // getUserMedia runs inside this tap: iPhone Safari only asks then.
+    VoiceRecording.start(() => {
+      setSpeechError(t("composer.voice.limit"));
+      void latestFinishVoice.current(true);
+    }).then((recording) => {
+      if (voiceRef.current !== pending) { recording.cancel(); return; }
+      const live = { ...pending, recording };
+      voiceRef.current = live;
+      setVoice(live);
+    }, (error) => {
+      if (voiceRef.current === pending) { voiceRef.current = null; setVoice(null); }
+      setSpeechError(micBlockedLine(error));
+    });
+  };
+  // Leaving the conversation mid-recording keeps the words, unsent.
+  useEffect(() => () => {
+    if (voiceRef.current?.recording) void latestFinishVoice.current(true, t("composer.voice.leftThread"));
+    else voiceRef.current = null;
+  }, [draftId]);
 
   return (
     <div className="pointer-events-none relative px-5 pb-3">
@@ -834,6 +982,7 @@ export function Composer({
         </div>
       )}
       <div className="pointer-events-auto relative w-full">
+        <ComposerVoicePending pending={pendingVoice} onRetry={(id) => void deliverVoice(id, voiceDispatch)} onDiscard={discardPendingVoice}/>
         {failedSends.map((failed) => (
           <div
             key={failed.id}
@@ -1066,8 +1215,9 @@ export function Composer({
         />}
         <QueuedComposerMessages
           items={queuedMessages}
-          onSteer={canSteerQueued ? () => steerQueued() : undefined}
-          onSteerItem={canSteerQueued ? steerQueued : undefined}
+          onResume={() => dispatch({ type: "resumeQueued", threadId, ...(group ? { groupId: group.id } : { botId: bot?.id }) })}
+          onSteer={canSteerQueued && canSteer && !queuedMessages.some(item => item.paused) ? () => steerQueued() : undefined}
+          onSteerItem={canSteerQueued && canSteer && !queuedMessages.some(item => item.paused) ? steerQueued : undefined}
           steerInterrupts={group ? !roomSteerCapable : !canSteer}
           steerTargetName={roomSteerMember?.name}
           steerUnavailable={canSteerQueued ? roomSteerUnavailable : undefined}
@@ -1093,7 +1243,7 @@ export function Composer({
             ...(group ? { groupId: group.id } : { botId: bot?.id }),
           }) : undefined}
         />
-        <div className="relative">
+        <div className="composer-dock relative">
           {/* App-ground from the pill midline down, full-bleed. Bubbles may
               tuck into the top half of the radius; they must not show below
               center. End at the dock's pb-3 padding: a viewport-height
@@ -1104,8 +1254,31 @@ export function Composer({
             data-composer-backdrop
             className="pointer-events-none absolute -left-5 -right-5 -bottom-3 top-1/2 bg-app"
           />
+        {needsSignIn && (signInCardInThread ? (
+          <p data-composer-sign-in className="relative mx-4 mb-2 text-[13px] text-ink-secondary">
+            Sign in with Claude or ChatGPT above to send. Your message stays here.
+          </p>
+        ) : (
+          <div data-composer-sign-in className="relative mx-3 mb-2 rounded-2xl border border-hairline/40 bg-card px-4 py-3.5">
+            <p className="mb-3 text-[13.5px] text-ink">Sign in with Claude or ChatGPT to send. Your message stays here.</p>
+            <EnginesBeat inline onNext={() => {}} setMascot={() => {}} bump={() => {}} />
+          </div>
+        ))}
+        {modeBot && !shared && !group && !remoteClient && <div className="composer-context-strip relative mx-3 flex items-center gap-4 rounded-t-[20px] bg-raised px-3 pb-5 pt-2 text-[13px] text-ink-secondary">
+          <span className="flex min-w-0 items-center gap-2" title={composerTask?.cwd ?? modeBot.cwd ?? "Private bot workspace"}><Folder size={16} className="shrink-0"/><span className="composer-chip-label max-w-48 truncate">{(composerTask?.cwd ?? modeBot.cwd)?.split(/[\\/]/).filter(Boolean).pop() ?? "Bot workspace"}</span></span>
+              {modeBot && !remoteClient && (
+                <PlaceChip
+                  bot={modeBot}
+                  task={composerTask}
+                  live={Boolean(modeBot.busy)}
+                  showLabel
+                  disabled={Boolean(modeBot.busy)}
+                  onPin={(surface) => dispatch({ type: "updateTask", botId: modeBot.id, threadId: modeBot.threadId, patch: { surface } })}
+                />
+              )}
+        </div>}
         <ConversationComposerFrame>
-        <div className="flex items-end gap-1.5">
+        <div className="composer-layout" data-recording={recording || undefined}>
           <input
             ref={fileInput}
             type="file"
@@ -1128,6 +1301,7 @@ export function Composer({
               >
                 <Paperclip size={17} /><span>Attach files</span>
               </button>
+              {appshotsAvailable() && <AppshotMenuItem onError={(message) => dispatch({ type: "error", message })} />}
               {group && !group.dm && (
                 <button
                   type="button"
@@ -1161,8 +1335,13 @@ export function Composer({
                 </button>
               )}
               {modeBot && approvalEngine && ["codex", "claudeAgent"].includes(approvalEngine.driverKind) && <RemoteFullAccess botId={modeBot.id} threadId={modeBot.threadId} busy={Boolean(modeBot.busy)} candidates={state.bots.filter(b => !b.remote && state.instances.some(i => i.instanceId === currentTaskBot(b).modelSelection.instanceId && ["codex", "claudeAgent"].includes(i.driverKind))).map(b => ({ botId: b.id, threadId: b.threadId, name: b.name, busy: Boolean(b.busy) }))} />}
+            </ConversationTools>
+          )}
+          {appshotListing && <AppshotPicker key={appshotListing.rows.map((row) => row.id).join("|") + appshotListing.permission} listing={appshotListing} />}
+          <div className="composer-access" data-access-mode={modeBot ? approvalModeFor(modeBot) : undefined}>
               {modeBot && approvalEngine && !remoteClient && (
                 <ApprovalModeSelector
+                  wide
                   approvalMode={modeBot.approvalMode}
                   autoApprove={modeBot.autoApprove}
                   providerName={approvalEngine.displayName}
@@ -1172,17 +1351,7 @@ export function Composer({
                   trustedModesAvailable={trustedThreadAccess}
                 />
               )}
-              {modeBot && !remoteClient && (
-                <PlaceChip
-                  bot={modeBot}
-                  task={composerTask}
-                  live={Boolean(modeBot.busy)}
-                  disabled={Boolean(modeBot.busy)}
-                  onPin={(surface) => dispatch({ type: "updateTask", botId: modeBot.id, threadId: modeBot.threadId, patch: { surface } })}
-                />
-              )}
-            </ConversationTools>
-          )}
+          </div>
           <MentionTextarea
           inputRef={inputRef}
           peers={shared ? [...(shared.mentionPeople ?? []), ...shared.mentionBots] : group ? members ?? [] : state.bots.filter((member) => member.id !== bot?.id)}
@@ -1252,12 +1421,13 @@ export function Composer({
               return;
             }
             // Shift+Enter inserts a newline; plain Enter sends; Option/Alt+Enter
-            // sends as block (interrupt) while a turn is running
+            // queues After this while a turn is running
             if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
               e.preventDefault();
-              send(e.altKey && priorityVisible ? "block" : undefined);
+              if (recording) finishDictation(true);
+              else send(e.altKey && priorityVisible ? "queue" : undefined);
             }
-            if (e.key === "Escape" && recording) setRecording(false);
+            if (e.key === "Escape" && recording) cancelDictation();
           }}
           disabled={Boolean(approval) || locked || attachmentPending}
           aria-busy={bot?.awaitingThreadSnapshot || undefined}
@@ -1288,9 +1458,10 @@ export function Composer({
                   : t("composer.placeholder.bot", { name: bot?.name ?? "" })
           }
           aria-label={t("composer.placeholder.bot", { name: group ? group.name : (bot?.name ?? "") })}
-            className="block max-h-[9rem] min-h-6 w-full resize-none overflow-y-auto bg-transparent px-1 py-1.5 text-[15px] leading-6 placeholder:text-ink-secondary focus:outline-none"
+            className="block max-h-[12rem] min-h-[36px] w-full resize-none overflow-y-auto bg-transparent px-2 py-1.5 text-[15px] leading-6 placeholder:text-ink-secondary focus:outline-none"
           />
-          <div className="flex items-center gap-1">
+          <div className="composer-end flex min-w-0 items-center justify-end gap-1">
+          {bot && !group && !shared && !remoteClient && <ModelPicker bot={bot} threadId={threadId} placement="above" className="composer-model min-w-0"/>}
           {/* No queue/block chip: sending while busy queues; option-enter
               still interrupts for the rare case it is wanted. */}
           {/* Stop stays a stop. Stop-then-steer is named beside the queued
@@ -1307,7 +1478,7 @@ export function Composer({
             {stopping ? <><Loader2 size={14} className="animate-spin" /><span role="status" className="text-xs">Stopping…</span></> : <Square size={14} className="fill-current" />}
           </button>
         )}
-        {!locked && !busy && !hasContent && capabilities.dictation.available && (
+        {!locked && !busy && !recording && capabilities.dictation.available && (
           <button
             onClick={toggleMic}
             aria-label={recording ? t("composer.dictation.stop") : t("composer.dictation.start")}
@@ -1318,6 +1489,18 @@ export function Composer({
                 : "bg-raised text-ink-secondary hover:bg-raised-hover hover:text-ink",
             )}
             title={recording ? t("composer.dictation.stopHint") : t("composer.dictation.hint")}
+          >
+            <Mic size={18} />
+          </button>
+        )}
+        {!locked && !recording && !voice && browserVoice && (
+          <button
+            type="button"
+            onClick={startVoice}
+            aria-label={t("composer.voice.start")}
+            title={t("composer.voice.start")}
+            data-voice-start
+            className="flex size-9 shrink-0 items-center justify-center rounded-full bg-raised text-ink-secondary hover:bg-raised-hover hover:text-ink"
           >
             <Mic size={18} />
           </button>
@@ -1334,14 +1517,15 @@ export function Composer({
             <AudioLines size={18} strokeWidth={2.25} />
           </button>
         )}
+        {hasContent && !locked && busy && !shared && <button type="button" disabled={attachmentPending} onClick={() => send("queue")} aria-label="After this" className="composer-after shrink-0 rounded-full px-2 py-1 text-xs text-ink-secondary hover:bg-raised-hover" title="Wait until this work finishes"><ListEnd size={16} aria-hidden="true" /><span>After this</span></button>}
         {hasContent && !locked && (
           <button
             onClick={() => send()}
-            disabled={attachmentPending || sharedSending}
+            disabled={attachmentPending || sharedSending || needsSignIn}
             aria-busy={sharedSending || undefined}
             aria-label={
               blockArmed
-                ? t("composer.send.block")
+                ? "After this"
                 : busy && canSteer
                   ? t("composer.send.steer")
                   : busy
@@ -1350,7 +1534,7 @@ export function Composer({
             }
             title={
               blockArmed
-                ? t("composer.send.block")
+                ? "After this"
                 : busy && canSteer
                   ? t("composer.send.steer")
                   : busy
@@ -1359,6 +1543,7 @@ export function Composer({
             }
             className={cn(
               "flex size-9 shrink-0 items-center justify-center rounded-full",
+              needsSignIn && "pointer-events-none opacity-35",
               busy && !canSteer && !blockArmed
                   ? "bg-raised text-ink-secondary hover:bg-raised-hover"
                   : "bg-ink text-app hover:bg-ink/90",
@@ -1369,6 +1554,8 @@ export function Composer({
           )}
           </div>
         </div>
+        {recording && <ComposerDictation finishing={speechFinishing} onCancel={cancelDictation} onFinish={finishDictation}/>}
+        {voice && <ComposerVoiceRecorder stream={voice.recording?.stream ?? null} startedAt={voice.recording?.startedAt ?? Date.now()} starting={!voice.recording} onCancel={() => void finishVoice(false)} onSend={() => void finishVoice(true)}/>}
         </ConversationComposerFrame>
         </div>
       </div>

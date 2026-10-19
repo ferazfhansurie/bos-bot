@@ -34,6 +34,7 @@ import { compatEnv } from "../../electron/branding-env.cjs";
 //   OMB_BOT_ID       the calling bot's id (excluded from list_bots; sender)
 //   OMB_COMMS_TOKEN  shared secret for the localhost-only internal endpoints
 //   OMB_TURN_DEPTH   this turn's comms depth (the harness refuses recursion)
+import { isAbsolute, resolve as resolveFrom } from "node:path";
 import readline from "node:readline";
 import { z } from "zod";
 import { workPlanInputSchema } from "../work-continuity.ts";
@@ -379,6 +380,7 @@ const ROUTINE_FIELDS_SCHEMA = {
     type: "boolean",
     description: "Only for updates: set true to remove an existing safety limit. Do not combine with timeout_minutes.",
   },
+  notificationPolicy: { type: "string", enum: ["all", "important", "failures"], description: "Notifications: all runs, material updates (IMPORTANT_UPDATE: final-reply prefix), or failures only. All results remain logged; quiet markers always stay quiet." },
   continuity: {
     type: "boolean",
     description: "Opt in to using the latest completed run's bounded report as historical context. Defaults to false; set false in an update to start fresh again. Included in the applied result or pending confirmation.",
@@ -855,6 +857,18 @@ const TOOLS = [
     } },
   },
   {
+    name: "propose_outbound_message",
+    description: "Show a review card before any external message. Supply the exact channel (for example email, whatsapp, slack), recipient identifier, sending account, subject and body. This never sends or auto-approves, including Full Access. Wait for explicit owner approval in this same thread, then use existing connected tools and normal permissions for only that exact message.",
+    inputSchema: { type: "object", additionalProperties: false, properties: {
+      channel: { type: "string", minLength: 1, maxLength: 100 }, recipient: { type: "string", minLength: 1, maxLength: 500 }, account: { type: "string", minLength: 1, maxLength: 300 }, subject: { type: "string", maxLength: 1000 }, body: { type: "string", minLength: 1, maxLength: 20000 },
+    }, required: ["channel", "recipient", "account", "body"] },
+  },
+  {
+    name: "record_outbound_receipt",
+    description: "After an approved outbound send, attach its provider receipt id. The server finds a unique successful send tool activity in the exact approved turn; optionally supply tool_message_id to select it. This does not send. Refuses prose claims, failed/unknown results, mismatched recipient/body/account, multi-send batches, and opaque previews. Submitted means the tool returned a receipt, not recipient delivery. If proof is unavailable, leave the card awaiting receipt and explain honestly.",
+    inputSchema: { type: "object", additionalProperties: false, properties: { request_id: { type: "string" }, tool_message_id: { type: "string" }, receipt_id: { type: "string", minLength: 1, maxLength: 300 } }, required: ["request_id", "receipt_id"] },
+  },
+  {
     name: "propose_profile",
     description:
       "Submit user-requested changes to your own name, title, description, standing instructions (SOUL.md), or working folder (cwd). Keep SOUL.md short — who you are and the rules you never break; put step-by-step procedure into a skill instead. A Chief of Staff may pass for_bot_id (from list_bots) for a requested change to another bot in its section." + PROPOSAL_OUTCOME,
@@ -921,6 +935,129 @@ const TOOLS = [
       required: ["action", "skill_md", "source"],
     },
   },
+  {
+    name: "pages_list",
+    description: "List the owner's pages (documents) that belong to you, newest first, with id, title, snippet and open comment count. Pages are rich documents the owner edits beside the chat. Optional query filters by title or text. Not available in rooms.",
+    inputSchema: { type: "object", additionalProperties: false, properties: {
+      query: { type: "string", description: "Optional words to match in titles or text." },
+    } },
+  },
+  {
+    name: "page_read",
+    description: "Read one page as markdown. Every block is preceded by an <!-- block-id --> comment; use those ids with page_edit. Open comments are listed at the end with their ids.",
+    inputSchema: { type: "object", additionalProperties: false, properties: {
+      page_id: { type: "string", description: "Page id (p-…) from pages_list or a [page request]." },
+    }, required: ["page_id"] },
+  },
+  {
+    name: "page_create",
+    description: "Create a new page (document) for the owner from markdown and return its id. Use when the owner asks you to write a document, brief, plan, report or notes they will keep editing. Supports headings, lists, - [ ] to-dos, > quotes, > [!💡] callouts, ``` code, $$ math, tables, --- dividers, https images and links. The page opens in the owner's side panel.",
+    inputSchema: { type: "object", additionalProperties: false, properties: {
+      title: { type: "string", description: "Page title, up to 200 characters. If omitted, a leading # heading becomes the title." },
+      icon: { type: "string", description: "Optional single emoji icon." },
+      markdown: { type: "string", description: "The page body as markdown." },
+    }, required: ["markdown"] },
+  },
+  {
+    name: "page_write",
+    description: "Replace a whole page body with new markdown. Unchanged blocks keep their ids and comments, and the previous version is checkpointed so the owner can undo. Prefer page_edit for targeted changes.",
+    inputSchema: { type: "object", additionalProperties: false, properties: {
+      page_id: { type: "string" },
+      base_revision: { type: "integer", description: "Revision returned by page_read; stale edits are refused. Read again before retrying." },
+      markdown: { type: "string", description: "The full new body as markdown (block id comments optional)." },
+      title: { type: "string" }, icon: { type: "string" },
+    }, required: ["page_id", "base_revision", "markdown"] },
+  },
+  {
+    name: "page_edit",
+    description: "Change specific blocks of a page by block id from page_read. Ops: replace (block_id + markdown), insert_after / insert_before (block_id + markdown), append / prepend (markdown), delete (block_id), check (block_id + checked, for to-dos). Markdown may hold several blocks. The previous version is checkpointed so the owner can undo.",
+    inputSchema: { type: "object", additionalProperties: false, properties: {
+      page_id: { type: "string" },
+      base_revision: { type: "integer", description: "Revision returned by page_read; stale edits are refused. Read again before retrying." },
+      edits: { type: "array", minItems: 1, maxItems: 100, items: { type: "object", additionalProperties: false, properties: {
+        op: { type: "string", enum: ["replace", "insert_after", "insert_before", "append", "prepend", "delete", "check"] },
+        block_id: { type: "string" }, markdown: { type: "string" }, checked: { type: "boolean" },
+      }, required: ["op"] } },
+      title: { type: "string", description: "Optional new title." }, icon: { type: "string", description: "Optional new emoji icon." },
+    }, required: ["page_id", "base_revision", "edits"] },
+  },
+  {
+    name: "page_comment",
+    description: "Comment on a page. With comment_id, reply to that comment (and resolve it with resolve: true once handled). Without it, start a new comment on block_id, optionally quoting the exact text it is about.",
+    inputSchema: { type: "object", additionalProperties: false, properties: {
+      page_id: { type: "string" }, text: { type: "string", description: "Comment or reply text." },
+      comment_id: { type: "string" }, resolve: { type: "boolean" },
+      block_id: { type: "string" }, quote: { type: "string" },
+    }, required: ["page_id", "text"] },
+  },
+  {
+    name: "videos_list",
+    description: "List the videos (timeline edits) you made with the owner in this conversation, newest first, with id, title, length, size and last render. The owner edits videos in a CapCut-style editor in a side tab. Not available in rooms.",
+    inputSchema: { type: "object", additionalProperties: false, properties: {
+      query: { type: "string", description: "Optional words to match in titles or media names." },
+    } },
+  },
+  {
+    name: "video_read",
+    description: "Read a video's timeline as text: format, media bin (ids, kinds, lengths), every track and clip with ids and times, and the revision to pass to video_edit. The owner has this video open in a side tab and sees every edit live, so read again after they may have changed it.",
+    inputSchema: { type: "object", additionalProperties: false, properties: {
+      video_id: { type: "string", description: "Video id (v-…) from videos_list or video_create." },
+    }, required: ["video_id"] },
+  },
+  {
+    name: "video_create",
+    description: "Create an empty video project (a Video, Text and Audio track) and open it in the owner's side tab, where they watch and adjust every edit live. Then add files with video_add_media and arrange them with video_edit.",
+    inputSchema: { type: "object", additionalProperties: false, properties: {
+      title: { type: "string", description: "Title, up to 200 characters." },
+      size: { type: "string", enum: ["landscape", "portrait", "square", "feed"], description: "landscape 1920x1080, portrait 1080x1920 (default; reels/shorts/tiktok), square 1080x1080, feed 1080x1350." },
+    } },
+  },
+  {
+    name: "video_add_media",
+    description: "Import a video, audio or image file into a video's media bin (it is copied; the original is untouched) and return its media id and probe (kind, length, size, audio). Thumbnails and waveforms appear in the owner's editor shortly after. Files in hidden or app-private folders are refused; copy them into your working folder first.",
+    inputSchema: { type: "object", additionalProperties: false, properties: {
+      video_id: { type: "string" },
+      path: { type: "string", description: "Absolute path of the file (relative paths resolve against your working folder)." },
+      name: { type: "string", description: "Optional display name; defaults to the file name." },
+    }, required: ["video_id", "path"] },
+  },
+  {
+    name: "video_edit",
+    description: "Change a video's timeline with ops applied in order; all succeed or none do. The owner sees the result live in the side tab, and the previous state is checkpointed so they can undo. Times are seconds on the timeline. Ops: " +
+      "add_clip {track_id, media_id | text, start?, duration?, in?, speed?, volume?, style?, fit?, label?} (no start = after the track's last clip; no duration = rest of the media, 3s for images/text; returns the new clip id); " +
+      "update_clip {clip_id, start?, duration?, in?, speed? 0.25–4, volume? 0–2, text?, style?, fade_in?, fade_out?, fit?, label?}; " +
+      "move_clip {clip_id, start, track_id?}; split {clip_id, at} (returns the right half's id); delete_clip {clip_id, ripple?} (ripple closes the gap); " +
+      "add_track {kind: video|audio|text, name?, index?} (tracks[0] is the bottom layer); update_track {track_id, name?, muted?, hidden?}; delete_track {track_id}; " +
+      "set_format {width?, height?, fps?, background? #rrggbb}. " +
+      "in = source time the clip starts from; duration is on the timeline, so it covers duration*speed of source. fit: contain (default, letterbox) or cover (fill and crop). " +
+      "Text style: {size: fraction of frame height (0.06), color: #rrggbb, background: #rrggbbaa box or \"\", weight: 400|600|800, x, y: centre as 0–1 fractions (0.5, 0.85), align: left|center|right}; newlines break lines.",
+    inputSchema: { type: "object", additionalProperties: false, properties: {
+      video_id: { type: "string" },
+      base_revision: { type: "integer", description: "Revision from video_read or the last edit; stale edits are refused. Read again before retrying." },
+      ops: { type: "array", minItems: 1, maxItems: 200, items: { type: "object", properties: {
+        op: { type: "string", enum: ["add_clip", "update_clip", "move_clip", "split", "delete_clip", "add_track", "update_track", "delete_track", "set_format"] },
+      }, required: ["op"] } },
+      title: { type: "string", description: "Optional new title." },
+    }, required: ["video_id", "base_revision"] },
+  },
+  {
+    name: "video_render",
+    description: "Render the current timeline to an mp4 (h264/aac) and return its absolute path, which you can attach or send. The owner watches progress in the side tab. With wait_seconds (up to 600) it waits for the result; otherwise it returns the render id, and calling again with render_id reports progress or the finished path. One render per video at a time.",
+    inputSchema: { type: "object", additionalProperties: false, properties: {
+      video_id: { type: "string" },
+      wait_seconds: { type: "integer", minimum: 0, maximum: 600, description: "How long to wait for the render to finish (default 300)." },
+      render_id: { type: "string", description: "Check on (and wait for) an earlier render instead of starting one." },
+    }, required: ["video_id"] },
+  },
+  {
+    name: "video_snapshot",
+    description: "See one frame of the edit at time t: a jpg drawn from the current timeline exactly as the render will look (framing, fades, text). Use it to check your edits before rendering. Returns the image and its path.",
+    inputSchema: { type: "object", additionalProperties: false, properties: {
+      video_id: { type: "string" },
+      t: { type: "number", minimum: 0, description: "Seconds on the timeline." },
+      max_side: { type: "integer", minimum: 160, maximum: 1920, description: "Longest side in pixels (default 960)." },
+    }, required: ["video_id", "t"] },
+  },
 ].map((tool) => {
   const annotations = agentToolAnnotations(tool.name);
   return annotations ? { ...tool, annotations } : tool;
@@ -946,9 +1083,14 @@ const SHAREABLE_TOOLS = SHARED_COMPUTERS_ENABLED
 const ROOM_ONLY_TOOLS = new Set(["list_room_targets", "coordinate_bots", "list_lead_actions", "report_lead_action", "resolve_lead_action"]);
 const ROOM_REPLACED_TOOLS = new Set(["ask_bot", "delegate_bot", "check_delegation", "wait_delegation", "start_thread", "send_to_thread", "wait_thread"]);
 const COORDINATING = compatEnv.OMB_ROOM_TURN === "1";
+// Pages are the owner's private documents; a room can hold clients.
+const PAGE_TOOL_NAMES = new Set(["pages_list", "page_read", "page_create", "page_write", "page_edit", "page_comment"]);
+// Videos are private the same way.
+const VIDEO_TOOL_NAMES = new Set(["videos_list", "video_read", "video_create", "video_add_media", "video_edit", "video_render", "video_snapshot"]);
 const OWN_THREAD_CREATION = compatEnv.OMB_OWN_THREAD_CREATION === "1";
 const AVAILABLE_TOOLS = COORDINATING
-  ? SHAREABLE_TOOLS.filter(tool => !ROOM_REPLACED_TOOLS.has(tool.name) || (tool.name === "start_thread" && OWN_THREAD_CREATION))
+  ? SHAREABLE_TOOLS.filter(tool => !PAGE_TOOL_NAMES.has(tool.name) && !VIDEO_TOOL_NAMES.has(tool.name))
+    .filter(tool => !ROOM_REPLACED_TOOLS.has(tool.name) || (tool.name === "start_thread" && OWN_THREAD_CREATION))
     .map(tool => tool.name === "start_thread" ? {
       ...tool,
       description: "Open a separate job on yourself with its own history and run, without switching the person's selected conversation. Use only when the user requests independent jobs (for example one review per pull request). Give a short specific title and complete instructions; you can open at most five per turn. This is not a teammate handoff: use coordinate_bots for teammates and their automatic replies. Self-opened jobs cannot recursively open more jobs. If refused, do not retry; explain what remains.",
@@ -1030,6 +1172,7 @@ function routineFields(args: Json): { fields: Json; error?: string } {
   if (args.continuity != null && typeof args.continuity !== "boolean") {
     return { fields, error: "continuity must be true or false." };
   }
+  if (args.notificationPolicy !== undefined && !["all", "important", "failures"].includes(String(args.notificationPolicy))) return { fields, error: "notificationPolicy must be all, important or failures." };
   if (args.overlap !== undefined && args.overlap !== "skip" && args.overlap !== "queue") {
     return { fields, error: "overlap must be skip or queue." };
   }
@@ -1050,6 +1193,7 @@ function routineFields(args: Json): { fields: Json; error?: string } {
   if (args.clear_timeout === true) fields.timeoutMinutes = null;
   else if (timeoutMinutes != null) fields.timeoutMinutes = timeoutMinutes;
   if (typeof args.continuity === "boolean") fields.continuity = args.continuity;
+  if (args.notificationPolicy !== undefined) fields.notificationPolicy = args.notificationPolicy;
   if (args.overlap !== undefined) fields.overlap = args.overlap;
   return { fields };
 }
@@ -1090,7 +1234,103 @@ function recallSpeaker(hit: Json): string {
   return hit.role === "user" ? "user" : "you";
 }
 
+const fmtSeconds = (s: unknown) => `${Number(s ?? 0).toFixed(2)}s`;
+
+function videoHead(video: Json): string {
+  return `${video.id} · ${video.title || "Untitled"} · revision ${video.revision}`;
+}
+
+function renderLine(render: Json, path?: unknown): string {
+  if (render.status === "done") return `Render ${render.id} finished (revision ${render.revision}).${path ? ` File: ${path}` : ""}`;
+  if (render.status === "failed") return `Render ${render.id} failed: ${render.error ?? "unknown error"}`;
+  if (render.status === "cancelled") return `Render ${render.id} was cancelled.`;
+  return `Render ${render.id} is ${render.status} (${Math.round(Number(render.progress ?? 0) * 100)}%). Call video_render again with render_id ${render.id} to wait for it.`;
+}
+
+/** The bot's video tools. Snapshots also carry the jpg for an image block. */
+async function videoTool(name: string, args: Json): Promise<{ text: string; isError?: boolean; image?: string }> {
+  const videoId = typeof args.video_id === "string" ? args.video_id : "";
+  if (name !== "videos_list" && name !== "video_create" && !/^v-[a-z0-9]{8,24}$/.test(videoId)) return { text: "video_id must be a video id like v-… from videos_list or video_create.", isError: true };
+  const at = `/api/internal/videos/${videoId}`;
+  const post = (path: string, body: Json) => apiResponse(path, { method: "POST", body: JSON.stringify(body) });
+  const failed = (r: { status: number; body: Json }) => ({ text: String(r.body.error ?? `HTTP ${r.status}`), isError: true });
+  if (name === "videos_list") {
+    const r = await apiResponse(`/api/internal/videos${typeof args.query === "string" && args.query.trim() ? `?q=${encodeURIComponent(args.query.trim())}` : ""}`);
+    if (!r.ok) return failed(r);
+    const videos = (r.body.videos as Json[] | undefined) ?? [];
+    return { text: videos.length ? videos.map(v => `${v.id} · ${v.title || "Untitled"} · ${fmtSeconds(v.duration)} · ${v.width}x${v.height} · ${v.clipCount} clips · revision ${v.revision}${jsonRecord(v.lastRender) ? ` · last render ${v.lastRender.status}` : ""}`).join("\n") : "No videos in this conversation yet." };
+  }
+  if (name === "video_read" || name === "video_create" || name === "video_edit" || name === "video_add_media") {
+    const r = name === "video_read" ? await apiResponse(at)
+      : name === "video_create" ? await post("/api/internal/videos", { title: args.title, size: args.size })
+        : name === "video_edit" ? await post(`${at}/edit`, { base_revision: args.base_revision, ops: args.ops, title: args.title })
+          : await post(`${at}/media`, { path: typeof args.path === "string" ? resolvePath(args.path) : args.path, name: args.name });
+    if (!r.ok) return failed(r);
+    const video = r.body.video as Json;
+    const where = String(video.where ?? "");
+    if (name === "video_read") return { text: `${videoHead(video)}\n${where}\n\n${video.text}` };
+    if (name === "video_create") return { text: `Created ${videoHead(video)}. ${where}\n\n${video.text}` };
+    if (name === "video_add_media") {
+      const media = r.body.media as Json;
+      const probe = [media.kind, media.kind === "image" ? null : fmtSeconds(media.duration), media.width ? `${media.width}x${media.height}` : null, media.fps ? `${media.fps}fps` : null, media.kind === "video" ? (media.hasAudio ? "with audio" : "no audio") : null].filter(Boolean).join(", ");
+      return { text: `Added ${media.id} (${media.name}: ${probe}) to ${videoHead(video)}. Place it with video_edit add_clip media_id ${media.id}.` };
+    }
+    const created = Array.isArray(r.body.created) && r.body.created.length ? ` New clip ids: ${r.body.created.join(", ")}.` : "";
+    return { text: `Saved ${videoHead(video)}.${created} The owner sees it live.\n\n${video.text}` };
+  }
+  if (name === "video_render") {
+    const wait = Math.max(0, Math.min(600, Number.isFinite(Number(args.wait_seconds)) ? Number(args.wait_seconds) : 300));
+    let renderId = typeof args.render_id === "string" ? args.render_id : "";
+    if (renderId && !/^r-[a-z0-9]{4,32}$/.test(renderId)) return { text: "render_id must look like r-… from an earlier video_render.", isError: true };
+    if (!renderId) {
+      const r = await post(`${at}/render`, {});
+      if (!r.ok) return failed(r);
+      renderId = String((r.body.render as Json).id);
+    }
+    const deadline = Date.now() + wait * 1000;
+    for (;;) {
+      const r = await apiResponse(`${at}/renders/${renderId}`);
+      if (!r.ok) return failed(r);
+      const render = r.body.render as Json;
+      const finished = ["done", "failed", "cancelled"].includes(String(render.status));
+      if (finished || Date.now() >= deadline) return { text: renderLine(render, r.body.path), isError: render.status === "failed" || render.status === "cancelled" };
+      await new Promise(resolve => setTimeout(resolve, Math.min(1000, Math.max(50, deadline - Date.now()))));
+    }
+  }
+  if (name === "video_snapshot") {
+    const r = await post(`${at}/snapshot`, { t: args.t, max_side: args.max_side });
+    if (!r.ok) return failed(r);
+    return { text: `Frame at ${fmtSeconds(r.body.t)} of ${videoId}: ${r.body.path}`, image: typeof r.body.data === "string" ? r.body.data : undefined };
+  }
+  return { text: `unknown video tool ${name}`, isError: true };
+}
+
+function resolvePath(path: string): string {
+  return isAbsolute(path) ? path : resolveFrom(process.cwd(), path);
+}
+
 async function callTool(name: string, args: Json): Promise<{ text: string; isError?: boolean }> {
+  if (VIDEO_TOOL_NAMES.has(name)) {
+    const { text, isError } = await videoTool(name, args);
+    return { text, isError };
+  }
+  if (PAGE_TOOL_NAMES.has(name)) {
+    const pageId = typeof args.page_id === "string" ? args.page_id : "";
+    if (name !== "pages_list" && name !== "page_create" && !/^p-[a-z0-9]{8,24}$/.test(pageId)) return { text: "page_id must be a page id like p-… from pages_list.", isError: true };
+    const { page_id: _, ...rest } = args;
+    const r = name === "pages_list" ? await apiResponse(`/api/internal/pages${typeof args.query === "string" && args.query.trim() ? `?q=${encodeURIComponent(args.query.trim())}` : ""}`)
+      : name === "page_read" ? await apiResponse(`/api/internal/pages/${pageId}`)
+      : name === "page_create" ? await apiResponse("/api/internal/pages", { method: "POST", body: JSON.stringify(rest) })
+      : await apiResponse(`/api/internal/pages/${pageId}/${name === "page_write" ? "write" : name === "page_edit" ? "edit" : "comment"}`, { method: "POST", body: JSON.stringify(rest) });
+    if (!r.ok) return { text: String(r.body.error ?? `HTTP ${r.status}`), isError: true };
+    if (name === "pages_list") {
+      const pages = (r.body.pages as Json[] | undefined) ?? [];
+      return { text: pages.length ? pages.map(p => `${p.id} · ${p.icon ? `${p.icon} ` : ""}${p.title || "Untitled"}${p.pinned ? " · pinned" : ""}${Number(p.openComments) ? ` · ${p.openComments} open comments` : ""}\n  ${String(p.snippet ?? "")}`).join("\n") : "No pages yet." };
+    }
+    const page = r.body.page as Json;
+    const head = `${page.id} · ${page.title || "Untitled"} · revision ${page.revision}`;
+    return { text: name === "page_read" ? `${head}\n\n${page.text}` : `${name === "page_create" ? "Created" : "Saved"} ${head}. The owner sees it in the page panel.\n\n${page.text}` };
+  }
   if (name === "ring_owner") {
     const parsed = z.object({ reason: z.string().trim().min(1).max(500) }).strict().safeParse(args);
     if (!parsed.success) return { text: "ring_owner needs only a brief reason (1–500 characters).", isError: true };
@@ -1600,6 +1840,14 @@ async function callTool(name: string, args: Json): Promise<{ text: string; isErr
     }
     return { text: JSON.stringify({ ...result, receipts }) };
   }
+  if (name === "propose_outbound_message") {
+    const result = await api("/api/internal/outbound-reviews", { method: "POST", body: JSON.stringify({ content: args }) });
+    return { text: JSON.stringify(result) };
+  }
+  if (name === "record_outbound_receipt") {
+    const result = await api("/api/internal/outbound-receipts", { method: "POST", body: JSON.stringify({ requestId: args.request_id, toolMessageId: args.tool_message_id, receiptId: args.receipt_id }) });
+    return { text: JSON.stringify(result) };
+  }
   if (name === "propose_profile") {
     const changes: Json = {};
     if (typeof args.name === "string") changes.name = args.name.trim();
@@ -1701,7 +1949,7 @@ async function callTool(name: string, args: Json): Promise<{ text: string; isErr
     // once said. Each names its file, so the bot can open or edit it.
     const memoryBlock = memoryHits.length
       ? `${memoryHits.length} matching memory file${memoryHits.length === 1 ? "" : "s"} of yours:\n${
-        memoryHits.map((hit) => `- [memory file ${String(hit.file)}] ${String(hit.snippet)}`).join("\n")
+        memoryHits.map((hit) => `- [memory file ${String(hit.file)}] ${String(hit.snippet)}${typeof hit.sourceId === "string" ? `\n  exact source entry (line ${hit.sourceLine}): ${String(hit.sourceText)}\n  if your final answer uses this entry, append [memory-source:${hit.sourceId}] beside that answer. only cite entries actually used; retrieval alone is not attribution.` : ""}`).join("\n")
       }\n\n`
       : "";
     const asked = q ? `matches "${q}"` : `is there since ${since}${until ? ` until ${until}` : ""}`;
@@ -1871,6 +2119,12 @@ async function handle(msg: Json) {
           const result = response.result as Json;
           if (Array.isArray(result?.content)) ok(id, result);
           else textResult(id, await capResult(JSON.stringify(result)));
+          return;
+        }
+        if (name === "video_snapshot") {
+          const shot = await videoTool(name, (params.arguments ?? {}) as Json);
+          if (shot.image) ok(id, { content: [{ type: "text", text: shot.text }, { type: "image", data: shot.image, mimeType: "image/jpeg" }] });
+          else textResult(id, shot.text, shot.isError);
           return;
         }
         const { text, isError } = await callTool(name, (params.arguments ?? {}) as Json);

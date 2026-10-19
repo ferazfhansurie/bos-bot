@@ -1,10 +1,11 @@
 // The WhatsApp tile in Connected apps, driven by the server's native
 // whatsapp-web.js client (server/whatsapp-native.ts) instead of Composio.
 // State comes from GET /api/whatsapp/native — real client events plus a
-// liveness probe — never a static "ready". Read-only: there is no send UI.
+// liveness probe — never a static "ready". Owners can approve scoped bot access.
 import { useCallback, useEffect, useRef, useState } from "react";
 import { QRCodeSVG } from "qrcode.react";
 import { Loader2 } from "lucide-react";
+import { WhatsAppPermissions } from "./WhatsAppPermissions";
 import { api } from "@/state/store";
 import { ServiceIcon, type ToolkitCard } from "./PluginsPanel";
 
@@ -24,7 +25,7 @@ export interface NativeWhatsAppSnapshot {
 export function nativeWhatsAppLabel(snapshot: NativeWhatsAppSnapshot | null): string {
   if (!snapshot) return "Checking…";
   switch (snapshot.state) {
-    case "linked": return `Linked · read-only · ${snapshot.messageCount} message${snapshot.messageCount === 1 ? "" : "s"} captured`;
+    case "linked": return `Linked · ${snapshot.messageCount} message${snapshot.messageCount === 1 ? "" : "s"} captured`;
     case "qr_pending": return "Scan with WhatsApp → Settings → Linked devices";
     case "linking": return "Linking…";
     case "needs_rescan": return snapshot.reason ? `Needs a new scan — ${snapshot.reason}` : "Needs a new scan";
@@ -120,10 +121,11 @@ export function NativeWhatsAppTile({ card }: { card: ToolkitCard }) {
           </div>
           <p className="text-[12px] leading-relaxed text-ink-secondary">
             On your phone open WhatsApp → Settings → Linked devices → Link a device, and scan this code.
-            BOS only reads messages; it never sends or marks anything as read.
+            Linking alone only grants reading. You can approve bot replies in Bot permissions after linking.
           </p>
         </div>
       )}
+      {snapshot?.state === "linked" && <WhatsAppPermissions />}
       {error && <div role="alert" className="mt-2 text-[12px] text-danger">{error}</div>}
     </div>
   );

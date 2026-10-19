@@ -33,13 +33,16 @@ export interface SurfacePlan {
   clearPin: boolean;
   /** One prompt sentence when the chosen destination cannot be honoured. */
   note: string;
+  /** The place is BoxCompute and its sandbox mounts: offer the cloud
+   * desktop inside it (and create a new sandbox large enough for it). */
+  sandboxDesktop?: boolean;
 }
 
-const SURFACES: ReadonlySet<string> = new Set(["cloud", "vm", "local", "browser"]);
+const SURFACES: ReadonlySet<string> = new Set(["cloud", "vm", "local", "browser", "boxcompute"]);
 
 /** Parse a surface arriving over the wire; anything else is "not said". */
 export function parseSurface(value: unknown): Surface | undefined {
-  // SAFETY: the set membership check is the narrowing — only the four
+  // SAFETY: the set membership check is the narrowing — only the five
   // literal strings pass, and the assertion just names that fact to the type.
   return typeof value === "string" && SURFACES.has(value) ? (value as Surface) : undefined;
 }
@@ -56,6 +59,14 @@ const NO_BROWSER_NOTE =
 const OFF_NOTE =
   " This bot's \"Works on\" setting is Off, so no computer and no built-in browser are mounted this turn: you cannot open a page, click, or type on any screen. If the user asks for something that needs one, tell them Works on is Off in this bot's settings — never claim you are opening a browser you do not have.";
 
+const BOXCOMPUTE_NOTE =
+  " This conversation works in its BoxCompute cloud sandbox, a Linux machine hosted in Malaysia: run code, keep files and serve previews with the sandbox server's tools (sandbox_exec, sandbox_write_file, sandbox_read_file, sandbox_list_files, sandbox_preview, sandbox_status)." +
+  " It also has a cloud desktop with Google Chrome that you see and drive with sandbox_desktop_screenshot, sandbox_desktop_click, sandbox_desktop_type, sandbox_desktop_key, sandbox_desktop_scroll and sandbox_desktop_open_url; the first desktop call sets it up, which takes about a minute and a half. Screenshot before you act and after, and never claim a page did something you have not seen. For heavy scraping or long scripted flows, drive that same Chrome from sandbox_exec over CDP at http://localhost:9222 (for example Playwright's chromium.connectOverCDP) instead of clicking." +
+  " sandbox_desktop_live_link gives the person a link to watch and control the desktop live: share it when they want to watch, or when a site needs a captcha, a payment or a sign-in you have no credentials for. You may type passwords and one-time codes the person gave you or designated for that exact site; check the address first. Never type card details: send the live link, wait for them to say they are done, then carry on in the same Chrome, which keeps them signed in. There is no built-in browser and no other computer this turn. Before your first sandbox action in a task, say in one short sentence that you are working in the BoxCompute sandbox.";
+
+const NO_BOXCOMPUTE_NOTE =
+  " This conversation is set to work in its BoxCompute sandbox, but no sandbox tools are mounted this turn (the BoxCompute key is missing in Settings → Connections, or this engine cannot mount it). No computer or browser is mounted instead. Say so instead of guessing.";
+
 /** Decide what a turn mounts. Local desktop work also mounts the independent
  * built-in browser when enabled, so web work need not take over the host's
  * Chrome. Remote computers remain exclusive to avoid silently moving web
@@ -67,6 +78,8 @@ export function resolveSurface(input: {
   pinnedSurface?: Surface | null;
   /** The built-in browser may mount: workspace flag, bot switch and engine. */
   browserOn: boolean;
+  /** The BoxCompute sandbox may mount: key configured and engine support. */
+  sandboxOn?: boolean;
 }): SurfacePlan {
   const { destination, browserOn } = input;
   // Off is the whole answer: no computer and no browser. It used to withhold
@@ -80,6 +93,11 @@ export function resolveSurface(input: {
     return { computer: "off", browser: false, pinned: null, clearPin: false, note: OFF_NOTE };
   }
   const pin = input.pinnedSurface ?? null;
+  // The sandbox is the whole place: shell, files and its own cloud desktop,
+  // never the computer server or the built-in browser.
+  if (pin === "boxcompute") {
+    return { computer: "off", browser: false, pinned: pin, clearPin: false, note: input.sandboxOn ? BOXCOMPUTE_NOTE : NO_BOXCOMPUTE_NOTE, sandboxDesktop: input.sandboxOn === true };
+  }
   if (pin === "browser") {
     if (browserOn) return { computer: "off", browser: true, pinned: "browser", clearPin: false, note: "" };
     // A missing browser is not permission to act on the host instead. Keep
@@ -93,6 +111,9 @@ export function resolveSurface(input: {
     return browserOn
       ? { computer: "off", browser: true, pinned: null, clearPin: false, note: "" }
       : { computer: "off", browser: false, pinned: null, clearPin: false, note: NO_BROWSER_NOTE };
+  }
+  if (destination === "boxcompute") {
+    return { computer: "off", browser: false, pinned: null, clearPin: false, note: input.sandboxOn ? BOXCOMPUTE_NOTE : NO_BOXCOMPUTE_NOTE, sandboxDesktop: input.sandboxOn === true };
   }
   if (destination !== undefined) {
     return { computer: destination, browser: destination === "local" && browserOn, pinned: null, clearPin: false, note: "" };
@@ -113,6 +134,8 @@ export function surfaceLabel(surface: Surface): string {
       return "this computer";
     case "browser":
       return "the built-in browser";
+    case "boxcompute":
+      return "the BoxCompute sandbox";
   }
 }
 

@@ -24,22 +24,24 @@ export function usePlaceAvailability(bot: Bot): PlaceAvailability {
     vm: Boolean(instance?.snapshot?.state === "available" && computerMcp && !boxAgent),
     local: localComputerSelectable({ capabilities, providerSupportsLocal: instanceSupportsLocalComputer(state.instances, bot) }),
     browser: builtInBrowserEnabled(state.config) && browserAvailable(state.config) && instance?.capabilities?.browserMcp === true && !boxAgent,
+    boxcompute: state.config?.boxCompute?.configured === true && Boolean(instance) && !boxAgent,
   };
 }
 
-const DESCRIPTION: Record<Place, "computer.dest.cloudDesc" | "computer.dest.vmDesc" | "computer.dest.localDesc" | "computer.dest.browserDesc"> = {
-  cloud: "computer.dest.cloudDesc", vm: "computer.dest.vmDesc", local: "computer.dest.localDesc", browser: "computer.dest.browserDesc",
+const DESCRIPTION: Record<Place, "computer.dest.cloudDesc" | "computer.dest.vmDesc" | "computer.dest.localDesc" | "computer.dest.browserDesc" | "computer.dest.boxcomputeDesc"> = {
+  cloud: "computer.dest.cloudDesc", vm: "computer.dest.vmDesc", local: "computer.dest.localDesc", browser: "computer.dest.browserDesc", boxcompute: "computer.dest.boxcomputeDesc",
 };
 
 /** Where this conversation works, always visible beside the send button.
  * Shows the effective place (the conversation's pin, else the bot's Works
  * on), pulses while a turn is acting there, and pins another place for this
  * conversation only. No confirmation card: choosing is the whole gesture. */
-export function PlaceChip({ bot, task, live, disabled = false, onPin }: {
+export function PlaceChip({ bot, task, live, disabled = false, showLabel = false, onPin }: {
   bot: Bot;
   task?: Pick<Task, "surface"> | null;
   live: boolean;
   disabled?: boolean;
+  showLabel?: boolean;
   onPin: (surface: Place | null) => void;
 }) {
   const [open, setOpen] = useState(false);
@@ -86,11 +88,13 @@ export function PlaceChip({ bot, task, live, disabled = false, onPin }: {
         onClick={() => setOpen((value) => !value)}
         className={cn(
           "relative flex size-8 shrink-0 items-center justify-center rounded-full text-ink-secondary hover:bg-control hover:text-ink",
+          showLabel && "w-auto gap-2 px-2",
           pinned && "text-accent hover:text-accent",
           (disabled || off) && "cursor-not-allowed opacity-45 hover:bg-transparent",
         )}
       >
         <PlaceIcon place={effective} size={16} className="shrink-0 opacity-80" aria-hidden="true" />
+        {showLabel && <span className="max-w-40 truncate">{label}</span>}
         {showLive && <span className="absolute right-1.5 top-1.5 size-1.5 animate-pulse rounded-full bg-success" aria-label={t("place.live")} />}
       </button>
       {open && (

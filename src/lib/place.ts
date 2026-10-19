@@ -6,8 +6,8 @@ import { toolSurfaceKind } from "../../shared/tool-surface";
 import type { Bot, Task } from "@/state/store";
 import type { LocaleKey } from "@/locales";
 
-export type Place = "cloud" | "vm" | "local" | "browser";
-export const PLACES: readonly Place[] = ["cloud", "vm", "local", "browser"];
+export type Place = "cloud" | "vm" | "local" | "browser" | "boxcompute";
+export const PLACES: readonly Place[] = ["cloud", "boxcompute", "vm", "local", "browser"];
 /** What the chip shows: a place, the bot's Auto, or Off. */
 export type EffectivePlace = Place | "auto" | "off";
 

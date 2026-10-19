@@ -82,7 +82,7 @@ final class RoomStreamingTests: XCTestCase {
         var failed = line("a2", .activity, from: "a")
         failed.tool = ToolActivity(name: "run", ok: false)
         let messages = [line("a1", .activity, from: "a"), failed, line("b1", .activity, from: "b"), line("b2", .activity, from: "b")]
-        XCTAssertEqual(transcriptRows(messages, detail: .reduced, foldFailures: true).map(\.id), ["run.a1", "run.b1"])
-        XCTAssertEqual(transcriptRows(messages, detail: .reduced).map(\.id), ["a1", "a2", "run.b1"])
+        XCTAssertEqual(transcriptRows(messages, detail: .reduced, foldFailures: true).map(\.id), ["run.a2", "run.b2"])
+        XCTAssertEqual(transcriptRows(messages, detail: .reduced).map(\.id), ["a1", "a2", "run.b2"])
     }
 }

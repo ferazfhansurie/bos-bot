@@ -9,15 +9,16 @@ import { browserCommand } from "../../../electron/browser-keybindings.mjs";
 import { remoteBotHint } from "@/lib/remote-bot";
 import { terminalAvailable, sameTerminalTarget, type TerminalTarget } from "@/lib/terminal";
 import {
-  DETACHABLE, bottomVisible, closeTab as closeTabState, cycleLayout, focusTab as focusTabState, loadWorkspace, moveTab as moveTabState,
-  openTab as openTabState, rightVisible, saveWorkspace, setBottomOpen, setFilePath, setLayout, workspaceKey,
+  DETACHABLE, bottomVisible, closeTab as closeTabState, focusTab as focusTabState, loadWorkspace, moveTab as moveTabState,
+  openTab as openTabState, replaceTab as replaceTabState, rightVisible, saveWorkspace, setBottomOpen, setFilePath, setLayout, setTabTitle as setTabTitleState, workspaceKey,
   type ThreadWorkspace, type WorkspaceLayout, type WorkspacePane, type WorkspaceTab, type WorkspaceTabKind,
 } from "@/lib/thread-workspace";
+import { sendBrowserCommand } from "@/components/workbench/browser-tabs";
 import { WORKSPACE_COMMAND_EVENT, workspaceCommandForEvent, type WorkspaceCommandId } from "@/lib/workspace-commands";
-import { locatePath, type WorkspaceChanges } from "@/lib/workspace-files-client";
-import { useStore } from "@/state/store";
+import { locatePath, type WorkspaceChanges, type WorkspaceLocation } from "@/lib/workspace-files-client";
+import { api, useStore, type Bot } from "@/state/store";
 
-export interface OpenOptions { pane?: WorkspacePane; path?: string; fresh?: boolean }
+export interface OpenOptions { pane?: WorkspacePane; path?: string; fresh?: boolean; ref?: string; title?: string }
 
 interface WorkspaceValue {
   available: boolean;
@@ -34,20 +35,34 @@ interface WorkspaceValue {
   setLayout: (layout: WorkspaceLayout) => void;
   setBottomOpen: (open: boolean) => void;
   setTabPath: (id: string, path: string | undefined) => void;
+  setTabTitle: (id: string, title: string | undefined) => void;
+  setTabRef: (id: string, ref: string) => void;
+  /** Turn a tab into another kind in place (a new tab picking a tool). */
+  replaceTab: (id: string, kind: WorkspaceTabKind, options?: { ref?: string; title?: string; path?: string }) => void;
+  /** A new thread of the same bot, opened in a side chat tab (or in place of `replacing`). */
+  openSideChat: (replacing?: string) => Promise<void>;
   openFile: (path: string, threadId?: string) => Promise<boolean>;
+  /** Where a path the bot mentioned sits in its conversation's working folder; null when it is not inside it. */
+  locate: (path: string, threadId?: string) => Promise<(WorkspaceLocation & { target: TerminalTarget }) | null>;
   quickOpen: boolean;
   setQuickOpen: (open: boolean) => void;
   /** Whether the folder is a git repo, as the last changes fetch found it. */
   git: boolean | undefined;
   noteChanges: (changes: WorkspaceChanges) => void;
   browserAvailable: boolean;
+  /** A bot opened the browser for a thread that is not on screen: it stays
+   * mounted out of sight so the bot can work without taking over this one. */
+  browserInBackground: boolean;
+  /** The conversation whose bot drives a browser tab right now, if any. */
+  botBrowsing: { botId: string; threadId: string } | null;
 }
 
 const noop = () => {};
 const WorkspaceContext = createContext<WorkspaceValue>({
   available: false, target: null, workspace: { tabs: [], active: {}, layout: "hidden", bottomOpen: false }, show: noop, openTab: noop, closeTab: noop,
-  focusTab: noop, moveTab: noop, detach: noop, setLayout: noop, setBottomOpen: noop, setTabPath: noop, openFile: async () => false, quickOpen: false, setQuickOpen: noop,
-  git: undefined, noteChanges: noop, browserAvailable: false,
+  focusTab: noop, moveTab: noop, detach: noop, setLayout: noop, setBottomOpen: noop, setTabPath: noop, setTabTitle: noop, setTabRef: noop, replaceTab: noop,
+  openSideChat: async () => {}, openFile: async () => false, locate: async () => null, quickOpen: false, setQuickOpen: noop,
+  git: undefined, noteChanges: noop, browserAvailable: false, browserInBackground: false, botBrowsing: null,
 });
 
 export function useWorkspace(): WorkspaceValue {
@@ -57,7 +72,7 @@ export function useWorkspace(): WorkspaceValue {
 const isMac = () => /mac/i.test(globalThis.navigator?.platform ?? "") || globalThis.window?.ogb?.platform === "darwin";
 
 export function WorkspaceProvider({ children }: { children: ReactNode }) {
-  const { state } = useStore();
+  const { state, dispatch } = useStore();
   const available = terminalAvailable();
   const browserAvailable = Boolean(globalThis.window?.ogb?.primaryBrowser);
   // The selected conversation, when it is one this computer works in.
@@ -115,7 +130,8 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     const tab = workspaceRef.current.tabs.find((candidate) => candidate.id === id);
     if (!current || !tab) return;
     if (tab.kind === "terminal") closeTerminalSession(id, current);
-    else closed.current = [...closed.current, { key: workspaceKey(current.botId, current.threadId), tab }].slice(-20);
+    // a closed side chat is archived, so there is nothing to reopen
+    else if (tab.kind !== "sidechat") closed.current = [...closed.current, { key: workspaceKey(current.botId, current.threadId), tab }].slice(-20);
     update((state) => closeTabState(state, id).state);
   }, [update]);
 
@@ -124,6 +140,36 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   const setLayoutValue = useCallback((layout: WorkspaceLayout) => update((state) => setLayout(state, layout)), [update]);
   const setBottom = useCallback((open: boolean) => update((state) => setBottomOpen(state, open)), [update]);
   const setTabPath = useCallback((id: string, path: string | undefined) => update((state) => setFilePath(state, id, path)), [update]);
+  const setTabTitle = useCallback((id: string, title: string | undefined) => update((state) => setTabTitleState(state, id, title)), [update]);
+  const setTabRef = useCallback((id: string, ref: string) => update((state) => ({ ...state, tabs: state.tabs.map((tab) => (tab.id === id ? { ...tab, ref } : tab)) })), [update]);
+  const replaceTab = useCallback((id: string, kind: WorkspaceTabKind, options: { ref?: string; title?: string; path?: string } = {}) => {
+    update((current) => {
+      const result = replaceTabState(current, id, kind, options);
+      if (kind === "terminal") markTerminalStarted(result.id);
+      return result.state;
+    });
+  }, [update]);
+
+  // The side chat is a real thread of this bot, created without switching
+  // the conversation on screen (activate:false); closing it archives it.
+  const openSideChat = useCallback(async (replacing?: string) => {
+    const current = targetRef.current;
+    if (!current) return;
+    const count = workspaceRef.current.tabs.filter((tab) => tab.kind === "sidechat").length;
+    const title = count ? `Side chat ${count + 1}` : "Side chat";
+    try {
+      const { bot, task } = await api<{ bot: Bot; task: { threadId: string } }>(`/api/bots/${current.botId}/tasks`, {
+        method: "POST", body: JSON.stringify({ activate: false, title }),
+      });
+      dispatch({ type: "botPatched", bot });
+      if (!sameTerminalTarget(targetRef.current, current)) return;
+      if (replacing) replaceTab(replacing, "sidechat", { ref: task.threadId, title });
+      else openTab("sidechat", { pane: "right", ref: task.threadId, title });
+      update((state) => (state.layout === "hidden" ? setLayout(state, "split") : state));
+    } catch (error) {
+      dispatch({ type: "error", message: error instanceof Error ? error.message : String(error) });
+    }
+  }, [dispatch, openTab, replaceTab, update]);
 
   const detach = useCallback((id: string) => {
     const current = targetRef.current;
@@ -145,28 +191,36 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
 
   const stateRef = useRef(state);
   stateRef.current = state;
+  /** The conversation a thread id belongs to, when this computer works in it. */
+  const targetFor = useCallback((threadId?: string): TerminalTarget | null => {
+    const current = targetRef.current;
+    if (!threadId || threadId === current?.threadId) return current;
+    const { bots, groups } = stateRef.current;
+    const group = groups.find((candidate) => candidate.threadId === threadId);
+    const bot = group ? undefined : bots.find((candidate) => candidate.threadId === threadId || candidate.tasks?.some((task) => task.threadId === threadId));
+    return group && !group.dm ? { botId: group.id, threadId, name: group.name }
+      : bot && !remoteBotHint(bot) ? { botId: bot.id, threadId, name: bot.name } : null;
+  }, []);
+
+  const locate = useCallback(async (path: string, threadId?: string) => {
+    const where = targetFor(threadId);
+    if (!available || !where) return null;
+    try { return { ...(await locatePath(where, path)), target: where }; } catch { return null; }
+  }, [available, targetFor]);
+
   /** A path the bot mentioned: show it in the files tab of the conversation
    * it was mentioned in. False when it is not inside that working folder. */
   const openFile = useCallback(async (path: string, threadId?: string): Promise<boolean> => {
-    const current = targetRef.current;
-    let where: TerminalTarget | null = current;
-    if (threadId && threadId !== current?.threadId) {
-      const { bots, groups } = stateRef.current;
-      const group = groups.find((candidate) => candidate.threadId === threadId);
-      const bot = group ? undefined : bots.find((candidate) => candidate.threadId === threadId || candidate.tasks?.some((task) => task.threadId === threadId));
-      where = group && !group.dm ? { botId: group.id, threadId, name: group.name }
-        : bot && !remoteBotHint(bot) ? { botId: bot.id, threadId, name: bot.name } : null;
-    }
-    if (!available || !where) return false;
-    let location;
-    try { location = await locatePath(where, path); } catch { return false; }
+    const location = await locate(path, threadId);
+    if (!location) return false;
+    const where = location.target;
     if (!sameTerminalTarget(where, targetRef.current)) {
       setOverride(where);
       targetRef.current = where;
     }
     openTab("files", location.kind === "file" ? { path: location.path } : {});
     return true;
-  }, [available, openTab]);
+  }, [locate, openTab]);
 
   const noteChanges = useCallback((changes: WorkspaceChanges) => {
     const current = targetRef.current;
@@ -187,8 +241,16 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       else openTab(kind);
     };
     if (command === "workspace-layout") {
-      if (!current.tabs.some((tab) => tab.pane === "right")) openTab(browserAvailable ? "browser" : "files");
-      else update(cycleLayout);
+      // "Hide tabs": the panel goes away and comes back as it was
+      if (!current.tabs.some((tab) => tab.pane === "right")) openTab(browserAvailable ? "browser" : "newtab");
+      else setLayoutValue(rightVisible(current) ? "hidden" : "split");
+    } else if (command === "workspace-full") {
+      if (!current.tabs.some((tab) => tab.pane === "right")) { openTab(browserAvailable ? "browser" : "newtab"); setLayoutValue("full"); }
+      else setLayoutValue(current.layout === "full" ? "split" : "full");
+    } else if (command === "workspace-sidechat") void openSideChat();
+    else if (command === "workspace-new-tab") {
+      if (browserAvailable) { openTab("browser"); sendBrowserCommand({ op: "new", reuseBlank: !current.tabs.some(tab => tab.kind === "browser") }); }
+      else openTab("newtab", { pane: "right" });
     } else if (command === "workspace-terminal") toggle("terminal");
     else if (command === "workspace-bottom") {
       if (current.tabs.some((tab) => tab.pane === "bottom")) setBottom(!current.bottomOpen);
@@ -203,10 +265,10 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       if (index < 0) return;
       const { tab } = closed.current[index]!;
       closed.current = closed.current.filter((_, at) => at !== index);
-      openTab(tab.kind, { pane: tab.pane, path: tab.path });
+      openTab(tab.kind, { pane: tab.pane, path: tab.path, ref: tab.ref, title: tab.title });
     } else if (command === "workspace-changes") openTab("changes");
     else if (command === "workspace-browser") { if (browserAvailable) openTab("browser"); }
-  }, [browserAvailable, openTab, setBottom, setLayoutValue, update]);
+  }, [browserAvailable, openTab, openSideChat, setBottom, setLayoutValue]);
 
   useEffect(() => {
     if (!available) return;
@@ -230,20 +292,38 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     };
   }, [available, run]);
 
-  // a link opened from another app shows the browser tab
+  // a link opened from another app shows the browser tab; a bot's reveal
+  // shows it only in that bot's thread and opens it out of sight elsewhere
+  const [browserInBackground, setBrowserInBackground] = useState(false);
   useEffect(() => {
     const bridge = window.ogb?.primaryBrowser;
     if (!available || !bridge) return;
-    const showBrowser = () => { if (targetRef.current) openTab("browser"); };
+    const showBrowser = (origin?: { threadId?: string }) => {
+      if (origin?.threadId && origin.threadId !== targetRef.current?.threadId) setBrowserInBackground(true);
+      else if (targetRef.current) openTab("browser");
+    };
     const stop = bridge.onExternalURL(showBrowser);
     // a link that arrived before a local conversation was open waits for one
-    if (targetRef.current) void bridge.action("consume-external-link").then((pending) => { if (pending) showBrowser(); }).catch(() => {});
+    if (targetRef.current) void bridge.action("consume-external-link").then((pending) => { if (pending) showBrowser(typeof pending === "object" ? pending : undefined); }).catch(() => {});
     return stop;
   }, [available, openTab, primaryKey]);
+  const [botBrowsing, setBotBrowsing] = useState<{ botId: string; threadId: string } | null>(null);
+  useEffect(() => window.ogb?.primaryBrowser?.onAgentState((state) => {
+    const holder = Object.values(state.tabs ?? {}).find((tab) => tab.mode === "bot" && tab.botId && tab.threadId);
+    setBotBrowsing((current) => holder ? (current && current.threadId === holder.threadId && current.botId === holder.botId ? current : { botId: holder.botId!, threadId: holder.threadId! }) : null);
+    if (holder) setBrowserInBackground(false);
+  }), []);
+  // going to the thread a bot is browsing for shows its browser there
+  const botBrowsingRef = useRef(botBrowsing);
+  botBrowsingRef.current = botBrowsing;
+  useEffect(() => {
+    const current = targetRef.current;
+    if (browserAvailable && current && botBrowsingRef.current?.threadId === current.threadId) openTab("browser");
+  }, [browserAvailable, openTab, primaryKey]);
 
   const value = useMemo<WorkspaceValue>(() => ({
     available, target, workspace, show, openTab, closeTab, focusTab, moveTab, detach, setLayout: setLayoutValue, setBottomOpen: setBottom,
-    setTabPath, openFile, quickOpen, setQuickOpen, git, noteChanges, browserAvailable,
-  }), [available, target, workspace, show, openTab, closeTab, focusTab, moveTab, detach, setLayoutValue, setBottom, setTabPath, openFile, quickOpen, git, noteChanges, browserAvailable]);
+    setTabPath, setTabTitle, setTabRef, replaceTab, openSideChat, openFile, locate, quickOpen, setQuickOpen, git, noteChanges, browserAvailable, browserInBackground, botBrowsing,
+  }), [available, target, workspace, show, openTab, closeTab, focusTab, moveTab, detach, setLayoutValue, setBottom, setTabPath, setTabTitle, setTabRef, replaceTab, openSideChat, openFile, locate, quickOpen, git, noteChanges, browserAvailable, browserInBackground, botBrowsing]);
   return <WorkspaceContext.Provider value={value}>{children}</WorkspaceContext.Provider>;
 }

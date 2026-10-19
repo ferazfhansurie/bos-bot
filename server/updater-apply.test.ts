@@ -141,6 +141,21 @@ describe.skipIf(!hasPython)("detached updater script (sandboxed swap)", () => {
     expect((await health(port))!.pid).toBe(fresh.pid);
   }, 90_000);
 
+  it("follows the relaunched app to another port of its family", async () => {
+    // 2026-10-17: the old app sat on 18799 because 8799 was taken when it
+    // started; the relaunch got 8799 and a healthy update was rolled back.
+    const staged = fakeApp(join(root, "staged"), "BOS Bot.app", "new");
+    const moved = await freePort();
+    try {
+      plan({ staged, serverPorts: [port, moved], launch: ["{app}/Contents/MacOS/BOS Bot", String(moved)] });
+      const { code } = await runScript(dir);
+      expect(code).toBe(0);
+      expect(result()).toMatchObject({ state: "done", version: "0.1.86" });
+      expect(stampOf(live)).toBe("// new");
+      expect((await waitHealthy(moved)).app).toBe("openmausbot");
+    } finally { await killPort(moved); }
+  }, 90_000);
+
   it("rolls back to the old bundle when the new one never becomes healthy", async () => {
     const staged = fakeApp(join(root, "staged"), "BOS Bot.app", "broken", BROKEN_BINARY);
     const p = plan({ staged, healthSeconds: 4 });

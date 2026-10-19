@@ -2,7 +2,8 @@
 """read-only preflight for the bos updater. prints json; never unloads, kills or restarts."""
 import json, os, plistlib, re, subprocess, urllib.request
 
-PAT = re.compile(r"bos|openmausbot", re.I)
+PAT = re.compile(r"bos|maus", re.I)
+INSTALL_JOB = re.compile(r"install|updat|restart|keepalive|relaunch|steer", re.I)
 MAIN = "/Contents/MacOS/BOS Bot"
 # server moved 8799 -> 18799 (seen 2026-10-07, see bin/bos-restart-guard.py); probe both
 HEALTH_PORTS = (18799, 8799)
@@ -41,11 +42,14 @@ def launchd():
              "run_at_load": bool(pl.get("RunAtLoad", False)),
              "last_exit": int(last) if last else (None if p[1] == "-" else int(p[1])),
              "runs": int(g(r"runs = (\d+)") or 0), "program": g(r"\n\tprogram = (.+)"), "plist": path}
+        # Match the updater's classifyLaunchdJobs: branded services such as
+        # com.bosweb.waforward are not installers merely because they run.
+        installer = bool(INSTALL_JOB.search(label))
         # blocks the updater only if it's live or would come back by itself
         # the app's own launchservices job (application.*) is the app itself, not an orphan
         app_self = label.startswith("application.")
-        j["blocking"] = bool((pid or keepalive) and not app_self)
-        j["reason"] = ("app itself" if app_self else "running" if pid else
+        j["blocking"] = bool(installer and (pid or keepalive) and not app_self)
+        j["reason"] = ("app itself" if app_self else "unrelated service (report only)" if not installer else "running" if pid else
                        "keepalive" if keepalive else "idle one-shot (report only)")
         jobs.append(j)
     return jobs
@@ -91,19 +95,24 @@ def procs():
         rows.append({"pid": pid, "ppid": ppid, "kind": kind, "args": args[:200]})
     return rows
 
-jobs, ps, h = launchd(), procs(), health()
-mains = [p for p in ps if p["kind"] == "main"]
-hpid = h.get("body", {}).get("pid") if isinstance(h.get("body"), dict) else None
-server = next((p for p in ps if p["pid"] == hpid), None)
-res = {"health": h, "processes": ps, "ports": ports(), "launchd": jobs}
-res["checks"] = {
-    "health_ok": h.get("status") == 200 and isinstance(h.get("body"), dict) and h["body"].get("app") == "openmausbot",
-    "health_pid_is_server": bool(server and server["kind"] == "utility_node" and mains and server["ppid"] == mains[0]["pid"]),
-    "single_main_app": len(mains) == 1,
-    "blocking_jobs": [j["label"] for j in jobs if j["blocking"]],
-    "idle_jobs": [j["label"] for j in jobs if not j["blocking"]],
-}
-c = res["checks"]
-res["ok"] = c["health_ok"] and c["health_pid_is_server"] and c["single_main_app"] and not c["blocking_jobs"]
-print(json.dumps(res, indent=2))
+def main():
+    jobs, ps, h = launchd(), procs(), health()
+    mains = [p for p in ps if p["kind"] == "main"]
+    hpid = h.get("body", {}).get("pid") if isinstance(h.get("body"), dict) else None
+    server = next((p for p in ps if p["pid"] == hpid), None)
+    res = {"health": h, "processes": ps, "ports": ports(), "launchd": jobs}
+    res["checks"] = {
+        "health_ok": h.get("status") == 200 and isinstance(h.get("body"), dict) and h["body"].get("app") == "openmausbot",
+        "health_pid_is_server": bool(server and server["kind"] == "utility_node" and mains and server["ppid"] == mains[0]["pid"]),
+        "single_main_app": len(mains) == 1,
+        "blocking_jobs": [j["label"] for j in jobs if j["blocking"]],
+        "idle_jobs": [j["label"] for j in jobs if not j["blocking"]],
+    }
+    c = res["checks"]
+    res["ok"] = c["health_ok"] and c["health_pid_is_server"] and c["single_main_app"] and not c["blocking_jobs"]
+    print(json.dumps(res, indent=2))
+
+if __name__ == "__main__":
+    main()
+
 # branding compatibility (electron/branding-compat.json): health: legacy app health identity is checked by old clients and updater preflight; installer-preflight: restart preflight must still recognize old server processes

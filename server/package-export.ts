@@ -143,6 +143,7 @@ export function createBotPackageExport(input: {
           : { type: "daily", time: routine.schedule.time, weekdays: [...routine.schedule.weekdays] },
       durationMinutes: routine.durationMinutes,
       ...(routine.timeoutMinutes === undefined ? {} : { timeoutMinutes: routine.timeoutMinutes }),
+      ...(routine.notificationPolicy ? { notificationPolicy: routine.notificationPolicy } : {}),
       ...(routine.overlap === "queue" ? { overlap: "queue" as const } : {}),
       enabledAfterInstall: false as const,
     }];
@@ -178,7 +179,11 @@ export function createBotPackageExport(input: {
     license: "Unspecified",
     outcomes: ["Recreate this bot setup without copying private runtime state."],
     setupMinutes: Math.min(240, Math.max(2, bots.length + requirements.size * 2)),
-    requirements: { apps: [...requirements.values()], capabilities: [] },
+    requirements: {
+      apps: [...requirements.values()],
+      capabilities: [...new Set(bots.flatMap(bot => bot.installedPackage?.requiredCapabilities ?? []))],
+      tools: [...new Map(bots.flatMap(bot => bot.installedPackage?.requiredTools ?? []).map(tool => [`${tool.kind}:${tool.slug}`, { ...tool }])).values()],
+    },
     agents,
   };
   const chief = bots.find((bot) => bot.chiefOfStaff);

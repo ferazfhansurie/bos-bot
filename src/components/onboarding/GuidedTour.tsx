@@ -5,11 +5,11 @@
 // Clicking the pointed-at control counts as Next too. Every advance is
 // written to the server's hint list first, so a reload lands on the same
 // step.
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ANCHOR_EFFECTS, currentStep, stepNumber, TOUR_STEPS, withTourFinished, type TourEffect, type TourStep } from "@/lib/guided-tour";
 import { t } from "@/lib/i18n";
 import type { MausState } from "@/lib/mascot";
-import { hintSeenPatch } from "@/lib/onboarding";
+import { chatOnboardingOpen, hintSeenPatch } from "@/lib/onboarding";
 import type { LocaleKey } from "@/locales";
 import { api, useStore, useStreaming } from "@/state/store";
 import { Spotlight } from "./Spotlight";
@@ -48,13 +48,23 @@ function press(anchor: string): boolean {
 
 export function GuidedTour() {
   const { state, dispatch } = useStore();
-  const record = state.config?.onboarding;
+  // a hosted bos runs the tour before the sign-in, often while its computer
+  // is still waking: steps it passes are kept here so the tour moves on at once
+  // instead of waiting for a computer that can't save them yet
+  const [passed, setPassed] = useState<string[]>([]);
+  const serverRecord = state.config?.onboarding;
+  const record = useMemo(
+    () => (serverRecord && passed.length ? { ...serverRecord, hintsSeen: [...new Set([...serverRecord.hintsSeen, ...passed])] } : serverRecord),
+    [serverRecord, passed],
+  );
   const step = currentStep(record);
   const saving = useRef(false);
   const pending = useRef<Promise<unknown>>(Promise.resolve());
   const latestRecord = useRef(record);
   latestRecord.current = record;
   const closed = useRef(false);
+  // the tour started while a hosted computer was waking; it stays in that mode once begun
+  const early = useRef(false);
   const [dismissed, setDismissed] = useState(false);
   const [failed, setFailed] = useState(false);
   const entered = useRef<string | null>(null);
@@ -109,7 +119,8 @@ export function GuidedTour() {
           ? { onboarding: { hintsSeen: withTourFinished(latestRecord.current) } }
           : id ? hintSeenPatch(latestRecord.current, id) : null;
         if (!patch) return;
-        const config = await api("/api/config", { method: "PUT", body: JSON.stringify(patch), signal: AbortSignal.timeout(10_000) });
+        // a waking computer answers once it is up, inside about a minute
+        const config = await api("/api/config", { method: "PUT", body: JSON.stringify(patch), signal: AbortSignal.timeout(early.current ? 90_000 : 10_000) });
         latestRecord.current = config.onboarding;
         dispatch({ type: "configStatus", config });
       });
@@ -122,6 +133,12 @@ export function GuidedTour() {
   const advance = useCallback(
     (fromAnchor = false) => {
       if (!step || saving.current || closed.current) return;
+      if (early.current) {
+        setPassed((ids) => [...ids, step.id]);
+        void save(false, step.id).catch(() => {});
+        if (!(fromAnchor && step.onExit && ANCHOR_EFFECTS.has(step.onExit))) run(step.onExit);
+        return;
+      }
       saving.current = true;
       setFailed(false);
       void save(false, step.id).then(() => {
@@ -150,7 +167,11 @@ export function GuidedTour() {
   // covers a card the person has to answer or presses controls mid-turn
   const { streaming } = useStreaming();
   const bot = state.bots.find((b) => b.id === state.selectedId) ?? null;
-  const held = Boolean(bot?.busy) || Boolean(bot && streaming[bot.threadId]) ||
+  // a hosted bos is the exception: its sign-in waits on a computer that is
+  // often still waking, so the tour runs first and the sign-in follows it
+  const signInWait = record?.chat?.step === "engine" && !record.chat.engineReady;
+  if (signInWait && state.hostedSignIn) early.current = true;
+  const held = (chatOnboardingOpen(record) && !early.current) || Boolean(bot?.busy) || Boolean(bot && streaming[bot.threadId]) ||
     Boolean(bot?.messages.some((m) => m.kind === "options" && m.card?.requestId && !m.card.answered && !m.card.dismissed));
   const quietMarketer = record?.marketerAssignment?.botId === state.selectedId && !state.tourOpen;
   const active = !quietMarketer && !dismissed && Boolean(record?.completedAt) && !state.welcomeOpen && step !== null && !held;

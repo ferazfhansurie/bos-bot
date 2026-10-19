@@ -26,7 +26,7 @@ function atomic(file, data) {
   const tmp = `${file}.${randomUUID()}.tmp`;
   try { fs.writeFileSync(tmp, data, { mode: 0o600 }); fs.renameSync(tmp, file); } finally { fs.rmSync(tmp, { force: true }); }
 }
-const empty = () => ({ tabs: [], active: '', bookmarks: [], history: [], downloads: [], permissions: {}, imports: [] });
+const empty = () => ({ tabs: [], active: '', bookmarks: [], history: [], downloads: [], permissions: {}, agentRules: {}, imports: [] });
 export function createPrimaryBrowserStore(root) {
   const indexFile = path.join(root, 'profiles.json');
   let index;
@@ -52,6 +52,22 @@ export function createPrimaryBrowserStore(root) {
       const p = { id: randomUUID(), name }; index.profiles.push(p); atomic(indexFile, JSON.stringify(index)); return p;
     },
     select(id) { fileFor(id); index.selected = id; atomic(indexFile, JSON.stringify(index)); },
+    rename(id, name) {
+      fileFor(id); name = text(name, 60).trim(); if (!name) throw new Error('Name your profile');
+      const p = index.profiles.find(p => p.id === id); p.name = name; atomic(indexFile, JSON.stringify(index)); return { ...p };
+    },
+    /** Drops a profile and its library file; the last profile always stays.
+     * Deleting the selected one selects the next remaining profile. */
+    remove(id) {
+      const file = fileFor(id);
+      if (index.profiles.length <= 1) throw new Error('Keep at least one browser profile');
+      const at = index.profiles.findIndex(p => p.id === id);
+      index.profiles.splice(at, 1);
+      if (index.selected === id) index.selected = index.profiles[Math.min(at, index.profiles.length - 1)].id;
+      atomic(indexFile, JSON.stringify(index));
+      fs.rmSync(file, { force: true });
+      return structuredClone(index);
+    },
     read, fileFor,
     saveTabs(id, state) { const tabs = cleanTabs(state); mutate(id, d => Object.assign(d, tabs)); },
     visit(id, url, title) {
@@ -69,6 +85,16 @@ export function createPrimaryBrowserStore(root) {
       mutate(id, d => { d.permissions[`${new URL(url).origin}|${permission}`] = allowed === true; });
     },
     clearPermissions(id) { mutate(id, d => { d.permissions = {}; }); },
+    agentRule(id, origin, rule) {
+      origin = agentSiteOrigin(origin);
+      const clean = rule === null ? null : cleanAgentRule(rule);
+      mutate(id, d => {
+        if (!d.agentRules || typeof d.agentRules !== 'object') throw new Error('Site permissions are not readable');
+        if (clean === null) delete d.agentRules[origin]; else d.agentRules[origin] = clean;
+      });
+    },
+    /** true: bots with Full access still get the per-site prompts. */
+    agentAskFullAccess(id, ask) { mutate(id, d => { if (ask === true) d.agentAskFullAccess = true; else delete d.agentAskFullAccess; }); },
     download(id, row) { mutate(id, d => { d.downloads = [{ ...row }, ...d.downloads.filter(x => x.id !== row.id)].slice(0, 200); }); },
     import(id, preview, categories) {
       if (!Array.isArray(categories) || !categories.length || categories.some(c => !['bookmarks', 'history', 'tabs'].includes(c))) throw new Error('Choose bookmarks or history');
@@ -153,9 +179,16 @@ export function createBrowserVault(root, encryption) {
   const available = () => { if (!encryption.isEncryptionAvailable() || encryption.getSelectedStorageBackend?.() === 'basic_text') throw new Error('Secure password storage is unavailable. Unlock your system keychain and retry.'); };
   const read = id => { available(); const file = fileFor(id); return fs.existsSync(file) ? JSON.parse(encryption.decryptString(fs.readFileSync(file))) : []; };
   return {
-    summary(id) { return read(id).map(({ id, origin, username }) => ({ id, origin, username })); },
+    summary(id) { return read(id).map(({ id, origin, username, botSignIn }) => ({ id, origin, username, botSignIn: botSignIn !== false })); },
     import(id, records) { const rows = read(id); let added = 0; for (const r of records) { const origin = webURL(r.origin); if (!origin || new URL(origin).origin !== r.origin || typeof r.password !== 'string' || !r.password || r.password.length > 8192 || typeof r.username !== 'string') continue; const old = rows.find(x => x.origin === r.origin && x.username === r.username); if (old) { old.password = r.password; } else { rows.push({ origin: r.origin, username: r.username.slice(0, 8192), password: r.password, id: randomUUID() }); added++; } } atomic(fileFor(id), encryption.encryptString(JSON.stringify(rows))); return added; },
     credential(id, credentialId, origin) { const row = read(id).find(r => r.id === credentialId && r.origin === origin); if (!row) throw new Error('Password does not match this site'); return row; },
+    // Saved logins are open to bots unless the person switched one off; the app
+    // fills it, the bot never reads it.
+    setBotSignIn(id, credentialId, allowed) { const rows = read(id); const row = rows.find(r => r.id === credentialId); if (!row) throw new Error('Saved password not found'); row.botSignIn = allowed !== false; atomic(fileFor(id), encryption.encryptString(JSON.stringify(rows))); return row.botSignIn; },
+    botCredential(id, origin, username) { const rows = read(id).filter(r => r.origin === origin && r.botSignIn !== false && (typeof username !== 'string' || !username || r.username === username)); if (rows.length !== 1) throw new Error(rows.length ? 'More than one saved login on this site allows bots: pass username.' : 'No saved login for this site. Ask the person to save it once in the BOS browser (sign in, then Passwords → Save), or to sign in themselves.'); return rows[0]; },
     remove(id, credentialId) { const rows = read(id).filter(r => r.id !== credentialId); atomic(fileFor(id), encryption.encryptString(JSON.stringify(rows))); },
+    /** The whole vault of a deleted profile; needs no keychain. */
+    destroy(id) { fs.rmSync(fileFor(id), { force: true }); },
   };
 }
+import { agentSiteOrigin, cleanAgentRule } from './browser-agent-policy.mjs';

@@ -16,6 +16,12 @@ export const CREDENTIAL_TARGETS = {
     placeholder: "Paste your Box API key",
     helpUrl: "https://docs.ascii.dev/box/api-keys",
   },
+  boxComputeApiKey: {
+    label: "BoxCompute API key",
+    description: "Gives each bot its own cloud sandbox for running code, hosted in Malaysia.",
+    placeholder: "bc_live_…",
+    helpUrl: "https://app.boxcompute.ai/api-keys",
+  },
   opencodeGoApiKey: {
     label: "OpenCode API key",
     description: "Used for OpenCode Go and other key-backed OpenCode providers.",
@@ -46,6 +52,7 @@ export type CredentialTargetId = keyof typeof CREDENTIAL_TARGETS;
 export type CredentialConfig = {
   xai?: { key?: string };
   box?: { token?: string };
+  boxCompute?: { token?: string };
   opencodeGo?: { apiKey?: string };
   tts?: { key?: string; fishKey?: string };
   imageGen?: { key?: string };
@@ -61,6 +68,8 @@ export function credentialConfigPatch(id: CredentialTargetId, value: string): Cr
       return { xai: { key: value } };
     case "boxToken":
       return { box: { token: value } };
+    case "boxComputeApiKey":
+      return { boxCompute: { token: value } };
     case "opencodeGoApiKey":
       return { opencodeGo: { apiKey: value } };
     case "ttsKey":
@@ -78,6 +87,8 @@ export function credentialIsConfigured(config: CredentialConfig, id: CredentialT
       return Boolean(config.xai?.key);
     case "boxToken":
       return Boolean(config.box?.token);
+    case "boxComputeApiKey":
+      return Boolean(config.boxCompute?.token);
     case "opencodeGoApiKey":
       return Boolean(config.opencodeGo?.apiKey);
     case "ttsKey":

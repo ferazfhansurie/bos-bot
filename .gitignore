@@ -41,3 +41,6 @@ deploy/podman/.env
 deploy/podman/.env.*
 !deploy/podman/.env.example
 /.env
+
+# per-client provision files are staged here only during bin/enterprise-client-build.sh
+.enterprise-build/

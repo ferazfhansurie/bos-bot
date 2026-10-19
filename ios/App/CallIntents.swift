@@ -18,6 +18,7 @@ final class CallIntentRouter {
 
     private weak var session: Session?
     private var pending: (botId: String?, name: String?)?
+    private var pendingRequest: RequestContinuation?
     private var pendingThread: (botId: String, threadId: String)?
     private var rosterWatch: AnyCancellable?
 
@@ -39,6 +40,10 @@ final class CallIntentRouter {
                 guard BotDirectory.save(entries) || rendered else { return }
                 BosShortcuts.updateAppShortcutParameters()
             }
+        if let pendingRequest {
+            self.pendingRequest = nil
+            Task { await session.openRequestLink(pendingRequest) }
+        }
         if let pendingThread {
             self.pendingThread = nil
             Task { await session.openThreadLink(botId: pendingThread.botId, threadId: pendingThread.threadId) }
@@ -64,6 +69,11 @@ final class CallIntentRouter {
         let items = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []
         let value = { (key: String) in items.first { $0.name == key }?.value }
         switch url.host?.lowercased() {
+        case "request":
+            guard let link = RequestContinuation(url: url) else { return true }
+            if let session { Task { await session.openRequestLink(link) } }
+            else { pendingRequest = link }
+            return true
         case "call":
             guard let bot = value("bot"), !bot.isEmpty else { return true }
             call(botId: bot, name: bot)

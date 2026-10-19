@@ -12,14 +12,10 @@ import { assertQueueAttachmentsUnchanged } from "./queue-edit.ts";
 // whose dispatch has not begun. The composer shows a pending chip
 // until drain appends the words.
 //
-// Unlike the delegation drain, an interrupted or failed turn does NOT
-// discard this queue: delegations are a bot's fan-out (dropping them on
-// Stop is a safety property), but these are the user's own words —
-// stop-then-steer (queue a correction, hit Stop, the correction runs) is
-// the feature.
+// Stop preserves the words and pauses their durable queue until explicit resume.
 
 import { newId } from "./contracts.ts";
-import { chatFollowups, editChatFollowup, reorderChatFollowups, saveChatFollowup, settleChatFollowups } from "./message-db.ts";
+import { chatQueuePaused, setChatQueuePaused, chatFollowups, editChatFollowup, reorderChatFollowups, saveChatFollowup, settleChatFollowups } from "./message-db.ts";
 import type { BotRecord, Message } from "./store.ts";
 
 /** The slice of Store this module needs — narrow so tests can fake it. */
@@ -55,6 +51,7 @@ const queues = new Map<string, QueueEntry>(); // threadId → waiting sends
 
 /** A thread's queue lifted out of the map while a live steer is attempted. */
 export interface HeldSteerQueue {
+  originalOrder?: string[];
   botId: string;
   threadId: string;
   items: QueueEntry["items"];
@@ -80,11 +77,11 @@ const changed = () => {
 
 /** Public pending chips only: never expose provider prompts or reply context. */
 export function queuedSteerSnapshot(ownsThread: (botId: string, threadId: string) => boolean):
-  Record<string, Array<{ queueId: string; text: string; reason?: "capacity" }>> {
+  Record<string, Array<{ queueId: string; text: string; paused?: boolean; reason?: "capacity" }>> {
   return Object.fromEntries([...queues]
     .filter(([threadId, entry]) => ownsThread(entry.botId, threadId))
     .map(([threadId, entry]) => [threadId, entry.items.map((item) => ({
-      queueId: item.messageId, text: item.text, ...(item.reason ? { reason: item.reason } : {}),
+      queueId: item.messageId, text: item.text, ...(chatQueuePaused("bot", entry.botId, threadId) ? { paused: true } : {}), ...(item.reason ? { reason: item.reason } : {}),
     }))]));
 }
 
@@ -227,7 +224,7 @@ export function drainSteeredMessages(
       changed();
       continue;
     }
-    if (bot.busy || isBlocked?.(entry.botId, threadId)) continue;
+    if (chatQueuePaused("bot", entry.botId, threadId) || bot.busy || isBlocked?.(entry.botId, threadId)) continue;
     // committed to draining: the entry leaves the map before anything runs,
     // so a settle racing another settle can never fire the same queue twice
     const ids = entry.items.map((item) => item.messageId);
@@ -309,12 +306,15 @@ export function cancelSteeredMessage(botId: string, messageId: string, expectedT
  * The entry leaves first so a settle that starts draining while the adapter
  * is still thinking can never also dispatch the same words as a follow-up
  * turn. The caller must either restore the held queue or settle its rows. */
-export function holdSteeredQueue(botId: string, threadId: string, queueId: string): HeldSteerQueue | null {
+export function holdSteeredQueue(botId: string, threadId: string, queueId: string, onlyThis = false): HeldSteerQueue | null {
   const entry = queues.get(threadId);
   if (!entry || entry.botId !== botId || !entry.items.some((item) => item.messageId === queueId)) return null;
-  queues.delete(threadId);
+  const items = onlyThis ? entry.items.filter(item => item.messageId === queueId) : entry.items;
+  const rest = entry.items.filter(item => !items.includes(item));
+  if (rest.length) queues.set(threadId, { botId, items: rest });
+  else queues.delete(threadId);
   changed();
-  return { botId, threadId, items: entry.items };
+  return { botId, threadId, items, ...(onlyThis ? { originalOrder: entry.items.map(item => item.messageId) } : {}) };
 }
 
 /** Put a held queue back after the steer was refused. Words queued while the
@@ -322,9 +322,14 @@ export function holdSteeredQueue(botId: string, threadId: string, queueId: strin
 export function restoreHeldSteeredQueue(held: HeldSteerQueue): void {
   const existing = queues.get(held.threadId);
   if (existing && existing.botId !== held.botId) throw new Error("queued task belongs to another bot");
+  const items = existing ? [...held.items, ...existing.items] : held.items;
+  if (held.originalOrder) {
+    const order = new Map(held.originalOrder.map((id, i) => [id, i]));
+    items.sort((a, b) => (order.get(a.messageId) ?? Infinity) - (order.get(b.messageId) ?? Infinity));
+  }
   queues.set(held.threadId, {
     botId: held.botId,
-    items: existing ? [...held.items, ...existing.items] : held.items,
+    items,
   });
   changed();
 }
@@ -343,5 +348,10 @@ export function _queuedCount(threadId: string): number {
 /** Default queued sends never enter a running provider at a tool boundary. */
 export function steerQueueWaitsForTurn(botId: string, threadId: string): boolean {
   const entry = queues.get(threadId);
-  return entry?.botId === botId && entry.items[0]?.deferUntilIdle === true;
+  return chatQueuePaused("bot", botId, threadId) || (entry?.botId === botId && entry.items[0]?.deferUntilIdle === true);
+}
+
+export function setSteeredQueuePaused(botId: string, threadId: string, paused: boolean): void {
+  setChatQueuePaused("bot", botId, threadId, paused);
+  changed();
 }

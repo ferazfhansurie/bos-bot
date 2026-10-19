@@ -59,6 +59,7 @@ export interface RoutineRequestDefinition {
   /** Carry the previous run's report into the next run. */
   continuity?: boolean;
   /** Skip by default, or keep at most one scheduled run waiting. */
+  notificationPolicy?: "all" | "important" | "failures";
   overlap?: "skip" | "queue";
 }
 

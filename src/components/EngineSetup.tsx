@@ -332,7 +332,7 @@ function ManagedEngineSetup({ instance, signInOnly }: { instance: InstanceInfo; 
           {busy === "install" ? t("engineSetup.installing") : managed.label}
         </button>
         <p className="mt-1.5 text-center text-[11px] text-ink-secondary/70">
-          {t("engineSetup.downloadNote", { mb: Math.ceil(managed.downloadBytes / 1024 / 1024) })}
+          {t(managed.vendor === "openai" ? "engineSetup.downloadNoteGithub" : "engineSetup.downloadNote", { mb: Math.ceil(managed.downloadBytes / 1024 / 1024) })}
         </p>
         {error && <p className="mt-2 text-[11.5px] text-danger">{error}</p>}
       </div>
@@ -421,7 +421,8 @@ export function EngineSetup({
       : install?.server
         ? t("engineSetup.serverInstallDesc")
       : install?.managed
-        ? t("engineSetup.managedDesc")
+        ? install.managed.vendor === "openai" ? t("engineSetup.managedCodexDesc")
+          : install.managed.vendor === "anthropic" ? t("engineSetup.managedClaudeDesc") : t("engineSetup.managedDesc")
       : signInCommand
         ? t("engineSetup.installDescSignIn")
         : t("engineSetup.installDesc");

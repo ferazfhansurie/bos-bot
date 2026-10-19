@@ -284,4 +284,43 @@ process.exit(0);
     expect((await registry.describe())[0].install?.server).toBeUndefined();
     expect(existsSync(join(scratch, "data"))).toBe(false);
   });
+
+  it("falls back to an app-managed runtime only when npm is absent", async () => {
+    withFakeNpm(true);
+    const fake = makeFakeDriver();
+    fake.driver.defaultConfig = () => ({ cli: "fakebin" });
+    Object.assign(fake.driver, { install: { command: { linux: "npm install -g fake-engine", darwin: "npm install -g fake-engine" }, needsNode: true } });
+    let installs = 0;
+    let version: string | null = null;
+    const hook = {
+      descriptor: () => ({ label: "Codex CLI", downloadBytes: 1234, vendor: "openai" as const }),
+      install: async () => { installs += 1; version = "1.2.3"; },
+      status: () => ({ active: version !== null, version, latest: "1.2.3", pending: null }),
+    };
+    const without = new ProviderRegistry([fake.driver], { enginesBaseDir: join(scratch, "data"), npmAvailable: () => false, managedInstalls: { fake: hook } });
+    await without.load({ a: { driver: "fake" } });
+    const [before] = await without.describe();
+    expect(before.install?.managed).toEqual({ label: "Codex CLI", downloadBytes: 1234, vendor: "openai" });
+    expect(before.install?.needsNode).toBeUndefined();
+    expect(before.install?.server).toBeUndefined();
+    expect(before.managedRuntime).toBeUndefined();
+    expect(await without.installRuntime("a")).toBe(true);
+    expect(installs).toBe(1);
+    expect((await without.describe())[0].managedRuntime).toEqual({ active: true, version: "1.2.3", latest: "1.2.3", pending: null, autoUpdates: true });
+
+    // npm present: the npm prefix install keeps priority and the hook is unused.
+    const withNpm = new ProviderRegistry([fake.driver], { enginesBaseDir: join(scratch, "data"), managedInstalls: { fake: hook } });
+    await withNpm.load({ a: { driver: "fake" } });
+    const [described] = await withNpm.describe();
+    expect(described.install?.managed).toBeUndefined();
+    expect(described.install?.server).toEqual({ package: "fake-engine" });
+    expect(await withNpm.installRuntime("a")).toBe(true);
+    expect(installs).toBe(1);
+
+    // A platform with no managed build offers nothing.
+    const unsupported = new ProviderRegistry([fake.driver], { npmAvailable: () => false, managedInstalls: { fake: { ...hook, descriptor: () => null } } });
+    await unsupported.load({ a: { driver: "fake" } });
+    expect((await unsupported.describe())[0].install?.managed).toBeUndefined();
+    expect(await unsupported.installRuntime("a")).toBe(false);
+  });
 });

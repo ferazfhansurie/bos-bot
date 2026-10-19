@@ -339,6 +339,8 @@ export interface CheckpointDiff {
   changed: string[];
   added: string[];
   deleted: string[];
+  /** Lines added and removed per path, from `--numstat`. Binary files are absent. */
+  lines?: Record<string, [number, number]>;
 }
 
 /** Paths that differ between two checkpoints of the same bot+folder, from
@@ -367,6 +369,20 @@ export async function diffStat(botId: string, cwd: string, fromHash: string, toH
       else if (status.startsWith("D")) diff.deleted.push(path);
       else diff.changed.push(path);
     }
+    // the per-file +/- counts are a garnish: the file list stands without them
+    try {
+      const numstat = await serialize(shadow, () =>
+        runGit(["diff", "--numstat", "--no-renames", "-z", fromHash, toHash], worktree, env, signal),
+      );
+      const lines: Record<string, [number, number]> = {};
+      for (const record of numstat.split("\0")) {
+        const match = /^(\d+)\t(\d+)\t([\s\S]+)$/.exec(record.replace(/^\n/, ""));
+        if (match) lines[match[3]!] = [Number(match[1]), Number(match[2])];
+      }
+      if (Object.keys(lines).length) diff.lines = lines;
+    } catch {
+      // keep the names
+    }
     return diff;
   } catch {
     return null;
@@ -376,6 +392,19 @@ export async function diffStat(botId: string, cwd: string, fromHash: string, toH
 /** Every checkpoint for this bot+folder, newest first. Empty when nothing
  * was ever snapshotted (listing never creates the shadow repo). The empty
  * base marker is omitted — it is not a state anyone should return to. */
+/** Read only the two immutable snapshots, never the current working files.
+ * Full hashes prevent revspec/option injection; git helpers are disabled. */
+export async function diffPatch(botId: string, cwd: string, fromHash: string, toHash: string): Promise<{ patch: string; truncated: boolean } | null> {
+  if (!COMMIT_HASH.test(fromHash) || !COMMIT_HASH.test(toHash) || refusalReason(cwd) !== null) return null;
+  try {
+    const worktree = realpathSync(resolve(cwd));
+    const shadow = shadowDir(botId, worktree);
+    const patch = await serialize(shadow, () => runGit(["diff", "--no-ext-diff", "--no-textconv", "--no-renames", "--unified=3", fromHash, toHash, "--"], worktree, gitEnv(shadow, worktree)));
+    const limit = 200_000;
+    return { patch: patch.slice(0, limit), truncated: patch.length > limit };
+  } catch { return null; }
+}
+
 export async function listCheckpoints(botId: string, cwd: string): Promise<Checkpoint[]> {
   if (disabledBots.has(botId)) return [];
   if (!(await gitAvailable())) return [];

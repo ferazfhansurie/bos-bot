@@ -1,0 +1,19 @@
+{
+  "id": "website-builder",
+  "name": "Website Builder",
+  "version": "0.1.0",
+  "description": "Build a website or landing page for the person's business and show a live editable preview.",
+  "defaultEnabled": true,
+  "triggerTerms": [
+    "website",
+    "web site",
+    "landing page",
+    "webpage",
+    "web page",
+    "homepage",
+    "site for my"
+  ],
+  "requiredCapabilities": [
+    "starterSkills"
+  ]
+}

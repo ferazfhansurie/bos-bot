@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import { parse as parseYaml } from "yaml";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
-  UpdateCoordinator, appDigests, isRunningBuild, classifyLaunchdJobs, createDarwinExecutor, discoverCandidate, jobBlocks, pendingUpdates, preflightVerdict, readCheckpoint, resumePrompt,
+  SERVER_PORT_FAMILIES, UpdateCoordinator, appDigests, isRunningBuild, classifyLaunchdJobs, createDarwinExecutor, discoverCandidate, jobBlocks, pendingUpdates, preflightVerdict, readCheckpoint, resumePrompt,
   updaterPlist, writeCandidateManifest, type ApplyPlan, type BusyTurn, type CheckpointTurn, type DarwinExecutorOptions, type LaunchdJobDetails, type NoDowngradeOptions, type UpdateEvent, type UpdateExecutor, type UpdateResult, type UpdaterHooks, type UpdaterHost,
 } from "./updater.ts";
 
@@ -87,6 +87,11 @@ function stage(h: Harness, stamp = "new") {
   fakeApp(dir, "BOS Bot.app", stamp);
   return writeCandidateManifest(dir, { version: "0.1.86", sha: "feedface00000000", app: "BOS Bot.app" });
 }
+
+it("knows every port family the desktop may bind its server on", async () => {
+  const { SERVER_PORTS } = await import(new URL("../electron/release-channel.mjs", import.meta.url).href) as { SERVER_PORTS: number[] };
+  expect(SERVER_PORT_FAMILIES).toContainEqual(SERVER_PORTS);
+});
 
 describe("updater coordinator", () => {
   let root: string; let h: Harness;
@@ -425,7 +430,7 @@ describe("updater coordinator", () => {
     expect(checkpoint.turns).toHaveLength(2);
     expect(checkpoint.steers).toEqual({ t1: [{ queueId: "q1" }] });
     const plan = JSON.parse(readFileSync(join(dir, "plan.json"), "utf8"));
-    expect(plan).toMatchObject({ updateId, mode: "update", version: "0.1.86", sha: "feedface00000000", oldVersion: "0.1.85", oldSha: "2d83ba23aaaaaaaa", live: h.live, force: true, ports: [18799], health: "http://127.0.0.1:18799/api/health", gracefulSeconds: 45, healthSeconds: 90, appPid: 4242, uid: 501, requireLaunchd: false, codesign: false, selfBootout: true, launch: ["/usr/bin/open", "{app}"], label: `ai.bos.bot.update.${updateId.slice(0, 8)}` });
+    expect(plan).toMatchObject({ updateId, mode: "update", version: "0.1.86", sha: "feedface00000000", oldVersion: "0.1.85", oldSha: "2d83ba23aaaaaaaa", live: h.live, force: true, ports: [18799], serverPorts: [18799, 8799, 28799], health: "http://127.0.0.1:18799/api/health", gracefulSeconds: 45, healthSeconds: 90, appPid: 4242, uid: 501, requireLaunchd: false, codesign: false, selfBootout: true, launch: ["/usr/bin/open", "{app}"], label: `ai.bos.bot.update.${updateId.slice(0, 8)}` });
     expect(plan.sandbox).toBeUndefined();
     expect(plan.staged).toBe(join(h.dataDir, "updates", "candidate", "BOS Bot.app"));
     expect(plan.backup).toMatch(/BOS Bot\.previous-2d83ba23-[0-9a-f]{8}\.app-disabled$/);

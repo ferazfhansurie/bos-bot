@@ -99,6 +99,9 @@ public struct QuickReply: Codable, Hashable, Identifiable, Sendable {
 public enum TranscriptRow: Identifiable, Hashable, Sendable {
     case message(Message)
     case activityRun([Message])
+    /// A settled turn's work folded behind "Worked for …"; see
+    /// `foldWorkedTurns`. The answer itself stays its own `.message` row.
+    case worked(WorkedTurn)
 
     /// The message a row answers for — its first, which is the one whose
     /// time and sender the transcript reads.
@@ -106,6 +109,7 @@ public enum TranscriptRow: Identifiable, Hashable, Sendable {
         switch self {
         case let .message(message): message
         case let .activityRun(items): items[0]
+        case let .worked(turn): turn.rows[0].head
         }
     }
 
@@ -117,6 +121,7 @@ public enum TranscriptRow: Identifiable, Hashable, Sendable {
         // lose the reader's place. Settled runs never grow at their end —
         // a running turn's steps live in the working row until it settles.
         case let .activityRun(items): "run.\(items[items.count - 1].id)"
+        case let .worked(turn): turn.id
         }
     }
 
@@ -127,6 +132,7 @@ public enum TranscriptRow: Identifiable, Hashable, Sendable {
         switch self {
         case let .message(message): message.at
         case let .activityRun(items): items.last?.at ?? head.at
+        case let .worked(turn): turn.rows.last?.endAt ?? head.at
         }
     }
     public var role: Message.Role { head.role }
@@ -160,6 +166,8 @@ public func rosterPreview(_ messages: [Message], detail: ActivityDetail) -> Stri
     case let .activityRun(items):
         let running = items.contains { $0.tool?.ok == nil }
         return "\(running ? "Running" : "Ran") \(items.count) steps"
+    case let .worked(turn):
+        return turn.title
     }
 }
 

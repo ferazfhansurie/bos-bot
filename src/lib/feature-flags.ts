@@ -42,8 +42,8 @@ export function showToolCallsEnabled(config: FeatureFlagConfig | null | undefine
 
 /** Opt-in computer sharing — lending this desktop's folders, terminal or
  * computer control to a connected workspace. Off unless this server was
- * explicitly switched on in its config.json; there is no Settings toggle, so
- * the controls simply are not offered. */
+ * explicitly switched on. Local native owner review can enable it; merely
+ * discovering desktop sharing settings never grants authority. */
 export function sharedComputersEnabled(config: FeatureFlagConfig | null | undefined): boolean {
   return config?.features?.sharedComputers === true;
 }

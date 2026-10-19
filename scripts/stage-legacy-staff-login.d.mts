@@ -1,0 +1,1 @@
+export function stageLogin(config: {spaces: Record<string, {public?: boolean; members?: Record<string, {name?: string; pass?: string; role?: string}>}>}, spaceId: string, username: string, now?: number): {logins: Array<{id: string; name: string; username: string; phone: string; role: 'member'; salt: string; hash: string; createdAt: number; passwordSetAt: number}>};

@@ -66,4 +66,4 @@ export function absolutePath(root: string, rel: string): string {
   return `${root.replace(/[\\/]+$/, "")}${separator}${windows ? rel.split("/").join("\\") : rel}`;
 }
 
-export const RAW_PREVIEW = /\.(png|jpe?g|gif|webp|avif|bmp|ico|svg|pdf)$/i;
+export const RAW_PREVIEW = /\.(png|jpe?g|gif|webp|avif|bmp|ico|svg|pdf|mp4|m4v|webm|mov|mp3|m4a|aac|wav|flac|ogg|opus)$/i;

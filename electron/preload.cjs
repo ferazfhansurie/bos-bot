@@ -123,6 +123,18 @@ const bridge = {
   beginScreenPreviewIntent: () => ipcRenderer.sendSync("screen:preview-intent"),
   /** One frame of this computer's screen as a data: URL when supported. */
   screenFrame: () => ipcRenderer.invoke("screen:frame"),
+  /** Appshots: open-window thumbnails, then a full capture of the one picked.
+   * onOpen fires when the global shortcut was pressed with its listing. */
+  appshot: {
+    list: () => ipcRenderer.invoke("appshot:list"),
+    capture: (id) => ipcRenderer.invoke("appshot:capture", id),
+    openSettings: () => ipcRenderer.invoke("appshot:open-settings"),
+    onOpen: (cb) => {
+      const handler = (_event, payload) => cb(payload);
+      ipcRenderer.on("appshot:open", handler);
+      return () => ipcRenderer.removeListener("appshot:open", handler);
+    },
+  },
   /** Physical USB Android devices. Network ADB is deliberately excluded. */
   androidDevice: {
     status: () => ipcRenderer.invoke("android-device:status"),

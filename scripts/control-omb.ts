@@ -352,6 +352,9 @@ export function verificationServerEnvironment(parentEnv: NodeJS.ProcessEnv, data
     HERMES_HOME: join(dataDir, ".hermes"),
     OMB_DATA_DIR: dataDir,
     BOS_NO_PING: "1",
+    // Fixtures have no codex on PATH; never let them download the real one.
+    BOS_NO_MANAGED_CODEX: "1",
+    BOS_NO_MANAGED_CLAUDE: "1",
     OMB_PORT: String(port),
     OMB_WEBHOOK_PORT: String(port + 1),
     // The fixture's default CLI behaviour; a caller that sets

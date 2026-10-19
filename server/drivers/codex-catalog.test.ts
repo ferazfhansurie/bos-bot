@@ -77,9 +77,13 @@ describe("readCodexModelCatalog", () => {
       options: [
         { id: "gpt-fake-default", label: "GPT Fake Default" },
         { id: "gpt-page-two", label: "GPT Page Two" },
-        ...RECENT_CODEX_MODELS,
       ],
     });
+    // The account's own list is the truth: a plan without Sol must not be
+    // offered Sol rows it will refuse on the first turn.
+    for (const recent of RECENT_CODEX_MODELS) {
+      expect(catalog.options.some(option => option.id === recent.id)).toBe(false);
+    }
   });
 
   it("appends the configured local model and cached catalog slugs as custom", async () => {

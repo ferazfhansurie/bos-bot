@@ -27,10 +27,20 @@ if (process.versions.electron && process.argv.includes(fixtureFlag)) {
   let sharingConfirmed = false;
   ipcMain.handle("sharing:state", () => shared);
   ipcMain.handle("sharing:folder", () => ({ id: "fixture-folder", name: "Invoices", path: "/fixture/Invoices", write: false }));
-  ipcMain.handle("sharing:save", (_event, id, grant) => {
+  const { reviewSharedComputerGrant } = await import("../electron/computer-sharing-review.mjs");
+  ipcMain.handle("sharing:save", async (_event, id, grant) => {
     calls.push({ kind: "sharing", id, ...grant, confirmed: sharingConfirmed });
-    if (!sharingConfirmed) return null;
-    shared = { ...grant, enabled: true, connected: true }; return shared;
+    return reviewSharedComputerGrant({
+      env: saved.environments.find(entry => entry.id === id), input: grant,
+      controller: () => ({ inspectIdentity: async () => ({ sessionId: "fixture-owner" }), save: async (_env, next) => { shared = { ...next, enabled: true, connected: true }; return shared; } }),
+      validateFolders: async folders => folders,
+      confirm: async () => ({ response: sharingConfirmed ? 0 : 1 }),
+      assertWorkspace: () => assert.ok(saved.environments.some(entry => entry.id === id)),
+      enable: async () => {
+        const enabled = await session.defaultSession.fetch(`${serverUrl}/api/config`, { method: "PATCH", headers: { "content-type": "application/json", origin: serverUrl }, body: JSON.stringify({ features: { sharedComputers: true } }) });
+        assert.equal(enabled.status, 200);
+      },
+    });
   });
   ipcMain.handle("sharing:revoke", () => { shared = { ...shared, enabled: false, connected: false }; return shared; });
   ipcMain.handle("update:get-state", () => ({ status: "idle" }));
@@ -186,21 +196,29 @@ if (process.versions.electron && process.argv.includes(fixtureFlag)) {
     await fill("Name (optional)", "");
     writeFileSync(join(output, "connected-workspaces.png"), (await win.webContents.capturePage()).toPNG());
 
-    assert.equal(await evaluate("document.querySelector('[aria-label^=\"Computer access for \"]') === null"), true, "feature-off workspace offers no computer access");
-    await win.loadURL(`${url}?workspaces=1&share-computer=cloud`);
-    await until(() => evaluate("document.body.textContent.includes('My cloud team')"), "feature-off saved workspace rendered");
-    assert.equal(await evaluate("document.body.textContent.includes('Computer access · My cloud team')"), false, "stale sharing deep link cannot bypass disabled feature");
-    assert.equal(await evaluate(`${button("Choose folder")} === undefined`), true);
-    writeFileSync(join(output, "computer-sharing-disabled.png"), (await win.webContents.capturePage()).toPNG());
-    // Explicitly opt this disposable server in for the unfinished feature's
-    // existing enabled-path regression coverage. Shipped defaults stay off.
-    const enabled = await session.defaultSession.fetch(`${serverUrl}/api/config`, { method: "PATCH", headers: { "content-type": "application/json", origin: serverUrl }, body: JSON.stringify({ features: { sharedComputers: true } }) });
-    assert.equal(enabled.status, 200);
-    await win.loadURL(`${url}?workspaces=1`);
-    await until(() => evaluate("Boolean(document.querySelector('[aria-label=\"Computer access for My cloud team\"]'))"), "explicit fixture opt-in exposes computer access");
+    await until(() => evaluate("Boolean(document.querySelector('[aria-label=\"Computer access for My cloud team\"]'))"), "owner can discover sharing with feature off");
     await evaluate("document.querySelector('[aria-label=\"Computer access for My cloud team\"]').click()");
     await until(() => evaluate("document.body.textContent.includes('Not shared')"), "computer sharing defaults off");
-    assert.equal(await evaluate("[...document.querySelectorAll('input[type=checkbox]')].every(el => !el.checked)"), true);
+    const shareToggle = "document.querySelector('[role=switch][aria-label=\"Share this computer with My cloud team\"]')";
+    assert.equal(await evaluate(`${shareToggle}.getAttribute('aria-checked')`), "false");
+    await evaluate(`${shareToggle}.click()`);
+    await until(() => calls.at(-1)?.kind === "sharing", "toggle requests native review");
+    assert.equal(shared.enabled, false, "cancel native review leaves sharing off");
+    assert.equal((await fetch(`${serverUrl}/api/config`).then(response => response.json())).features.sharedComputers, false, "cancel review keeps local feature off");
+    assert.equal(calls.at(-1).terminal, true); assert.equal(calls.at(-1).computer, true);
+    await until(() => evaluate(`!${shareToggle}.disabled`), "cancelled toggle is usable");
+    sharingConfirmed = true;
+    await evaluate(`${shareToggle}.click()`);
+    await until(() => evaluate(`${shareToggle}.getAttribute('aria-checked') === 'true'`), "confirmed toggle shares computer");
+    assert.equal((await fetch(`${serverUrl}/api/config`).then(response => response.json())).features.sharedComputers, true, "native review enabled local feature");
+    await until(() => evaluate(`!${shareToggle}.disabled`), "enabled toggle is usable");
+    await evaluate(`${shareToggle}.click()`);
+    await until(() => evaluate(`${shareToggle}.getAttribute('aria-checked') === 'false'`), "toggle revokes access immediately");
+    writeFileSync(join(output, "computer-share-toggle.png"), (await win.webContents.capturePage()).toPNG());
+    // Limited folder sharing remains available without enabling broad access.
+    await evaluate("document.querySelector('details').open = true");
+    await evaluate("[...document.querySelectorAll('input[type=checkbox]')].filter(el => el.checked).forEach(el => el.click())");
+    sharingConfirmed = false;
     await evaluate(`${button("Choose folder")}.click()`);
     await until(() => evaluate("document.body.textContent.includes('/fixture/Invoices')"), "native folder picker populates read-only draft");
     await evaluate(`${button("Share selected access")}.click()`);
@@ -215,6 +233,13 @@ if (process.versions.electron && process.argv.includes(fixtureFlag)) {
     writeFileSync(join(output, "computer-access.png"), (await win.webContents.capturePage()).toPNG());
     await evaluate(`${button("Stop sharing")}.click()`);
     await until(() => evaluate("document.body.textContent.includes('Not shared')"), "stop sharing applies immediately");
+    await evaluate(`${shareToggle}.click()`);
+    await until(() => evaluate(`${shareToggle}.getAttribute('aria-checked') === 'true'`), "toggle can resume limited sharing");
+    assert.equal(calls.at(-1).terminal, false); assert.equal(calls.at(-1).computer, false);
+    assert.equal(calls.at(-1).folders[0].write, false, "resume never broadens the saved folder scope");
+    await until(() => evaluate(`!${shareToggle}.disabled`), "resumed toggle is usable");
+    await evaluate(`${shareToggle}.click()`);
+    await until(() => evaluate(`${shareToggle}.getAttribute('aria-checked') === 'false'`), "limited sharing revokes from switch");
     await evaluate("document.querySelector('[aria-label=\"Close computer access\"]').click()");
 
     await evaluate("document.querySelector('[aria-label=\"Switch to My cloud team\"]').click()");
@@ -280,7 +305,7 @@ if (process.versions.electron && process.argv.includes(fixtureFlag)) {
       assert.equal(sharing.state(nativeEnv.id).enabled, false);
     } finally { sharing.close(); }
     const receipt = { passed: true, renderer: ["RemoteComputerSection", "ConnectedWorkspacesSettings", "DesktopWorkspaceSwitcher"], preload: "electron/preload.cjs", calls,
-      checks: ["full custom HTTPS link unchanged", "pending submit disabled", "cancel reset", "rejection and retry", "companion six-digit routing", "390px overflow", "remote-safe bridge", "native connect menu item requests Settings", "hosted URL validation", "optional name", "pairing code excluded from saved list", "switch local/cloud", "cancel/confirm forget", "real app Settings deep link", "native Settings event and search reset", "feature-off hides sharing controls and stale deep link", "explicit opt-in enables fixture sharing", "sharing off by default", "read-only folder selection", "cancel/save sharing", "immediate revoke", "post-pair access deep link", "no sharing bridge in remote renderer"],
+      checks: ["full custom HTTPS link unchanged", "pending submit disabled", "cancel reset", "rejection and retry", "companion six-digit routing", "390px overflow", "remote-safe bridge", "native connect menu item requests Settings", "hosted URL validation", "optional name", "pairing code excluded from saved list", "switch local/cloud", "cancel/confirm forget", "real app Settings deep link", "native Settings event and search reset", "owner can discover sharing while off", "cancel review leaves local feature off", "confirmed switch enables local feature", "one switch revokes broad access", "sharing off by default", "read-only folder selection", "cancel/save sharing", "immediate revoke", "post-pair access deep link", "no sharing bridge in remote renderer"],
       nativeConnector: "Real HttpOnly pairing cookie → session.defaultSession.fetch → real fixture registration → revoke",
       limitation: "UI IPC replaces native dialogs, workspace persistence and navigation. Native sharing authentication tested against isolated HTTP server; no public DNS/TLS or live screen control tested." };
     writeFileSync(join(output, "receipt.json"), `${JSON.stringify(receipt, null, 2)}\n`);

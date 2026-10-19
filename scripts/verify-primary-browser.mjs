@@ -66,7 +66,7 @@ if (process.versions.electron && process.argv.includes(flag)) {
    await rpc('agent_browser_fill',{selector:'#editor',text:'editable fixture'});await rpc('agent_browser_type',{selector:'#editor',text:' appended'});assert.equal(await guest().executeJavaScript('document.querySelector("#editor").textContent'),'editable fixture appended');
    await rpc('agent_browser_fill',{selector:'#submit-draft',text:'submit fixture'});assert.equal(await guest().executeJavaScript('document.activeElement.id'),'submit-draft');
    await rpc('agent_browser_press',{key:'Enter'});await until(()=>guest().executeJavaScript('window.formSubmitted===true'),'fill then Enter submits focused form');
-   await assert.rejects(rpc('agent_browser_fill',{selector:'input[type=password]',text:'blocked'}),/sign|password|person/i);
+   await rpc('agent_browser_fill',{selector:'input[type=password]',text:'given secret'});assert.equal(await guest().executeJavaScript('document.querySelector("input[type=password]").value'),'given secret');
    await assert.rejects(rpc('agent_browser_tab_switch',{tab:'t1'},'other-thread'),/conversation/);
    await assert.rejects(rpc('agent_browser_snapshot',{},'two','other-profile'),/profile/);
    await click('take over');await until(()=>evaluate('document.body.innerText.includes("you have control")'),'human takes control');await assert.rejects(rpc('agent_browser_snapshot'),/control/);

@@ -104,6 +104,9 @@ function newUploadId(): string {
   return `${hex.slice(0, 4).join("")}-${hex.slice(4, 6).join("")}-${hex.slice(6, 8).join("")}-${hex.slice(8, 10).join("")}-${hex.slice(10).join("")}`;
 }
 
+/** A fresh upload id, for a caller that must keep it across its own retries. */
+export const newAttachmentUploadId = (): string => newUploadId();
+
 export function fileAttachment(name: string, path: string, size: number): FileAttachment {
   return { kind: "file", id: newId(), path, name, size };
 }
@@ -114,6 +117,8 @@ export const IMAGE_MAX_BYTES = 10 * 1024 * 1024;
 export const FILE_MAX_BYTES = 25 * 1024 * 1024;
 
 const DOCUMENT_MIMES: Readonly<Record<string, string>> = {
+  vtt: "text/vtt",
+  srt: "application/x-subrip",
   txt: "text/plain",
   md: "text/markdown",
   markdown: "text/markdown",
@@ -339,7 +344,7 @@ export async function imageAttachmentFromFile(
 /** Copy a supported document or audio file into the private attachment store. The prompt
  * then carries the same durable path for the local agent and paired phones,
  * instead of exposing an arbitrary Finder path to the companion route. */
-export async function fileAttachmentFromFile(file: File): Promise<FileAttachment | null> {
+export async function fileAttachmentFromFile(file: File, uploadId: string = newUploadId()): Promise<FileAttachment | null> {
   const declared = file.type.split(";", 1)[0]!.trim().toLowerCase();
   const extension = file.name.split(".").at(-1)?.toLowerCase() ?? "";
   const mime = documentMime(file) ??
@@ -348,7 +353,6 @@ export async function fileAttachmentFromFile(file: File): Promise<FileAttachment
   if (file.size > FILE_MAX_BYTES) {
     throw Object.assign(new Error(`${file.name} exceeds 25 MB`), { status: 413 });
   }
-  const uploadId = newUploadId();
   const saved = await uploadWithRetry<{ path: string; name: string; bytes: number }>(
     `/api/files?name=${encodeURIComponent(file.name)}&uploadId=${encodeURIComponent(uploadId)}`,
     {

@@ -19,12 +19,14 @@ export function SpeakButton({
   messageId,
   voiceId,
   className,
+  iconSize = 14,
 }: {
   text: string;
   botId?: string;
   messageId: string;
   voiceId?: string;
   className?: string;
+  iconSize?: number;
 }) {
   const { state } = useStore();
   const speech = useSpeech();
@@ -49,6 +51,7 @@ export function SpeakButton({
         void speaker.speak(text, { botId, messageId, voiceId });
       }}
       disabled={!ready}
+      data-active={mine ? "true" : undefined}
       aria-label={label}
       title={label}
       className={cn(
@@ -59,7 +62,7 @@ export function SpeakButton({
         className,
       )}
     >
-      {preparing ? <Loader2 size={14} className="animate-spin" /> : mine ? <Square size={14} className="fill-current" /> : <Volume2 size={14} />}
+      {preparing ? <Loader2 size={iconSize} className="animate-spin" /> : mine ? <Square size={iconSize} className="fill-current" /> : <Volume2 size={iconSize} />}
     </button>
   );
 }

@@ -1,0 +1,20 @@
+{
+  "id": "inbox-triage",
+  "name": "Inbox Triage",
+  "version": "0.1.0",
+  "description": "Go through the person's email and surface what needs them, with drafted replies they can send.",
+  "defaultEnabled": true,
+  "triggerTerms": [
+    "inbox",
+    "email",
+    "e-mail",
+    "gmail",
+    "outlook",
+    "unread",
+    "mail",
+    "reply to"
+  ],
+  "requiredCapabilities": [
+    "starterSkills"
+  ]
+}

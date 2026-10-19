@@ -15,6 +15,7 @@ import { CompanionSection } from "./CompanionSection";
 import { LinkedServersCard } from "./LinkedServersCard";
 import { ServerPairingCard } from "./ServerPairingCard";
 import { PeopleSection } from "./PeopleSection";
+import { StaffLoginsSection } from "./StaffLoginsSection";
 import { RemovedRemoteBots } from "./RemovedRemoteBots";
 import { RemoteComputerSection } from "./RemoteComputerSection";
 import { ConnectedWorkspacesSettings } from "./ConnectedWorkspacesSettings";
@@ -291,9 +292,7 @@ export function SettingsModal() {
     .filter((entry) => !remoteActive || entry.id === "companion" || entry.id === "general" || entry.id === "desktopWorkspaces")
     .filter((entry) => entry.id !== "desktopWorkspaces" || Boolean(window.ogb?.environments))
     // the operator's screen for other workspaces exists only where a fleet agent does
-    .filter((entry) => entry.id !== "workspaces" || workspacesAvailable(state.config))
-    // sign-in by email is a hosted server's; the desktop app pairs devices under Remote access
-    .filter((entry) => entry.id !== "people" || !window.ogb);
+    .filter((entry) => entry.id !== "workspaces" || workspacesAvailable(state.config));
   const visibleSections = availableSections.filter((entry) => sectionMatches(entry, q));
   const sectionLabelKey = SECTIONS.find((entry) => entry.id === section)?.labelKey;
   const nextVisibleSection = visibleSections.some((entry) => entry.id === section) ? undefined : visibleSections[0]?.id;
@@ -500,6 +499,7 @@ export function SettingsModal() {
                       connect at all, so it leads instead of being tucked away. */}
                   {state.config?.composio.mode !== "managed" && <ApiKeyRow section="composio" />}
                   <ApiKeyRow section="box" />
+                  <ApiKeyRow section="boxCompute" />
                   <VpsConnection />
                   <ApiKeyRow section="opencodeGo" />
                   {state.config?.composio.mode === "managed" && (
@@ -518,7 +518,12 @@ export function SettingsModal() {
               <EnginesSettings />
             )}
 
-            {section === "backups" && <><WorkspaceBackupSettings /><CompanyBackupSettings /></>}
+            {section === "backups" && <><WorkspaceBackupSettings /><CompanyBackupSettings />
+              <Card title="cloud and managed bos">
+                <p className="mb-3 text-sm text-ink-secondary">keep bos on your computer for free, or see the cloud and managed options. your ai subscription stays separate.</p>
+                <a className="text-sm text-ink underline" href="https://bosbot.my/#pricing" target="_blank" rel="noopener noreferrer">view plans</a>
+              </Card>
+            </>}
 
             {section === "companion" && (
               <>
@@ -529,7 +534,7 @@ export function SettingsModal() {
                     server, or this desktop as a remote client of one, pairs with
                     that server's one-time code instead: its requests carry the
                     server's session, and the server decides who may act (MOCA-84). */}
-                {window.ogb && !remoteActive
+                {window.ogb && "companion" in window.ogb && !!window.ogb.companion && !remoteActive
                   ? <CompanionSection profileEmail={state.config?.profile?.email} />
                   : <ServerPairingCard />}
               </>
@@ -546,7 +551,7 @@ export function SettingsModal() {
 
             {section === "import" && <SetupImportSettings />}
             {section === "usage" && <UsageSection />}
-            {section === "people" && <PeopleSection />}
+            {section === "people" && <>{!window.ogb && <PeopleSection />}<StaffLoginsSection /></>}
             {section === "workspaces" && <WorkspacesSection />}
           </div>
         </div>

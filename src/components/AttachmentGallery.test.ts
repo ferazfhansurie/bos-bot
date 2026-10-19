@@ -2,7 +2,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { FILE_MAX_BYTES } from "@/lib/composer-attachments";
-import { AttachmentGallery, collectMessageFiles, isVideoAttachment, loadMessageVideo } from "./AttachmentGallery";
+import { AttachmentGallery, collectMessageFiles, imageRowFits, isVideoAttachment, loadMessageVideo, pagerOffsetFor } from "./AttachmentGallery";
 
 const message = { threadId: "thread/one", messageId: "message two" };
 const file = { path: "/workspace/demo.mp4", name: "demo.mp4", linked: true };
@@ -100,6 +100,46 @@ describe("message gallery", () => {
     expect(markup).not.toContain("Load video");
     expect(markup).not.toContain("<button");
     expect(markup).not.toContain("<img");
+  });
+});
+
+describe("chatgpt media layout", () => {
+  it("keeps images at natural aspect only while the row fits four slots", () => {
+    expect(imageRowFits([1, 1])).toBe(true);
+    expect(imageRowFits([1, 1, 1, 1])).toBe(true);
+    expect(imageRowFits([1, 1, 1, 1, 1])).toBe(false);
+    expect(imageRowFits([2, 1.5, 1])).toBe(false);
+    expect(imageRowFits([0.5, 0.5, 0.5, 0.5, 0.5, 0.5])).toBe(true);
+    expect(imageRowFits([null, undefined])).toBe(true);
+    // A 600px row is 144px tall: 4.2 * 144 + 16 overflows, 3.9 * 144 + 16 fits.
+    expect(imageRowFits([1.4, 1.4, 1.4], 600)).toBe(false);
+    expect(imageRowFits([1.3, 1.3, 1.3], 600)).toBe(true);
+  });
+
+  it("pages one tile at a time to keep focus visible", () => {
+    expect(pagerOffsetFor(5, 0, 7)).toBe(2);
+    expect(pagerOffsetFor(1, 3, 7)).toBe(1);
+    expect(pagerOffsetFor(4, 2, 7)).toBe(2);
+    expect(pagerOffsetFor(0, 9, 7)).toBe(0);
+  });
+
+  it("renders a person's uploads as right-aligned 80px thumbnails and 200px file chips", () => {
+    const markup = renderToStaticMarkup(createElement(AttachmentGallery, {
+      images: [image], files: [{ path: "/workspace/report.pdf", name: "report.pdf", linked: true }], message, variant: "user",
+    }));
+    expect(markup).toContain("justify-end");
+    expect(markup).toContain("size-20");
+    expect(markup).toContain("w-[200px]");
+    expect(markup).toContain("PDF");
+  });
+
+  it("pages more than four assistant images as square tiles", () => {
+    const images = Array.from({ length: 6 }, (_, index) => ({ ...image, path: `/store/123e4567-e89b-42d3-a456-42661417400${index}.png`, name: `image${index}.png` }));
+    const markup = renderToStaticMarkup(createElement(AttachmentGallery, { images, message }));
+    expect(markup).toContain("Previous image");
+    expect(markup).toContain("Next image");
+    expect(markup).toContain("rounded-[16px]");
+    expect(markup).not.toContain("Show ");
   });
 });
 

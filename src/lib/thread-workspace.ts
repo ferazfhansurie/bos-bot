@@ -3,7 +3,12 @@
  * the panels take. Pure state, remembered per thread in localStorage, so a
  * reload or a trip to another thread comes back to the same desk. */
 
-export type WorkspaceTabKind = "browser" | "terminal" | "files" | "changes" | "bot-browser";
+/** newtab: the tools list a fresh tab shows when this computer has no
+ * browser. sidechat: a second thread of the same bot shown in a tab. page: a
+ * document tab, rendered by whatever registered the "page" kind (see
+ * src/components/workbench/registry.ts). video: a video editing timeline,
+ * registered by src/components/videos. */
+export type WorkspaceTabKind = "browser" | "terminal" | "files" | "changes" | "bot-browser" | "newtab" | "sidechat" | "page" | "video";
 export type WorkspacePane = "right" | "bottom";
 /** hidden: chat only. split: chat beside the right panel. full: the right panel covers the chat. */
 export type WorkspaceLayout = "hidden" | "split" | "full";
@@ -14,6 +19,10 @@ export interface WorkspaceTab {
   pane: WorkspacePane;
   /** Files tab: the file shown in its viewer, relative to the working folder. */
   path?: string;
+  /** Side chat: the thread it shows. Page: the page id its renderer owns. */
+  ref?: string;
+  /** A title the tab's renderer chose (a page's name, a side chat's topic). */
+  title?: string;
 }
 
 export interface ThreadWorkspace {
@@ -24,7 +33,7 @@ export interface ThreadWorkspace {
 }
 
 const KEY_PREFIX = "bos.thread-workspace.v2:";
-const KINDS: readonly WorkspaceTabKind[] = ["browser", "terminal", "files", "changes", "bot-browser"];
+const KINDS: readonly WorkspaceTabKind[] = ["browser", "terminal", "files", "changes", "bot-browser", "newtab", "sidechat", "page", "video"];
 /** Kinds that exist at most once per thread; opening one again focuses it. */
 const SINGLE: ReadonlySet<WorkspaceTabKind> = new Set(["browser", "files", "changes", "bot-browser"]);
 const MAX_TABS = 16;
@@ -33,6 +42,7 @@ export const LAYOUT_CYCLE: readonly WorkspaceLayout[] = ["split", "full", "hidde
 
 export const TAB_LABEL: Record<WorkspaceTabKind, string> = {
   browser: "browser", terminal: "terminal", files: "files", changes: "changes", "bot-browser": "browser",
+  newtab: "New tab", sidechat: "Side chat", page: "Untitled page", video: "Video",
 };
 
 /** Tab kinds that can move into a window of their own. The browser is a
@@ -72,7 +82,10 @@ export function sanitizeWorkspace(value: unknown): ThreadWorkspace {
     seen.add(tab.id);
     const pane: WorkspacePane = tab.pane === "bottom" ? "bottom" : "right";
     const path = kind === "files" ? safePath(tab.path) : undefined;
-    tabs.push(path ? { id: tab.id, kind, pane, path } : { id: tab.id, kind, pane });
+    const ref = typeof tab.ref === "string" && /^[\w:.-]{1,128}$/.test(tab.ref) ? tab.ref : undefined;
+    const title = typeof tab.title === "string" && tab.title.trim() ? tab.title.trim().slice(0, 120) : undefined;
+    if (kind === "sidechat" && !ref) continue;
+    tabs.push({ id: tab.id, kind, pane, ...(path ? { path } : {}), ...(ref ? { ref } : {}), ...(title ? { title } : {}) });
     if (tabs.length >= MAX_TABS) break;
   }
   const active = (raw.active && typeof raw.active === "object" ? raw.active : {}) as Record<string, unknown>;
@@ -135,7 +148,7 @@ export function defaultPane(kind: WorkspaceTabKind): WorkspacePane {
 }
 
 /** Open (or focus, for single-instance kinds) a tab. Returns the tab's id. */
-export function openTab(state: ThreadWorkspace, kind: WorkspaceTabKind, options: { pane?: WorkspacePane; path?: string; id?: string; fresh?: boolean } = {}): { state: ThreadWorkspace; id: string } {
+export function openTab(state: ThreadWorkspace, kind: WorkspaceTabKind, options: { pane?: WorkspacePane; path?: string; id?: string; fresh?: boolean; ref?: string; title?: string } = {}): { state: ThreadWorkspace; id: string } {
   const existing = SINGLE.has(kind) || (kind === "terminal" && !options.fresh && !options.id)
     ? state.tabs.find((tab) => tab.kind === kind && (!options.pane || tab.pane === options.pane))
     : undefined;
@@ -151,7 +164,7 @@ export function openTab(state: ThreadWorkspace, kind: WorkspaceTabKind, options:
   }
   const id = options.id && /^[\w-]{1,64}$/.test(options.id) && !state.tabs.some((tab) => tab.id === options.id) ? options.id : newTabId(kind);
   const path = kind === "files" ? safePath(options.path) : undefined;
-  const tab: WorkspaceTab = { id, kind, pane: options.pane ?? defaultPane(kind), ...(path ? { path } : {}) };
+  const tab: WorkspaceTab = { id, kind, pane: options.pane ?? defaultPane(kind), ...(path ? { path } : {}), ...(options.ref ? { ref: options.ref } : {}), ...(options.title ? { title: options.title.slice(0, 120) } : {}) };
   const tabs = [...state.tabs, tab].slice(-MAX_TABS);
   return { state: focusTab({ ...state, tabs }, id), id };
 }
@@ -173,6 +186,27 @@ export function moveTab(state: ThreadWorkspace, id: string, pane: WorkspacePane)
   if (!tab || tab.pane === pane) return state;
   const moved = { ...state, tabs: state.tabs.map((candidate) => (candidate.id === id ? { ...candidate, pane } : candidate)) };
   return focusTab(normalize(moved), id);
+}
+
+/** A renderer renamed its tab (a page got a title, a side chat a topic). */
+export function setTabTitle(state: ThreadWorkspace, id: string, title: string | undefined): ThreadWorkspace {
+  const clean = title?.trim().slice(0, 120) || undefined;
+  return { ...state, tabs: state.tabs.map((tab) => (tab.id === id ? { ...tab, title: clean } : tab)) };
+}
+
+/** Swap a tab for another kind in the same slot, the way picking a tool on
+ * a new tab turns that tab into the tool. */
+export function replaceTab(state: ThreadWorkspace, id: string, kind: WorkspaceTabKind, options: { ref?: string; title?: string; path?: string } = {}): { state: ThreadWorkspace; id: string } {
+  const index = state.tabs.findIndex((tab) => tab.id === id);
+  if (index < 0 || (SINGLE.has(kind) && state.tabs.some((tab) => tab.kind === kind))) {
+    const removed = index < 0 ? state : closeTab(state, id).state;
+    return openTab(removed, kind, { ...options, pane: state.tabs[index]?.pane });
+  }
+  const old = state.tabs[index]!;
+  const path = kind === "files" ? safePath(options.path) : undefined;
+  const tab: WorkspaceTab = { id: newTabId(kind), kind, pane: old.pane, ...(path ? { path } : {}), ...(options.ref ? { ref: options.ref } : {}), ...(options.title ? { title: options.title.slice(0, 120) } : {}) };
+  const tabs = state.tabs.map((candidate, at) => (at === index ? tab : candidate));
+  return { state: focusTab({ ...state, tabs, active: { ...state.active, [old.pane]: tab.id } }, tab.id), id: tab.id };
 }
 
 export function setFilePath(state: ThreadWorkspace, id: string, path: string | undefined): ThreadWorkspace {

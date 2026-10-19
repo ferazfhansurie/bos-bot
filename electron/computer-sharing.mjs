@@ -124,13 +124,19 @@ export function createComputerSharing({ file, fetch: fetchImpl, environments, cu
     if (!response.ok) throw new Error(response.status === 401 || response.status === 403 ? "Pair this desktop again before sharing computer access." : `Workspace request failed (${response.status}). Update the server if needed.`);
     return json;
   };
-  const identity = async env => {
-    await requireEnabled();
+  // Read-only metadata for native consent while the local feature is still off.
+  // This never registers a connector, persists a grant, or executes a job.
+  const inspectIdentity = async env => {
     const [auth, descriptor] = await Promise.all([request(env, "/api/auth/session"), request(env, "/.well-known/openmausbot/environment")]);
-    await requireEnabled();
     if (auth.kind !== "session" || !uuid(auth.id) || !uuid(descriptor.environmentId)) throw new Error("Complete workspace pairing or sign-in first");
     if (descriptor.capabilities?.sharedComputers !== true) throw new Error("Update this server to enable computer sharing");
     return { sessionId: auth.id, environmentId: descriptor.environmentId };
+  };
+  const identity = async env => {
+    await requireEnabled();
+    const info = await inspectIdentity(env);
+    await requireEnabled();
+    return info;
   };
   const matches = (grant, info) => grant?.sessionId === info.sessionId && grant?.environmentId === info.environmentId;
   const stop = id => {
@@ -227,7 +233,7 @@ export function createComputerSharing({ file, fetch: fetchImpl, environments, cu
     if (grant?.secret) void request(env, `/api/shared-computers/${grant.id}/disconnect`, {}, undefined, grant.secret).catch(() => {});
   };
   return {
-    state, identity,
+    state, identity, inspectIdentity,
     async observe(env) {
       const info = await identity(env);
       if (matches(records[env.id], info)) return null;

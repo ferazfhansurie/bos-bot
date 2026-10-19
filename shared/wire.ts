@@ -52,8 +52,10 @@ export interface ModelSelection {
 export type CloudBackend = "box" | "vps";
 
 /** A place a bot can act. cloud covers both cloud backends — from the
- * person's seat they are the same "cloud computer" panel. */
-export type Surface = "cloud" | "vm" | "local" | "browser";
+ * person's seat they are the same "cloud computer" panel. boxcompute is the
+ * bot's BoxCompute sandbox: shell, files and a cloud Chrome desktop driven
+ * through its own sandbox tools, not the computer server. */
+export type Surface = "cloud" | "vm" | "local" | "browser" | "boxcompute";
 
 /** A palette name, or any custom colour as "#RRGGBB" (stored uppercase). */
 export type MausColor =
@@ -187,6 +189,8 @@ export interface InstalledPackageMetadata {
   name: string;
   release: string;
   requiredApps: Array<{ slug: string; label: string; reason: string; optional?: boolean }>;
+  requiredCapabilities?: string[];
+  requiredTools?: Array<{ slug: string; kind: "browser" | "computer" | "plugin"; label: string; reason: string; optional?: boolean }>;
 }
 
 /** A bot as a client may see it. Wire form: no provider session
@@ -207,6 +211,10 @@ export interface WireBot {
   description: string;
   /** Missing means shared for bots created before this setting existed. */
   visibility?: "shared" | "private";
+  /** People (contact ids) a private bot is opened to anyway, owner-set. Only
+   * their own linked-Mac threads with it: never rooms, delegation or the
+   * owner's threads. */
+  sharedWith?: string[];
   /** Standing instructions — the persona body. */
   soul?: string;
   /** sha256 of soul, for spotting a SOUL.md edited outside the app. */
@@ -403,6 +411,7 @@ export interface WireMessage {
   peerAsk?: { botId: string; name: string; unattended?: boolean };
   /** emoji reactions; by = "user" or a member botId. */
   reactions?: Array<{ emoji: string; by: string }>;
+  outputDraft?: import("./output-draft.js").OutputDraft;
   /** comm chips: "Messaged @X", linking to the bot-bot channel. */
   comm?: { groupId: string; threadId?: string; withBotId: string; withName: string; withColor: string };
   /** thread chips: "Opened thread #Title on @X". */
@@ -442,6 +451,7 @@ export interface OptionCardData {
   routineRequest?: RoutineRequestCardData;
   /** A durable profile-change proposal (propose_profile). */
   profileRequest?: ProfileRequestCardData;
+  outboundReview?: import("./outbound-review.js").OutboundReview;
   teamSetupRequest?: TeamSetupRequest;
   /** A durable learned-skill proposal. */
   skillRequest?: SkillRequestCardData;
@@ -648,6 +658,8 @@ export type UpdateRunState =
   | "applying" | "relaunching" | "verifying" | "done" | "rolled_back" | "failed";
 
 export type ServerFrame =
+  | { kind: "page"; botId: string; pageId: string; revision: number; byKind: "human" | "bot"; deleted?: boolean }
+  | { kind: "video"; botId: string; videoId: string; revision: number; byKind: "human" | "bot"; deleted?: boolean; render?: import("./video.ts").VideoRender }
   | ({ kind: "activity" } & import("./activity.ts").ActivityResponse)
   | { kind: "sections"; sections: string[] }
   | { kind: "bot.queued"; queues: BotQueuedMessages }

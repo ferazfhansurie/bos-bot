@@ -199,6 +199,7 @@ export function SkillsSection({ bot }: { bot: Bot }) {
 
   return (
     <div className="flex flex-col gap-4">
+      {featureEnabled && <TeachingRecorder key={bot.id} bot={bot} />}
       <div className="rounded-xl bg-card p-4">
         <div className="flex items-center gap-2">
           <BookOpen size={16} className="text-ink-secondary" />
@@ -366,3 +367,4 @@ export function SkillsSection({ bot }: { bot: Bot }) {
     </div>
   );
 }
+import { TeachingRecorder } from './TeachingRecorder';

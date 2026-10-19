@@ -3,7 +3,7 @@ import type { JsonValue } from "../../shared/json";
 
 export interface LocalVmWorkspaceBot {
   id: string;
-  computer?: "cloud" | "vm" | "local" | "browser" | "off";
+  computer?: "cloud" | "vm" | "local" | "browser" | "boxcompute" | "off";
   hidden?: boolean;
 }
 

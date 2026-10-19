@@ -17,7 +17,7 @@ const snap = (over: Partial<NativeWhatsAppSnapshot>): NativeWhatsAppSnapshot => 
 describe("native WhatsApp tile", () => {
   it("shows the server's real state, never a static ready", () => {
     expect(nativeWhatsAppLabel(null)).toBe("Checking…");
-    expect(nativeWhatsAppLabel(snap({ state: "linked", messageCount: 3 }))).toMatch(/Linked · read-only · 3 messages/);
+    expect(nativeWhatsAppLabel(snap({ state: "linked", messageCount: 3 }))).toMatch(/Linked · 3 messages/);
     expect(nativeWhatsAppLabel(snap({ state: "qr_pending", qr: "x" }))).toMatch(/Linked devices/);
     expect(nativeWhatsAppLabel(snap({ state: "needs_rescan", reason: "unlinked" }))).toMatch(/new scan — unlinked/);
     expect(nativeWhatsAppLabel(snap({ state: "disconnected", circuitOpen: true }))).toMatch(/Stopped retrying/);

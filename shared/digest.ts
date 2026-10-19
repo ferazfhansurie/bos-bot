@@ -7,6 +7,11 @@ export interface DigestFiles {
   deleted: string[];
   /** How many paths were cut from the lists above to stay within bounds. */
   truncated?: number;
+  /** Lines added and removed per listed path. Binary files are absent. */
+  lines?: Record<string, [number, number]>;
+  /** The folder's checkpoints either side of the turn, so the change can be
+   * undone (restore `before`) and reapplied (restore `after`). */
+  checkpoint?: { cwd: string; before: string; after: string };
 }
 
 export interface DigestTool {

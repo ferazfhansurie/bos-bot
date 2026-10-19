@@ -18,6 +18,14 @@ export interface OnboardingStatus {
   version: number;
   reelSeen: boolean;
   hintsSeen: string[];
+  /** 2.0 chat onboarding record, written by the server only. */
+  chat?: import("../../shared/onboarding-chat.js").OnboardingChatState;
+}
+
+/** True while bos is still onboarding the person in its chat. Tours wait,
+ * so they never cover the sign-in card. */
+export function chatOnboardingOpen(record: OnboardingStatus | undefined | null): boolean {
+  return Boolean(record?.chat && record.chat.step !== "done");
 }
 
 /** Bump when the welcome flow changes enough that existing users should see

@@ -188,9 +188,42 @@ describe("surfaceForTool", () => {
   });
 });
 
+describe("BoxCompute place", () => {
+  it("mounts no screen and names the sandbox, pinned or as the bot default", () => {
+    for (const plan of [
+      resolveSurface({ destination: "local", pinnedSurface: "boxcompute", browserOn: true, sandboxOn: true }),
+      resolveSurface({ destination: "boxcompute", browserOn: true, sandboxOn: true }),
+    ]) {
+      expect(plan.computer).toBe("off");
+      expect(plan.browser).toBe(false);
+      expect(plan.note).toContain("BoxCompute cloud sandbox");
+      // The place carries its cloud desktop: tools, live link and the
+      // card-details rule the bot hands to the person instead.
+      expect(plan.sandboxDesktop).toBe(true);
+      expect(plan.note).toContain("sandbox_desktop_screenshot");
+      expect(plan.note).toContain("sandbox_desktop_live_link");
+      expect(plan.note).toContain("localhost:9222");
+      expect(plan.note).toContain("Never type card details");
+    }
+  });
+
+  it("says the sandbox is missing instead of falling back to another place", () => {
+    const plan = resolveSurface({ destination: "local", pinnedSurface: "boxcompute", browserOn: true, sandboxOn: false });
+    expect(plan.computer).toBe("off");
+    expect(plan.browser).toBe(false);
+    expect(plan.note).toContain("no sandbox tools are mounted");
+    expect(plan.sandboxDesktop).toBe(false);
+  });
+
+  it("Off still wins over a BoxCompute pin", () => {
+    expect(resolveSurface({ destination: "off", pinnedSurface: "boxcompute", browserOn: true, sandboxOn: true }).note).not.toContain("BoxCompute");
+  });
+});
+
 describe("surface parsing", () => {
-  it("accepts only the four surfaces off the wire", () => {
+  it("accepts only the five surfaces off the wire", () => {
     expect(parseSurface("browser")).toBe("browser");
+    expect(parseSurface("boxcompute")).toBe("boxcompute");
     expect(parseSurface("cloud")).toBe("cloud");
     expect(parseSurface("box")).toBeUndefined();
     expect(parseSurface(42)).toBeUndefined();

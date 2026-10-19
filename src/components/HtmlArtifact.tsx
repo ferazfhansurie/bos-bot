@@ -9,7 +9,9 @@
 // navigation outright, electron/main.mjs). The only channel out is a height
 // message the parent reads from this exact frame.
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Code2, Eye, ShieldCheck } from "lucide-react";
+import { AppWindow, Code2, Eye, ShieldCheck } from "lucide-react";
+import { cn } from "@/lib/cn";
+import { MEDIA_BORDER, MEDIA_TEXT_SECONDARY } from "./MediaTokens";
 import { CodeBlock } from "./ChatMarkdown";
 
 /** Fence languages that render as a live preview. */
@@ -78,36 +80,44 @@ export function HtmlArtifact({ code, lang, streaming }: { code: string; lang: st
 
   const toggle = (
     <button type="button" onClick={() => setView(view === "preview" ? "source" : "preview")} aria-pressed={view === "source"}
-      className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] text-ink-secondary transition-colors hover:bg-raised hover:text-ink">
-      {view === "preview" ? <Code2 size={12} aria-hidden="true" /> : <Eye size={12} aria-hidden="true" />}
+      className={cn("inline-flex h-7 shrink-0 items-center gap-1.5 rounded-[12.5px] px-2 text-[12px] leading-[18px] transition-colors hover:bg-[color-mix(in_srgb,var(--color-ink)_7.8%,transparent)] hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60", MEDIA_TEXT_SECONDARY)}>
+      {view === "preview" ? <Code2 size={14} aria-hidden="true" /> : <Eye size={14} aria-hidden="true" />}
       {view === "preview" ? "View source" : "View preview"}
     </button>
   );
   return (
-    <figure dir="ltr" className="my-2 overflow-hidden rounded-lg border border-hairline/40 bg-inset" aria-label="HTML preview">
-      <figcaption className="flex items-center justify-between gap-2 border-b border-hairline/30 bg-raised/30 px-3 py-1.5 text-xs">
-        <span className="inline-flex min-w-0 items-center gap-1.5 text-[11px] text-ink-secondary" title="Runs in a sandbox: no network, no access to BOS or your files">
-          <ShieldCheck size={12} aria-hidden="true" />
-          <span className="truncate">HTML preview · sandboxed, offline</span>
+    <figure dir="ltr" className={cn("my-3 overflow-hidden rounded-[20px] border bg-raised", MEDIA_BORDER)} aria-label="HTML preview">
+      <figcaption className="relative flex items-center gap-3 px-4 py-3">
+        <span className={cn("flex size-10 shrink-0 items-center justify-center rounded-[12.5px] bg-inset", MEDIA_TEXT_SECONDARY)} aria-hidden="true">
+          <AppWindow size={20} />
+        </span>
+        <span className="min-w-0 flex-1" title="Runs in a sandbox: no network, no access to BOS or your files">
+          <span className="block truncate text-[12px] leading-[18px] font-medium text-ink">HTML preview</span>
+          <span className={cn("flex items-center gap-1 truncate text-[11px] leading-4", MEDIA_TEXT_SECONDARY)}>
+            <ShieldCheck size={12} aria-hidden="true" className="shrink-0" />
+            <span className="truncate">HTML · sandboxed, offline</span>
+          </span>
         </span>
         {toggle}
       </figcaption>
-      {view === "source"
-        ? <div className="px-2 pb-1"><CodeBlock code={code} lang="html" streaming={false} /></div>
-        : navigatedAway
-          ? <div role="status" className="p-4 text-[13px] text-ink-secondary">This preview tried to leave its sandbox and was stopped. View the source instead.</div>
-          : <iframe
-              ref={frameRef}
-              name={ARTIFACT_FRAME_NAME}
-              title="HTML preview"
-              sandbox="allow-scripts"
-              referrerPolicy="no-referrer"
-              allow=""
-              srcDoc={srcDoc}
-              onLoad={() => { loads.current += 1; if (loads.current > 1) setNavigatedAway(true); }}
-              className="block w-full border-0 bg-white"
-              style={{ height }}
-            />}
+      <div className={cn("border-t", MEDIA_BORDER)}>
+        {view === "source"
+          ? <div className="px-2 pb-1"><CodeBlock code={code} lang="html" streaming={false} /></div>
+          : navigatedAway
+            ? <div role="status" className={cn("p-4 text-[13px]", MEDIA_TEXT_SECONDARY)}>This preview tried to leave its sandbox and was stopped. View the source instead.</div>
+            : <iframe
+                ref={frameRef}
+                name={ARTIFACT_FRAME_NAME}
+                title="HTML preview"
+                sandbox="allow-scripts"
+                referrerPolicy="no-referrer"
+                allow=""
+                srcDoc={srcDoc}
+                onLoad={() => { loads.current += 1; if (loads.current > 1) setNavigatedAway(true); }}
+                className="block w-full border-0 bg-white"
+                style={{ height }}
+              />}
+      </div>
     </figure>
   );
 }

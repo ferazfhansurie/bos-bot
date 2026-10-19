@@ -778,6 +778,14 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
         const appServerArgs = ["app-server", ...(config.managed ? managedCodexArgs(config.managed) : codexLocalProviderArgs(env, turn.model))];
         if (turn.integrations?.composio) {
           mountMcpServer(appServerArgs, env, "openmausbot_connectors", turn.integrations.composio);
+          // codex omits an optional server whose tools/list hasn't landed when a
+          // step starts, so a fast reply never saw the connect tool. Required
+          // makes the turn wait; the proxy answers tools/list within its own
+          // bound and never errors, so a dead connector service can't block chat.
+          appServerArgs.push(
+            "-c", "mcp_servers.openmausbot_connectors.required=true",
+            "-c", "mcp_servers.openmausbot_connectors.startup_timeout_sec=20",
+          );
         }
         if (turn.integrations?.agents) {
           mountMcpServer(appServerArgs, env, "agents", turn.integrations.agents);
@@ -804,6 +812,17 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
           const bridge = turn.integrations.phone;
           Object.assign(env, bridge.env);
           const prefix = "mcp_servers.openmausbot_phone";
+          appServerArgs.push(
+            "-c", `${prefix}.command=${JSON.stringify(bridge.command)}`,
+            "-c", `${prefix}.args=${JSON.stringify(bridge.args)}`,
+            "-c", `${prefix}.env_vars=${JSON.stringify(Object.keys(bridge.env))}`,
+            "-c", `${prefix}.default_tools_approval_mode="auto"`,
+          );
+        }
+        if (turn.integrations?.sandbox) {
+          const bridge = turn.integrations.sandbox;
+          Object.assign(env, bridge.env);
+          const prefix = "mcp_servers.openmausbot_sandbox";
           appServerArgs.push(
             "-c", `${prefix}.command=${JSON.stringify(bridge.command)}`,
             "-c", `${prefix}.args=${JSON.stringify(bridge.args)}`,
@@ -1734,6 +1753,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
         agentsMcp: true,
       customMcp: true,
         phoneMcp: true,
+        sandboxMcp: true,
         browserMcp: true,
         images: true,
         nativeImageInput: true,

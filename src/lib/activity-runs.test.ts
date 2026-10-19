@@ -48,7 +48,7 @@ describe("groupActivityRuns", () => {
     expect(items.map((i) => i.kind)).toEqual(["message", "message"]);
   });
 
-  it("keeps ordinary failed tools visible between successful runs", () => {
+  it("keeps ordinary failed attempts together with work and retains their status", () => {
     const items = groupActivityRuns([
       tool("Read"),
       tool("Edit"),
@@ -56,7 +56,8 @@ describe("groupActivityRuns", () => {
       tool("Write"),
       tool("Write"),
     ]);
-    expect(items.map((i) => i.kind)).toEqual(["run", "message", "run"]);
+    expect(items.map((i) => i.kind)).toEqual(["run"]);
+    expect(items[0].kind === "run" && describeRun(items[0].messages)).toContain("1 incomplete attempt");
   });
 
   it("never hides an outcome review, even for a successful tool", () => {
@@ -110,16 +111,16 @@ describe("groupActivityRuns", () => {
 
 describe("describeRun", () => {
   it("counts repeats and names the tools in order of first use", () => {
-    expect(describeRun([tool("Edit"), tool("Bash"), tool("Edit"), tool("Edit")])).toBe("4 steps · Edit ×3, Bash");
+    expect(describeRun([tool("Edit"), tool("Bash"), tool("Edit"), tool("Edit")])).toBe("4 steps");
   });
 
   it("names a single repeat without a multiplier", () => {
-    expect(describeRun([tool("Edit"), tool("Bash")])).toBe("2 steps · Edit, Bash");
+    expect(describeRun([tool("Edit"), tool("Bash")])).toBe("2 steps");
   });
 
   it("trims a long tail of tool names rather than running off the row", () => {
     expect(describeRun([tool("Edit"), tool("Bash"), tool("Write"), tool("Grep"), tool("Read")])).toBe(
-      "5 steps · Edit, Bash, Write +2 more",
+      "5 steps",
     );
   });
 });
@@ -181,11 +182,9 @@ describe("groupTranscript", () => {
     const final = assistant("Fixed.", "turn-tools", true, 241_000);
 
     const items = groupTranscript([user, a, note, b, failed, c, final]);
-    expect(items.map((item) => item.kind)).toEqual(["message", "turn", "message", "message"]);
-    expect(items[1]).toMatchObject({ kind: "turn", label: "Worked for 4m 00s", messages: [a, note, b, c], steps: [a, b, c] });
-    // a failed step is never folded away
-    expect(items[2].kind === "message" && items[2].message).toBe(failed);
-    expect(items[3].kind === "message" && items[3].message).toBe(final);
+    expect(items.map((item) => item.kind)).toEqual(["message", "turn", "message"]);
+    expect(items[1]).toMatchObject({ kind: "turn", label: "Worked for 4m 00s", messages: [a, note, b, failed, c], steps: [a, b, failed, c] });
+    expect(items[2].kind === "message" && items[2].message).toBe(final);
   });
 
   it("leaves a settled turn with one step and no narration unfolded", () => {
@@ -218,4 +217,9 @@ describe("groupTranscript", () => {
       "message",
     ]);
   });
+});
+
+it("leaves terminal failures and recovery actions outside collapsed work", () => {
+ const failed = tool("turn failed", false);
+ expect(groupActivityRuns([tool("Read"), tool("Write"), failed]).map(item => item.kind)).toEqual(["run", "message"]);
 });

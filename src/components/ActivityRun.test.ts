@@ -9,7 +9,7 @@ const step = (name: string, ok?: boolean): Message => ({ id: name, at: 1, role: 
 describe("ActivityRun", () => {
   it("keeps running work visible in the closed group header without claiming completion", () => {
     const html = renderToStaticMarkup(createElement(ActivityRun, { messages: [step("Read", true), step("Bash")], children: "recorded details" }));
-    expect(html).toContain("Running · Bash");
+    expect(html).toContain("Working…");
     expect(html).toContain('data-running="true"');
     expect(html).toContain('aria-expanded="false"');
     expect(html).not.toContain("recorded details");
@@ -17,7 +17,7 @@ describe("ActivityRun", () => {
   });
   it("reveals steps for search navigation and retains a controlled disclosure target", () => {
     const html = renderToStaticMarkup(createElement(ActivityRun, { messages: [step("Read", true), step("Bash", true)], forceOpen: true, children: "recorded details" }));
-    expect(html).toContain("2 steps · Read, Bash");
+    expect(html).toContain("2 steps");
     expect(html).toContain('aria-expanded="true"');
     expect(html).toContain("aria-controls=");
     expect(html).toContain("recorded details");

@@ -367,6 +367,7 @@ function EventEditor({
     existingRoutine?.timeoutMinutes ?? null,
   );
   const [intervalTimeoutDefaultApplied, setIntervalTimeoutDefaultApplied] = useState(Boolean(existingRoutine));
+  const [notificationPolicy, setNotificationPolicy] = useState<"all" | "important" | "failures">(existingRoutine?.notificationPolicy ?? "all");
   const [overlap, setOverlap] = useState<"skip" | "queue">(existingRoutine?.overlap ?? "skip");
   const [recurrence, setRecurrence] = useState<RecurrenceChoice>(recurrenceFor(schedule, initialAt));
   const [cronDraft, setCronDraft] = useState(() => cronDraftFor(schedule.type === "cron" ? schedule : undefined, initialAt));
@@ -541,6 +542,7 @@ function EventEditor({
           durationMinutes,
           timeoutMinutes,
           overlap,
+          notificationPolicy,
           attachments: routineTarget === "room-goal" ? [] : attachments as RoutineContextAttachment[],
           ...(routineTarget === "bot" ? { resultsThreadId } : {}),
         };
@@ -705,6 +707,11 @@ function EventEditor({
                   Runs while BOS Bot is open on this computer — it cannot wake a sleeping Mac. A run missed by less than 12 hours still happens when the app is back; for 24/7, run BOS Bot on a VPS.
                 </p>
               )}
+              {kind === "routine" && <label className="block text-[12px] text-ink-secondary">Notifications
+                <select aria-label="Routine notifications" value={notificationPolicy} onChange={e => setNotificationPolicy(e.target.value as typeof notificationPolicy)} className="ml-3 rounded-lg border border-hairline bg-inset p-2 text-ink">
+                  <option value="all">All runs</option><option value="important">Important updates</option><option value="failures">Failures only</option>
+                </select><span className="mt-1 block text-[11px]">Every run stays in Logs. Quiet replies never notify. Important updates include material findings and requests for input.</span>
+              </label>}
               {isCronChoice(recurrence) && kind === "routine" && cron && <CronScheduleFields choice={recurrence} value={cronDraft} onChange={(draft) => { setCronDraft(draft); setCronChanged(true); }} runs={cron.runs} error={cron.error} />}
               {recurrence === "custom" && (
                 <div className="flex flex-wrap gap-1.5">
@@ -1799,7 +1806,7 @@ export function RoutinesPage({ onBack, onOpenRoom }: { onBack: () => void; onOpe
               </button>}
               {!routinesOnly && <button type="button" aria-label="Create a webhook" disabled={visibleBots.length === 0} onClick={() => { newMenuRef.current?.removeAttribute("open"); setSection("webhooks"); setWebhookCreateRequest((request) => request + 1); }} className="flex w-full items-start gap-3 rounded-lg px-3 py-2.5 text-left hover:bg-raised disabled:cursor-not-allowed disabled:opacity-40">
                 <Webhook size={16} className="mt-0.5 shrink-0 text-accent" aria-hidden="true" />
-                <span><span className="block text-[13px] font-medium text-ink">Webhook</span><span className="mt-0.5 block text-[10.5px] leading-relaxed text-ink-secondary">Start a task when another app sends an event.</span></span>
+                <span><span className="block text-[13px] font-medium text-ink">App event / webhook</span><span className="mt-0.5 block text-[10.5px] leading-relaxed text-ink-secondary">GitHub PRs, CI workflows, Slack mentions or a custom webhook.</span></span>
               </button>}
             </div>
           </details>

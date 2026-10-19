@@ -85,3 +85,14 @@ workspaces. Evidence logs remain. These tests do not prove real cloud accounts,
 external providers, phone recovery or OS-specific file-picker appearance. Saved
 credentials are deliberately not transferred. No live mutation is part of this
 recipe.
+
+### Check the actual downloadable desktop server
+
+Mount a downloaded DMG read-only without opening/installing the app. The verifier can restore a source fixture into that package's server while retaining disposable homes and fake engines:
+
+```sh
+node --experimental-strip-types scripts/verify-workspace-backup.ts \
+  --destination-server '/absolute/mount/BOS Bot.app/Contents/Resources/server/index.js'
+```
+
+The selected entry is used for both destination startup and its post-restore restart. This checks packaged backup compatibility, not Electron UI or installed-device acceptance. Never point the fixture at a live data directory; it accepts only a server entry, and still owns/cleans its temporary homes.

@@ -14,7 +14,7 @@ import type { ModelSelection } from "./contracts.ts";
 import * as mdb from "./message-db.ts";
 import { peerAllowKey } from "./peer-approval-key.ts";
 import { canAccessTeam } from "./peer-roster.ts";
-import { Store, roomResponders, toWireTask, type BotRecord } from "./store.ts";
+import { Store, foreignFolder, roomResponders, toWireTask, type BotRecord } from "./store.ts";
 import type { TeamSetupRequest } from "../shared/team-setup.ts";
 import { SECTION_CONTEXTS_FILE } from "./section-context.ts";
 
@@ -1704,6 +1704,27 @@ describe("Store task working folder", () => {
     // a new task starts in the bot's current folder
     const next = store.createTask(bot.id, "second")!;
     expect(store.pinTaskCwd(bot.id, next.threadId)).toBe("/tmp/project-b");
+  });
+
+  it("moves a thread restored from another computer's home onto this bot's folder", () => {
+    const store = new Store(selection);
+    const bot = store.createBot();
+    const task = store.taskByThread(bot.id, bot.threadId)!;
+    task.cwd = "/home/someone-else-9f3/apps/acme-bot";
+    task.resumeCursors = { codex: "thread-from-the-server" } as typeof task.resumeCursors;
+    store.patchBot(bot.id, { cwd: "/tmp/local-bot-folder" });
+    expect(foreignFolder("/home/someone-else-9f3/apps/acme-bot")).toBe(true);
+    expect(store.pinTaskCwd(bot.id, bot.threadId, "/tmp/private")).toBe("/tmp/local-bot-folder");
+    expect(store.taskByThread(bot.id, bot.threadId)?.resumeCursors).toEqual({});
+
+    // a bot folder from the other computer is skipped for the private workspace
+    const other = store.createBot();
+    store.patchBot(other.id, { cwd: "/home/someone-else-9f3/apps/x" });
+    expect(store.pinTaskCwd(other.id, other.threadId, "/tmp/private")).toBe("/tmp/private");
+
+    // a missing folder outside any home (an unplugged drive) is left alone
+    expect(foreignFolder("/Volumes/unplugged-9f3/project")).toBe(false);
+    expect(foreignFolder("/tmp/gone-9f3")).toBe(false);
   });
 
   it("pins the default (null) when the bot has no folder, so a later folder can't move a live session", () => {

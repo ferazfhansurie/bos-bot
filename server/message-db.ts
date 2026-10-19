@@ -62,6 +62,10 @@ function open(): DatabaseSync {
       payload TEXT NOT NULL
     );
     CREATE INDEX IF NOT EXISTS chat_followups_receipt ON chat_followups(kind, owner_id, thread_id, send_id);
+    CREATE TABLE IF NOT EXISTS chat_queue_pauses (
+      kind TEXT NOT NULL, owner_id TEXT NOT NULL, thread_id TEXT NOT NULL,
+      PRIMARY KEY (kind, owner_id, thread_id)
+    );
     CREATE TABLE IF NOT EXISTS command_receipts (
       kind TEXT NOT NULL,
       key TEXT NOT NULL,
@@ -902,4 +906,24 @@ export function closeMessageDb(): void {
 export function lastUserMessageAt(threadId: string): number | undefined {
   const row = db().prepare("SELECT at FROM messages WHERE thread_id = ? AND role = 'user' AND json_extract(json, '$.from.botId') IS NULL ORDER BY at DESC LIMIT 1").get(threadId) as { at: number } | undefined;
   return row?.at;
+}
+
+/** A user Stop holds the queue across server/client restarts, including sends
+ * restored after an in-flight steer was refused. Resume is an explicit act. */
+export function chatQueuePaused(kind: ChatFollowup["kind"], ownerId: string, threadId: string): boolean {
+  return Boolean(db().prepare("SELECT 1 FROM chat_queue_pauses WHERE kind = ? AND owner_id = ? AND thread_id = ?").get(kind, ownerId, threadId));
+}
+export function setChatQueuePaused(kind: ChatFollowup["kind"], ownerId: string, threadId: string, paused: boolean): void {
+  writeFollowups(connection => {
+    connection.prepare(paused
+      ? "INSERT OR IGNORE INTO chat_queue_pauses(kind, owner_id, thread_id) VALUES (?, ?, ?)"
+      : "DELETE FROM chat_queue_pauses WHERE kind = ? AND owner_id = ? AND thread_id = ?").run(kind, ownerId, threadId);
+  });
+}
+
+/** Whole-workspace transcript totals: enterprise provisioning only replaces a
+ * workspace nobody has talked in yet. */
+export function messageTotals(): { messages: number; userMessages: number; threads: number } {
+  const row = db().prepare("SELECT COUNT(*) AS messages, COALESCE(SUM(CASE WHEN role = 'user' THEN 1 ELSE 0 END), 0) AS userMessages, COUNT(DISTINCT thread_id) AS threads FROM messages").get() as { messages: number; userMessages: number; threads: number };
+  return { messages: Number(row.messages), userMessages: Number(row.userMessages), threads: Number(row.threads) };
 }

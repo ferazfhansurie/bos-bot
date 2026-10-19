@@ -480,6 +480,7 @@ public struct BotTask: Codable, Hashable, Sendable {
 /// phone's copy of a server-owned queue entry, identified by the harness's
 /// queueId and never by its text.
 public struct QueuedSend: Codable, Hashable, Identifiable, Sendable {
+    public var paused: Bool?
     public var queueId: String
     public var text: String
     /// Why the harness held it. "capacity" is the known value; anything else
@@ -488,7 +489,8 @@ public struct QueuedSend: Codable, Hashable, Identifiable, Sendable {
 
     public var id: String { queueId }
 
-    public init(queueId: String, text: String, reason: String? = nil) {
+    public init(queueId: String, text: String, reason: String? = nil, paused: Bool? = nil) {
+        self.paused = paused
         self.queueId = queueId
         self.text = text
         self.reason = reason
@@ -1741,6 +1743,7 @@ public extension Room {
 /// How a message lands while a turn is running: `queue` waits for the turn
 /// to settle, `block` interrupts it and starts this message instead.
 public enum MessagePriority: String, Sendable {
+    case steer
     case queue
     case block
 }

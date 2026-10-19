@@ -82,6 +82,7 @@ export function Marketplace({
   const [addOpen, setAddOpen] = useState(Boolean(initialUrl));
   const [link, setLink] = useState(initialUrl ?? "");
   const [pending, setPending] = useState<PendingTeamImport | null>(null);
+  const [pendingEntry, setPendingEntry] = useState<MarketplaceEntry | null>(null);
   // publish
   const ownBots = state.bots.filter((bot) => !bot.hidden && !bot.remote);
   const [publishBotId, setPublishBotId] = useState("");
@@ -161,27 +162,11 @@ export function Marketplace({
   };
 
   const download = async (entry: MarketplaceEntry) => {
-    setBusy(true);
     setError("");
     try {
-      const response = await runImport(entry.package);
-      const bot = response.bots.find((candidate) => !candidate.hidden) ?? response.bots[0];
-      const selection = pickModelSelection(entry.model, state.instances);
-      if (bot && selection) {
-        dispatch({
-          type: "updateBot",
-          botId: bot.id,
-          patch: { modelSelection: { instanceId: selection.instanceId, model: selection.model, ...(selection.effort ? { effort: selection.effort as ModelSelection["effort"] } : {}) } },
-        });
-      }
-      if (bot) dispatch({ type: "select", id: bot.id });
-      track("marketplace_downloaded", { slug: entry.slug, model: selection ? "recommended" : "default" });
-      onImported({ name: entry.name, members: response.bots.length });
-    } catch (cause) {
-      setError(errorText(cause));
-    } finally {
-      setBusy(false);
-    }
+      setPending(teamImportPreview(entry.package));
+      setPendingEntry(entry);
+    } catch (cause) { setError(errorText(cause)); }
   };
 
   const requestRent = async (entry: MarketplaceEntry) => {
@@ -223,6 +208,7 @@ export function Marketplace({
           throw new Error("That backup or bot file is not valid JSON.");
         }
       }
+      setPendingEntry(null);
       setPending(teamImportPreview(manifest));
     } catch (cause) {
       setError(errorText(cause));
@@ -234,6 +220,7 @@ export function Marketplace({
     setBusy(true);
     setError("");
     try {
+      setPendingEntry(null);
       setPending(teamImportPreview(await api("/api/marketplace/link", { method: "POST", body: JSON.stringify({ url: url.trim() }) })));
     } catch (cause) {
       setError(errorText(cause));
@@ -254,8 +241,16 @@ export function Marketplace({
     try {
       const response = await runImport(pending.manifest);
       const first = response.bots.find((bot) => !bot.hidden);
-      if (first) dispatch({ type: "select", id: first.id });
-      track("team_imported", { members: response.bots.length, source: "file", mode: "add", format: pending.kind });
+      if (first) {
+        if (pendingEntry) {
+          const selection = pickModelSelection(pendingEntry.model, state.instances);
+          if (selection) dispatch({ type: "updateBot", botId: first.id, patch: { modelSelection: { instanceId: selection.instanceId, model: selection.model, ...(selection.effort ? { effort: selection.effort as ModelSelection["effort"] } : {}) } } });
+          track("marketplace_downloaded", { slug: pendingEntry.slug, model: selection ? "recommended" : "default" });
+        }
+        dispatch({ type: "select", id: first.id });
+        if (pending.kind === "package") dispatch({ type: "toggleSettings", open: true, section: "overview" });
+      }
+      track("team_imported", { members: response.bots.length, source: pendingEntry ? "marketplace" : "file", mode: "add", format: pending.kind });
       onImported({ name: pending.name, members: response.bots.length });
     } catch (cause) {
       setError(errorText(cause));
@@ -379,6 +374,22 @@ export function Marketplace({
                   </li>
                 ))}
               </ul>
+              {pending.kind === "package" && <div className="mt-4 space-y-3 text-[13px] text-ink-secondary">
+                <p>{pending.playbooks} playbooks · {pending.routines} routines · {pending.rooms} rooms</p>
+                {pending.instructions?.map((instruction, index) => <details key={index} className="rounded-lg border border-hairline/40 p-3">
+                  <summary className="cursor-pointer text-ink">{instruction.name}: standing instructions</summary>
+                  <pre className="mt-2 whitespace-pre-wrap break-words font-sans text-[12px]">{instruction.text}</pre>
+                </details>)}
+                {Boolean(pending.routineNames?.length) && <p>routines arrive paused: {pending.routineNames?.join(", ")}. enable each when ready.</p>}
+                <div className="rounded-lg border border-hairline/40 p-3">
+                  <p className="font-medium text-ink">connect your own accounts after import</p>
+                  <p className="mt-1">account access and credentials are never included. open the imported bot’s overview for setup status and connection actions.</p>
+                  {pending.apps.map((app, index) => <p key={index} className="mt-2">{app.label}{app.optional ? " (optional)" : " (required)"}{app.reason ? `: ${app.reason}` : ""}</p>)}
+                  {pending.tools?.map((tool, index) => <p key={index} className="mt-2">{tool.label}{tool.optional ? " (optional)" : " (required)"}: {tool.reason}</p>)}
+                  {pending.capabilities?.map((capability, index) => <p key={index} className="mt-2">required capability: {capability}</p>)}
+                  {!pending.apps.length && !pending.tools?.length && !pending.capabilities?.length && <p className="mt-2">no connected accounts or extra tools required by this template.</p>}
+                </div>
+              </div>}
               {Boolean(pending.skills?.length) && (
                 <p className="mt-3 text-[13px] text-ink-secondary">Skills arrive disabled: {pending.skills?.join(", ")}.</p>
               )}

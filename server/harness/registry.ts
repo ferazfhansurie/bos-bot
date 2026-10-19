@@ -30,10 +30,48 @@ export type RegistryEntry =
   | { instanceId: InstanceId; live: ProviderInstance; shadow?: undefined }
   | { instanceId: InstanceId; live?: undefined; shadow: ShadowInstance };
 
+/** An app-managed fallback for an npm-installed engine (the Codex CLI's
+ * standalone binary): used by Settings' install button when npm is absent,
+ * and reported on the engine row once it is in use. */
+export interface ManagedInstallHook {
+  /** Null when this platform has no managed build. */
+  descriptor(): { label: string; downloadBytes: number; vendor: "google" | "openai" | "anthropic" } | null;
+  install(): Promise<void>;
+  status(): ManagedRuntimeStatus;
+}
+
+export interface ManagedRuntimeStatus {
+  /** The managed copy is on the engines' PATH. */
+  active: boolean;
+  version: string | null;
+  latest: string | null;
+  /** Installed and verified, waiting for running turns to finish. */
+  pending: string | null;
+}
+
 /** The driver's install descriptor plus what this machine can do about it. */
-function withServerInstall(install: AnyProviderDriver["install"], npmPresent: boolean): AnyProviderDriver["install"] {
+function withServerInstall(install: AnyProviderDriver["install"], npmPresent: boolean, hook?: ManagedInstallHook): AnyProviderDriver["install"] {
   const server = install ? serverInstallFor(install, npmPresent) : null;
-  return server ? { ...install, server } : install;
+  if (server) return { ...install, server };
+  // No npm: the app's own download replaces the npm one-liner. `needsNode`
+  // goes with it — this route needs no Node.
+  const managed = install && !install.managed && !npmPresent ? hook?.descriptor() : null;
+  if (install && managed) {
+    const { needsNode: _needsNode, ...rest } = install;
+    return { ...rest, managed };
+  }
+  return install;
+}
+
+/** The managed runtime's state for an engine row, once there is one. */
+function managedRuntimeOf(hook: ManagedInstallHook | undefined): (ManagedRuntimeStatus & { autoUpdates: true }) | undefined {
+  if (!hook) return undefined;
+  try {
+    const status = hook.status();
+    return status.active || status.version ? { ...status, autoUpdates: true } : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 /** The `cli` field off a driver's default config, when it has one — the
@@ -66,10 +104,16 @@ export class ProviderRegistry {
   /** Whether npm is on this machine; injectable because the PATH scan also
    * looks in standard install locations, which tests cannot empty. */
   private readonly npmPresent: () => boolean;
+  /** App-managed runtimes keyed by driver kind (see ManagedInstallHook). */
+  private readonly managedInstalls: Readonly<Record<string, ManagedInstallHook>>;
 
-  constructor(drivers: readonly AnyProviderDriver[], options: { enginesBaseDir?: string; npmAvailable?: () => boolean } = {}) {
+  constructor(
+    drivers: readonly AnyProviderDriver[],
+    options: { enginesBaseDir?: string; npmAvailable?: () => boolean; managedInstalls?: Record<string, ManagedInstallHook> } = {},
+  ) {
     this.enginesBaseDir = options.enginesBaseDir;
     this.npmPresent = options.npmAvailable ?? npmAvailable;
+    this.managedInstalls = options.managedInstalls ?? {};
     this.driversByKind = new Map(drivers.map((d) => [d.driverKind, d]));
   }
 
@@ -157,7 +201,8 @@ export class ProviderRegistry {
 
   /** A driver's own installer (a managed download) first; otherwise the
    * app's npm prefix, when the driver's install one-liner is an npm package
-   * and npm is on PATH. False means Settings has nothing to offer here. */
+   * and npm is on PATH; otherwise an app-managed fallback for that driver.
+   * False means Settings has nothing to offer here. */
   async installRuntime(instanceId: InstanceId): Promise<boolean> {
     const entry = this.byId.get(instanceId);
     if (!entry) return false;
@@ -165,10 +210,16 @@ export class ProviderRegistry {
       await entry.live.installRuntime();
       return true;
     }
-    const driver = this.driversByKind.get(entry.shadow?.driverKind ?? entry.live!.driverKind);
+    const driverKind = entry.shadow?.driverKind ?? entry.live!.driverKind;
+    const driver = this.driversByKind.get(driverKind);
     const server = serverInstallFor(driver?.install, this.npmPresent());
-    if (!server) return false;
-    await installNpmEngine(server.package, { baseDir: this.enginesBaseDir, cli: cliDefaultOf(driver) });
+    if (server) {
+      await installNpmEngine(server.package, { baseDir: this.enginesBaseDir, cli: cliDefaultOf(driver) });
+      return true;
+    }
+    const hook = this.managedInstalls[driverKind];
+    if (!hook?.descriptor()) return false;
+    await hook.install();
     return true;
   }
 
@@ -224,7 +275,8 @@ export class ProviderRegistry {
             capabilities: { computerMcp: false, agentsMcp: false, localComputerMcp: false },
             // an unknown driver has no driver record, hence no install path
             access: driver?.metadata.access ?? "subscription",
-            install: withServerInstall(driver?.install, npmPresent),
+            install: withServerInstall(driver?.install, npmPresent, this.managedInstalls[entry.shadow.driverKind]),
+            managedRuntime: managedRuntimeOf(this.managedInstalls[entry.shadow.driverKind]),
             cli: entry.shadow.cli,
             cliDefault: cliDefaultOf(driver),
             // a shadow is exactly the "your CLI is broken, pick another"
@@ -259,7 +311,8 @@ export class ProviderRegistry {
             approvalReview: inst.reviewPermission !== undefined,
           },
           access: driver?.metadata.access ?? "subscription",
-          install: withServerInstall(driver?.install, npmPresent),
+          install: withServerInstall(driver?.install, npmPresent, this.managedInstalls[inst.driverKind]),
+          managedRuntime: managedRuntimeOf(this.managedInstalls[inst.driverKind]),
           authentication: inst.startAuthentication
             ? {
                 method: inst.getAuthentication && inst.completeAuthentication

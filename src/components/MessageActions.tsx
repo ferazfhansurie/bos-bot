@@ -26,6 +26,7 @@ type Popover = "react" | "menu" | null;
  * side so react stays nearest the bubble on both sides. */
 export function MessageActions({
   side,
+  variant = "bubble",
   forceOpen = false,
   className,
   onReply,
@@ -33,6 +34,10 @@ export function MessageActions({
   children,
 }: {
   side: "user" | "bot";
+  /** `turn`: chatgpt's "More actions" button at the end of a turn's action
+   * row. React and reply move into its menu; the row around it owns the
+   * hover visibility. */
+  variant?: "bubble" | "turn";
   forceOpen?: boolean;
   className?: string;
   onReply?: () => void;
@@ -63,6 +68,65 @@ export function MessageActions({
 
   const toggle = (next: Exclude<Popover, null>) => setPopover((current) => (current === next ? null : next));
   const popoverSide = mirrored ? "right-0" : "left-0";
+  const reactions = popover === "react" && onReact && (
+    <div role="dialog" aria-label="React" className={cn("animate-pop-in absolute top-full z-30 mt-1 flex gap-0.5 rounded-full border border-hairline/50 bg-menu p-1 shadow-2xl shadow-black/50", popoverSide)}>
+      {REACTIONS.map((emoji) => (
+        <button
+          key={emoji}
+          type="button"
+          aria-label={`React ${emoji}`}
+          onClick={() => {
+            onReact(emoji);
+            setPopover(null);
+          }}
+          className="flex size-9 items-center justify-center rounded-full text-[18px] transition-transform hover:scale-110 hover:bg-raised"
+        >
+          {emoji}
+        </button>
+      ))}
+    </div>
+  );
+
+  if (variant === "turn") {
+    return (
+      <div ref={root} className={cn("relative flex items-center", className)} data-testid="message-actions" data-open={open ? "true" : undefined}>
+        <button
+          type="button"
+          onClick={() => toggle("menu")}
+          aria-label={t("chat.messageActions")}
+          title={t("chat.messageActions")}
+          aria-haspopup="menu"
+          aria-expanded={popover === "menu" || popover === "react"}
+          className="chat-ghost inline-flex items-center justify-center p-1"
+        >
+          <Ellipsis size={18} aria-hidden="true" />
+        </button>
+        {reactions}
+        <div
+          role="menu"
+          hidden={popover !== "menu"}
+          aria-label={t("chat.messageActions")}
+          onClick={(event) => {
+            const button = (event.target as HTMLElement).closest("button");
+            if (button && !button.hasAttribute("data-keep-menu")) window.setTimeout(() => setPopover(null), 120);
+          }}
+          className={cn("message-menu animate-pop-in absolute top-full z-30 mt-1 flex min-w-[190px] flex-col rounded-xl border border-hairline/50 bg-menu p-1 shadow-2xl shadow-black/50", popoverSide, popover !== "menu" && "!hidden")}
+        >
+          {children}
+          {onReply && (
+            <button type="button" onClick={onReply} aria-label={t("chat.replyToMessage")} title={t("chat.reply")} className={messageActionClass}>
+              <MessageSquareReply size={16} aria-hidden="true" />
+            </button>
+          )}
+          {onReact && (
+            <button type="button" data-keep-menu onClick={() => setPopover("react")} aria-label="React" title="React" className={messageActionClass}>
+              <Smile size={16} aria-hidden="true" />
+            </button>
+          )}
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div
@@ -99,24 +163,7 @@ export function MessageActions({
         <Ellipsis size={18} aria-hidden="true" />
       </button>
 
-      {popover === "react" && onReact && (
-        <div role="dialog" aria-label="React" className={cn("animate-pop-in absolute top-full z-30 mt-1 flex gap-0.5 rounded-full border border-hairline/50 bg-menu p-1 shadow-2xl shadow-black/50", popoverSide)}>
-          {REACTIONS.map((emoji) => (
-            <button
-              key={emoji}
-              type="button"
-              aria-label={`React ${emoji}`}
-              onClick={() => {
-                onReact(emoji);
-                setPopover(null);
-              }}
-              className="flex size-9 items-center justify-center rounded-full text-[18px] transition-transform hover:scale-110 hover:bg-raised"
-            >
-              {emoji}
-            </button>
-          ))}
-        </div>
-      )}
+      {reactions}
       {/* always mounted (hidden while closed) so the controls keep their
           own state between openings */}
       {!forceOpen && (

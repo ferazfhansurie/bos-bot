@@ -57,6 +57,12 @@ export const SHORTCUT_GROUPS: readonly ShortcutGroup[] = [
         winKeys: ["Ctrl", "Shift", "U"],
       },
       {
+        id: "switch-thread",
+        description: "Switch to previous / next thread of this bot",
+        macKeys: ["⌘", "[ / ]"],
+        winKeys: ["Ctrl", "[ / ]"],
+      },
+      {
         id: "switch-bot",
         description: "Switch to previous / next bot",
         macKeys: ["⌘", "⇧", "[ / ]"],
@@ -73,6 +79,12 @@ export const SHORTCUT_GROUPS: readonly ShortcutGroup[] = [
   {
     category: "Chat & Composer",
     items: [
+      {
+        id: "appshot",
+        description: "Appshot a window into the composer (works from any app, desktop app)",
+        macKeys: ["⌘", "⇧", "2"],
+        winKeys: ["Ctrl", "Shift", "2"],
+      },
       {
         id: "send-message",
         description: "Send message",

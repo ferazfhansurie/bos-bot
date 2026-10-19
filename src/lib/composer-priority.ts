@@ -1,8 +1,6 @@
-/** How a send made while a turn is running should land: "queue" waits
- * behind the current turn (today's behavior), "block" interrupts it and
- * runs now. Idle sends always start right away, so priority only matters
- * while the conversation is busy. */
-export type SendPriority = "block" | "queue";
+/** New client Send steers without cancelling. Queue explicitly waits; block is
+ * retained only for older clients that deliberately request preemption. */
+export type SendPriority = "steer" | "block" | "queue";
 
 /** The queue/block toggle only appears where queueing can actually happen:
  * a live, unlocked, own (not shared) conversation with no approval waiting. */
@@ -24,14 +22,13 @@ export function composerPriorityVisible({
  * counts while the toggle is still on screen. If the turn ended before the
  * send, there is nothing to interrupt and the send is an ordinary one. */
 export function effectiveSendPriority(chosen: SendPriority, visible: boolean): SendPriority {
-  return visible && chosen === "block" ? "block" : "queue";
+  return visible ? chosen : "steer";
 }
 
-/** Adds `priority` to a message POST body only when it is "block". Queue is
- * the server default, so omitting it keeps older servers byte-identical. */
+/** Carry explicit intent so After this cannot inherit an auto-steer preference. */
 export function withSendPriority<T extends object>(
   body: T,
   priority: SendPriority | undefined,
-): T & { priority?: "block" } {
-  return priority === "block" ? { ...body, priority } : body;
+): T & { priority?: SendPriority } {
+  return priority ? { ...body, priority } : body;
 }

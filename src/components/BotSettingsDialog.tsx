@@ -12,6 +12,7 @@ import { ConfirmDialog } from "./ConfirmDialog";
 import { BOT_SECTIONS, BOT_SECTION_GROUPS } from "./bot-settings/sections";
 import { useBotSettingsDerived } from "./bot-settings/useBotSettingsDerived";
 import { OverviewSection } from "./bot-settings/OverviewSection";
+import { ReadinessPanel } from "./bot-settings/ReadinessPanel";
 import { IdentitySection } from "./bot-settings/IdentitySection";
 import { SoulSection } from "./bot-settings/SoulSection";
 import { SkillsSection } from "./bot-settings/SkillsSection";
@@ -225,25 +226,35 @@ export function BotSettingsDialog({ bot }: { bot: Bot }) {
   const renderSectionBody = (id: (typeof BOT_SECTIONS)[number]["id"]) => {
     switch (id) {
       case "overview":
-        return overview === null && overviewError ? (
-          <div className="rounded-xl bg-card p-4 text-[13px] text-ink-secondary">Couldn’t load the overview.</div>
-        ) : (
-          // Data wins over a transient refetch failure: once an overview has
-          // loaded once, a later failed refetch (routines/webhooks/bot-record
-          // changed, the request errored) keeps showing it rather than
-          // replacing a fully populated card with an error block — the same
-          // precedence PromptPreview already gives its own data vs. error.
-          <OverviewSection
-            overview={overview}
-            refreshError={overview !== null && overviewError}
-            prompt={prompt}
-            promptError={promptError}
-            onOpen={(target) => dispatch({ type: "toggleSettings", open: true, section: target })}
-            onSetup={derived.canCoordinate && !bot.busy ? () => {
-              dispatch({ type: "toggleSettings", open: false });
-              dispatch({ type: "send", botId: bot.id, text: "/setup", threadId: bot.threadId });
-            } : undefined}
-          />
+        return (
+          <div className="flex flex-col gap-4">
+            <ReadinessPanel bot={bot} active={!collapsed} onAction={(action) => {
+              if (action === "engines") {
+                dispatch({ type: "toggleSettings", open: false });
+                dispatch({ type: "toggleAppSettings", open: true, section: "engines" });
+              } else if (action === "apps" || action === "plugins") {
+                dispatch({ type: "toggleSettings", open: false });
+                dispatch({ type: "togglePlugins", open: true, surface: action === "plugins" ? "mcp" : "apps" });
+              } else {
+                dispatch({ type: "toggleSettings", open: true, section: action });
+              }
+            }} />
+            {overview === null && overviewError ? (
+              <div className="rounded-xl bg-card p-4 text-[13px] text-ink-secondary">Couldn’t load the overview.</div>
+            ) : (
+              <OverviewSection
+                overview={overview}
+                refreshError={overview !== null && overviewError}
+                prompt={prompt}
+                promptError={promptError}
+                onOpen={(target) => dispatch({ type: "toggleSettings", open: true, section: target })}
+                onSetup={derived.canCoordinate && !bot.busy ? () => {
+                  dispatch({ type: "toggleSettings", open: false });
+                  dispatch({ type: "send", botId: bot.id, text: "/setup", threadId: bot.threadId });
+                } : undefined}
+              />
+            )}
+          </div>
         );
       case "identity":
         return (

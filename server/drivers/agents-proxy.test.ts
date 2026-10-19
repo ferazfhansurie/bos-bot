@@ -1,4 +1,3 @@
-import { compatEnv } from "../../electron/branding-env.cjs";
 // Contract test for the agent-to-agent comms MCP proxy (agents-proxy.ts):
 // spawn it exactly the way a driver's mcpServers entry does (process.execPath
 // + entry file + env) against a scripted stub of the harness's /api/internal
@@ -13,6 +12,20 @@ import { ToolResults } from "../tool-results.ts";
 
 const PROXY = join(dirname(fileURLToPath(import.meta.url)), "agents-proxy.ts");
 const TOKEN = "test-comms-token";
+// Never inherit a running agent's harness capabilities. Spreading compatEnv
+// materializes BOSBOT_* aliases; those override the fixture's legacy OMB_*
+// overrides and can send mutation tests to the user's live harness.
+function isolatedProxyTestEnvironment(environment: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  return Object.fromEntries(Object.entries(environment).filter(([key]) =>
+    !/^(?:BOSBOT_|BOS_|OMB_|OPENMAUSBOT_|AIOS_)/.test(key),
+  ));
+}
+const proxyTestEnv = isolatedProxyTestEnvironment(process.env);
+it("cannot inherit canonical harness aliases that override the fixture target", () => {
+  const environment = isolatedProxyTestEnvironment({ PATH: "/fixture/bin", BOSBOT_HARNESS_URL: "https://never-contact.example", BOS_HARNESS_URL: "https://never-contact.example", OMB_HARNESS_URL: "https://never-contact.example", BOSBOT_COMMS_TOKEN: "fixture-not-a-secret", OMB_BOT_ID: "other-bot", OPENMAUSBOT_PORT: "1234", AIOS_HOME: "/other-home" });
+  expect(environment).toEqual({ PATH: "/fixture/bin" });
+  expect({ ...environment, OMB_HARNESS_URL: "http://127.0.0.1:1234", OMB_COMMS_TOKEN: TOKEN }).toEqual({ PATH: "/fixture/bin", OMB_HARNESS_URL: "http://127.0.0.1:1234", OMB_COMMS_TOKEN: TOKEN });
+});
 
 // scripted harness stub
 let stub: Server;
@@ -49,6 +62,8 @@ let lastThreadBody: any = null;
 let threadCalls = 0;
 let threadResponse: unknown = { threadId: "thread-new", title: "QA: PR #1", botId: "bot-asker", botName: "Asker", self: true, state: "running", limit: 3 };
 let computerRequests: { method: string; url: string; body: unknown }[] = [];
+let pageRequests: { method: string; url: string; body: unknown }[] = [];
+let videoRequests: { method: string; url: string; body: unknown }[] = [];
 let computerResponse: unknown = { current: "local", available: ["local", "vm"] };
 let computerStatus = 200;
 let lastCreateBody: any = null;
@@ -122,6 +137,8 @@ afterEach(() => {
   teamRequestResponse = DEFAULT_TEAM_RESPONSE;
   skillStageResponse = DEFAULT_SKILL_RESPONSE;
   computerRequests = [];
+  pageRequests = [];
+  videoRequests = [];
   computerResponse = { current: "local", available: ["local", "vm"] };
   computerStatus = 200;
 });
@@ -263,6 +280,38 @@ beforeAll(async () => {
         threadCalls += 1;
         res.writeHead(201, { "content-type": "application/json" });
         res.end(JSON.stringify(threadResponse));
+      });
+      return;
+    }
+    if (req.url?.startsWith("/api/internal/videos")) {
+      let data = "";
+      req.on("data", (chunk) => (data += chunk));
+      req.on("end", () => {
+        videoRequests.push({ method: req.method!, url: req.url!, body: data ? JSON.parse(data) : null });
+        const url = req.url!.split("?")[0]!;
+        const video = { id: "v-abc12345", title: "Teaser", revision: 3, where: "The owner sees this video live in the Videos side tab.", text: "1080x1920 @ 30fps" };
+        const body = req.method === "GET" && url === "/api/internal/videos"
+          ? { videos: [{ id: "v-abc12345", title: "Teaser", duration: 12.5, width: 1080, height: 1920, clipCount: 4, revision: 3, lastRender: { status: "done" } }] }
+          : url.endsWith("/media") ? { video, media: { id: "m-abc123", name: "a.mp4", kind: "video", duration: 2, width: 320, height: 180, fps: 30, hasAudio: true } }
+            : url.endsWith("/render") ? { render: { id: "r-abc123", status: "queued", progress: 0, revision: 3 } }
+              : url.includes("/renders/") ? { render: { id: "r-abc123", status: "done", progress: 1, revision: 3 }, path: "/tmp/ws/videos/Teaser-abc123.mp4" }
+                : url.endsWith("/snapshot") ? { path: "/tmp/ws/videos/snapshots/v-abc12345-1500ms.jpg", t: 1.5, data: Buffer.from("jpg").toString("base64") }
+                  : url.endsWith("/edit") ? { video, created: ["c-new1"] }
+                    : { video };
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify(body));
+      });
+      return;
+    }
+    if (req.url?.startsWith("/api/internal/pages")) {
+      let data = "";
+      req.on("data", (chunk) => (data += chunk));
+      req.on("end", () => {
+        pageRequests.push({ method: req.method!, url: req.url!, body: data ? JSON.parse(data) : null });
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify(req.method === "GET" && req.url!.split("?")[0] === "/api/internal/pages"
+          ? { pages: [{ id: "p-abc12345", title: "Plan", snippet: "first line", openComments: 1 }] }
+          : { page: { id: "p-abc12345", title: "Plan", revision: 2, text: "<!-- b-1 -->\nfirst line" } }));
       });
       return;
     }
@@ -410,7 +459,7 @@ beforeAll(async () => {
 
   child = spawn(process.execPath, [PROXY], {
     env: {
-      ...compatEnv,
+      ...proxyTestEnv,
       OMB_HARNESS_URL: `http://127.0.0.1:${stubPort}`,
       OMB_BOT_ID: "bot-asker",
       OMB_THREAD_ID: "thread-asker-routine",
@@ -628,9 +677,24 @@ describe("agents-proxy MCP surface", () => {
       "propose_routine_action",
       "get_work_plan",
       "update_work_plan",
+      "propose_outbound_message",
+      "record_outbound_receipt",
       "propose_profile",
       "skills_list",
       "skill_manage",
+      "pages_list",
+      "page_read",
+      "page_create",
+      "page_write",
+      "page_edit",
+      "page_comment",
+      "videos_list",
+      "video_read",
+      "video_create",
+      "video_add_media",
+      "video_edit",
+      "video_render",
+      "video_snapshot",
     ]);
     const ask = list.result.tools.find((tool: { name: string }) => tool.name === "ask_bot");
     const delegate = list.result.tools.find((tool: { name: string }) => tool.name === "delegate_bot");
@@ -643,6 +707,48 @@ describe("agents-proxy MCP surface", () => {
     expect(wait.description).toContain("Never call it in the same turn as delegate_bot");
     expect(credential.description).toContain("freshly QR-paired mobile app show a secure entry card");
     expect(credential.description).toContain("Never claim a secure field opened unless this request succeeds");
+  });
+
+  it("routes page tools to the bot's own internal page api", async () => {
+    const list = await callTool("pages_list", { query: "plan" });
+    expect(list.result.content[0].text).toContain("p-abc12345 · Plan · 1 open comments");
+    const created = await callTool("page_create", { title: "Plan", markdown: "first line" });
+    expect(created.result.content[0].text).toContain("Created p-abc12345 · Plan · revision 2");
+    await callTool("page_edit", { page_id: "p-abc12345", base_revision: 1, edits: [{ op: "replace", block_id: "b-1", markdown: "x" }] });
+    const bad = await callTool("page_read", { page_id: "../../bots" });
+    expect(bad.result.isError).toBe(true);
+    expect(pageRequests).toEqual([
+      { method: "GET", url: "/api/internal/pages?q=plan", body: null },
+      { method: "POST", url: "/api/internal/pages", body: { title: "Plan", markdown: "first line" } },
+      { method: "POST", url: "/api/internal/pages/p-abc12345/edit", body: { base_revision: 1, edits: [{ op: "replace", block_id: "b-1", markdown: "x" }] } },
+    ]);
+  });
+
+  it("routes video tools to the bot's own internal video api", async () => {
+    const list = await callTool("videos_list", { query: "teaser" });
+    expect(list.result.content[0].text).toContain("v-abc12345 · Teaser · 12.50s · 1080x1920 · 4 clips · revision 3 · last render done");
+    const created = await callTool("video_create", { title: "Teaser", size: "portrait" });
+    expect(created.result.content[0].text).toContain("Created v-abc12345 · Teaser · revision 3");
+    expect(created.result.content[0].text).toContain("side tab");
+    const added = await callTool("video_add_media", { video_id: "v-abc12345", path: "/tmp/a.mp4" });
+    expect(added.result.content[0].text).toContain("Added m-abc123 (a.mp4: video, 2.00s, 320x180, 30fps, with audio)");
+    const edited = await callTool("video_edit", { video_id: "v-abc12345", base_revision: 2, ops: [{ op: "split", clip_id: "c-1", at: 1 }] });
+    expect(edited.result.content[0].text).toContain("New clip ids: c-new1");
+    const rendered = await callTool("video_render", { video_id: "v-abc12345", wait_seconds: 5 });
+    expect(rendered.result.content[0].text).toContain("File: /tmp/ws/videos/Teaser-abc123.mp4");
+    const shot = await callTool("video_snapshot", { video_id: "v-abc12345", t: 1.5 });
+    expect(shot.result.content[1]).toEqual({ type: "image", data: Buffer.from("jpg").toString("base64"), mimeType: "image/jpeg" });
+    const bad = await callTool("video_read", { video_id: "../../bots" });
+    expect(bad.result.isError).toBe(true);
+    expect(videoRequests).toEqual([
+      { method: "GET", url: "/api/internal/videos?q=teaser", body: null },
+      { method: "POST", url: "/api/internal/videos", body: { title: "Teaser", size: "portrait" } },
+      { method: "POST", url: "/api/internal/videos/v-abc12345/media", body: { path: "/tmp/a.mp4" } },
+      { method: "POST", url: "/api/internal/videos/v-abc12345/edit", body: { base_revision: 2, ops: [{ op: "split", clip_id: "c-1", at: 1 }] } },
+      { method: "POST", url: "/api/internal/videos/v-abc12345/render", body: {} },
+      { method: "GET", url: "/api/internal/videos/v-abc12345/renders/r-abc123", body: null },
+      { method: "POST", url: "/api/internal/videos/v-abc12345/snapshot", body: { t: 1.5 } },
+    ]);
   });
 
   it("select_computer inspects actual choices with a GET when no target is given", async () => {
@@ -698,6 +804,7 @@ describe("agents-proxy MCP surface", () => {
       "list_bots", "list_rooms", "check_delegation", "wait_delegation", "list_threads",
       "list_team_setup",
       "session_search", "session_read", "list_routines", "get_work_plan", "skills_list",
+      "pages_list", "page_read",
     ];
     expect(list.result.tools.filter((tool: any) => tool.annotations?.readOnlyHint)
       .map((tool: any) => tool.name)).toEqual(readNames);
@@ -1357,7 +1464,7 @@ describe("agents-proxy MCP surface", () => {
     sessionSearchResponse = {
       hits: [{ threadId: "thread-old", messageId: "m-audit", at: Date.UTC(2026, 8, 1), role: "bot", snippet: "the [audit] found three [broken] [links]", task: "Site audit", current: false }],
       memoryHits: [
-        { file: "MEMORY.md", snippet: '- 2026-09-01 · from chat "Site audit" · the [audit] covers [broken] [links] monthly', at: 1 },
+        { file: "MEMORY.md", snippet: '- 2026-09-01 · from chat "Site audit" · the [audit] covers [broken] [links] monthly', at: 1, sourceId: "123e4567-e89b-42d3-a456-426614174000", sourceLine: 4, sourceText: "- audit monthly" },
         { file: "memory/log/2026-09-01.md", snippet: "- 10:00 · [audit] run, 3 [broken] [links]", at: 2 },
       ],
     };
@@ -1367,6 +1474,9 @@ describe("agents-proxy MCP surface", () => {
     expect(text.indexOf("2 matching memory files of yours:")).toBeLessThan(text.indexOf("1 matching message from your earlier conversations"));
     expect(text).toContain('- [memory file MEMORY.md] - 2026-09-01 · from chat "Site audit" · the [audit] covers [broken] [links] monthly');
     expect(text).toContain("- [memory file memory/log/2026-09-01.md] - 10:00 · [audit] run");
+    expect(text).toContain("exact source entry (line 4): - audit monthly");
+    expect(text).toContain("[memory-source:123e4567-e89b-42d3-a456-426614174000]");
+    expect(text).toContain("only cite entries actually used");
 
     sessionSearchResponse = { hits: [], memoryHits: [{ file: "memory/deploys.md", snippet: "[railway] up", at: 3 }] };
     const memoryOnly = await callTool("session_search", { query: "railway", scope: "memory" });
@@ -1872,7 +1982,7 @@ describe("with computer sharing off (the default)", () => {
   beforeAll(async () => {
     gated = spawn(process.execPath, [PROXY], {
       env: {
-        ...compatEnv,
+        ...proxyTestEnv,
         OMB_HARNESS_URL: `http://127.0.0.1:${stubPort}`,
         OMB_BOT_ID: "bot-asker",
         OMB_THREAD_ID: "thread-asker-routine",
@@ -1940,7 +2050,7 @@ describe("coordinate_bots arguments (room turn)", () => {
   beforeAll(async () => {
     room = spawn(process.execPath, [PROXY], {
       env: {
-        ...compatEnv,
+        ...proxyTestEnv,
         OMB_HARNESS_URL: `http://127.0.0.1:${stubPort}`,
         OMB_BOT_ID: "bot-asker",
         OMB_THREAD_ID: "thread-asker-routine",
@@ -1968,6 +2078,12 @@ describe("coordinate_bots arguments (room turn)", () => {
 
   afterAll(() => {
     room?.kill();
+  });
+
+  it("hides the owner's private pages from room turns", async () => {
+    const list = await roomRpc("tools/list");
+    expect(list.result.tools.map((tool: { name: string }) => tool.name)).not.toContain("page_read");
+    expect(list.result.tools.map((tool: { name: string }) => tool.name)).not.toContain("video_read");
   });
 
   it("maps camelCase aliases onto the canonical snake_case fields", async () => {

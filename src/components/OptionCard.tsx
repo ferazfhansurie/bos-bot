@@ -1,3 +1,4 @@
+import { OutboundReviewCard } from "./OutboundReviewCard";
 import { useState } from "react";
 import { X } from "lucide-react";
 import { useStore, visibleMessages, type Message } from "@/state/store";
@@ -42,6 +43,8 @@ export function OptionCard({
   // Full thread, not the mounted window: a search-focus slice can omit the
   // later user message that means they already talked past this quiz.
   if (!card || shouldHideOnboardingCard(message, transcript)) return null;
+
+  if (card.outboundReview && card.requestId && threadId && !groupId) return <OutboundReviewCard botId={botId} threadId={threadId} message={message} />;
 
   const title = card.title;
   const subtitle = card.subtitle;

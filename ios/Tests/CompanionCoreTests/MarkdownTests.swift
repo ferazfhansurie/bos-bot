@@ -192,6 +192,7 @@ final class MarkdownTests: XCTestCase {
         case let .code(language, text): return (language ?? "") + text
         case let .quote(text): return text
         case .rule: return ""
+        case let .table(headers, rows): return (headers + rows.flatMap { $0 }).joined()
         }
     }
 }

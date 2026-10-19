@@ -47,8 +47,15 @@ describe("Settings → Connect a device: server pairing card visibility", () => 
     expect(html).not.toContain("REMOTE_CLIENT_MARKER");
   });
 
+  it("shows native pairing when a hosted web shim exists without the desktop companion bridge", () => {
+    vi.stubGlobal("window", { ogb: { remoteClient: { active: false } } });
+    const html = render();
+    expect(html).toContain("SERVER_PAIRING_CARD_MARKER");
+    expect(html).not.toContain("COMPANION_MARKER");
+  });
+
   it("leaves the desktop app with one way to connect, and keeps session codes on its server page", () => {
-    vi.stubGlobal("window", { ogb: { environments: {} } });
+    vi.stubGlobal("window", { ogb: { environments: {}, companion: {} } });
     const connect = render();
     expect(connect).toContain("COMPANION_MARKER");
     expect(connect).not.toContain("SERVER_PAIRING_CARD_MARKER");

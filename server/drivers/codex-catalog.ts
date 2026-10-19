@@ -367,10 +367,17 @@ export async function readCodexModelCatalog(
   fetchImpl: typeof fetch = fetch,
   cli?: string,
 ): Promise<ModelCatalog> {
-  const official = (cli ? await readCodexAppServerModelCatalog(cli, env) : null) ?? STATIC_CODEX_MODELS;
-  for (const recent of RECENT_CODEX_MODELS) {
-    if (!official.options.some((option) => option.id === recent.id)) {
-      official.options.push({ ...recent });
+  const account = cli ? await readCodexAppServerModelCatalog(cli, env) : null;
+  const official = account ?? structuredClone(STATIC_CODEX_MODELS);
+  // model/list is the signed-in account's own list: a free ChatGPT plan has no
+  // Sol models, and offering them anyway makes every turn fail with "not
+  // supported when using Codex with a ChatGPT account". Recent rows only fill
+  // in when there is no account answer to trust.
+  if (!account) {
+    for (const recent of RECENT_CODEX_MODELS) {
+      if (!official.options.some((option) => option.id === recent.id)) {
+        official.options.push({ ...recent });
+      }
     }
   }
   const home = codexHome(env);

@@ -2,13 +2,13 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 
-import { StoreProvider, type Message } from "@/state/store";
+import { StoreProvider, type Message, type Group } from "@/state/store";
 
 vi.mock("./DesktopCapabilities", () => ({
   useDesktopCapabilities: () => ({}),
 }));
 
-import { RoomToolChip, RoomReplyText, RoomAvatar } from "./GroupView";
+import { RoomToolChip, RoomReplyText, RoomAvatar, Transcript } from "./GroupView";
 
 const chip = (patch: Partial<Message> = {}): Message => ({
   id: "chip",
@@ -79,5 +79,44 @@ describe("room presentation", () => {
     const focused = renderToStaticMarkup(createElement(RoomReplyText, { message, members: [], everyone: true, forceOpen: true }));
     expect(focused).not.toContain("line-clamp-6");
     expect(focused).toContain('aria-expanded="true"');
+  });
+});
+
+
+describe("room transcript geometry", () => {
+  const from = { botId: "bos", name: "bos", color: "green" as const };
+  const message = (id: string, text: string, patch: Partial<Message> = {}): Message => ({ id, text, role: "bot", kind: "text", at: 1000, from, ...patch });
+  const transcript = (messages: Message[]) => {
+    vi.stubGlobal("window", { ogb: undefined });
+    const group = { id: "room", threadId: "room-thread", name: "room", memberIds: [], defaultResponder: { kind: "everyone" }, bulletin: "", unread: false, createdAt: 1000, messages } as Group;
+    try {
+      return renderToStaticMarkup(createElement(StoreProvider, null, createElement(Transcript, { group, members: [], locale: "en", messages, transcript: messages, streamedAt: new Map(), onReply: () => {} })));
+    } finally { vi.unstubAllGlobals(); }
+  };
+  it("shows a speaker header for each saved bot reply with full-width prose and preserved actions", () => {
+    const html = transcript([message("one", "first answer"), message("two", "second answer")]);
+    expect(html.match(/data-testid="speaker-header"/g)).toHaveLength(2);
+    expect(html).not.toContain("bg-card");
+    expect(html).not.toContain("max-w-[min(42rem,78%)]");
+    expect(html).toContain('aria-label="Copy response"');
+    expect(html).toContain('aria-label="Share"');
+    expect(html).toContain('aria-label="Reply to message"');
+    expect(html).toContain('aria-label="Pin message"');
+  });
+  it("keeps user content in the right-aligned shared user bubble", () => {
+    const html = transcript([message("user", "question", { role: "user", from: undefined })]);
+    expect(html).toContain("items-end");
+    expect(html).toContain("chat-user-bubble");
+    expect(html).not.toContain('data-testid="speaker-header"');
+  });
+  it("folds settled narration and leaves the final reply visible", () => {
+    const html = transcript([
+      message("narration", "checking the details", { turnId: "turn-1" }),
+      message("final", "finished answer", { turnId: "turn-1", turnTerminal: true, at: 4000 }),
+    ]);
+    expect(html).toContain("Worked");
+    expect(html).toContain('aria-expanded="false"');
+    expect(html).not.toContain("checking the details");
+    expect(html).toContain("finished answer");
   });
 });

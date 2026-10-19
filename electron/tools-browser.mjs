@@ -14,6 +14,15 @@
 
 export const TOOLS_BROWSER_PARTITION = "persist:bos-tools-browser";
 
+/** Plain desktop Chrome user agent for the browser partitions. Electron's
+ * default carries "Electron/x" and the app name, which Google sign-in and
+ * Cloudflare checks treat as an embedded, untrusted browser. */
+export function chromeUserAgent(platform = process.platform, chromeVersion = process.versions?.chrome ?? '') {
+  const major = /^\d+/.exec(String(chromeVersion))?.[0] ?? '140';
+  const os = platform === 'darwin' ? 'Macintosh; Intel Mac OS X 10_15_7' : platform === 'win32' ? 'Windows NT 10.0; Win64; x64' : 'X11; Linux x86_64';
+  return `Mozilla/5.0 (${os}) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${major}.0.0.0 Safari/537.36`;
+}
+
 const LOOPBACK_V4 = /^127(?:\.\d{1,3}){3}$/;
 
 function isLoopbackHost(hostname) {
@@ -175,13 +184,14 @@ export function attachToolsBrowserGuest(guestContents, { appOrigins, onPopup, na
 /** Deny every permission in the tools-browser partition and cancel any
  * request (navigation, fetch, image, websocket) aimed at the app itself.
  * Only ever called with the partition session, never defaultSession. */
-export function configureToolsBrowserSession(ses, { appOrigins, requestPermission, checkPermission, shouldBlockRequest } = {}) {
+export function configureToolsBrowserSession(ses, { appOrigins, requestPermission, checkPermission, shouldBlockRequest, authorizeRequest } = {}) {
   ses.setPermissionRequestHandler((contents, permission, callback, details) => { if (!requestPermission) { callback(false); return; } Promise.resolve(requestPermission(contents, permission, details)).then(allowed => callback(allowed === true), () => callback(false)); });
   ses.setPermissionCheckHandler((contents, permission, origin, details) => checkPermission?.(contents, permission, origin, details) === true);
   ses.setDevicePermissionHandler?.(() => false);
   ses.webRequest?.onBeforeRequest?.((details, callback) => {
     let cancel = isAppOrigin(details.url, { appOrigins });
     if (!cancel) { try { cancel = shouldBlockRequest?.(details) === true; } catch { /* filtering failure leaves app-origin denial intact */ } }
-    callback({ cancel });
+    if (cancel || !authorizeRequest) { callback({ cancel }); return; }
+    Promise.resolve().then(() => authorizeRequest(details)).then(allowed => callback({ cancel: allowed !== true }), () => callback({ cancel: true }));
   });
 }

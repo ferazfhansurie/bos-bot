@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { compactThreads, threadTime } from "./CompactBotThreads";
+import { compactThreads, stepThread, threadTime } from "./CompactBotThreads";
+import { RAIL_OPEN_DELAY, railOpenDelay } from "./RailThreads";
 import type { Task } from "@/state/store";
 const tasks: Task[] = Array.from({ length: 9 }, (_, i) => ({ threadId: `${i}`, title: `${i}`, createdAt: i + 1, lastUserMessageAt: (i + 1) * 100 }));
 describe("compact thread navigation", () => {
@@ -14,5 +15,15 @@ describe("compact thread navigation", () => {
   });
   it("includes a year for old history", () => {
     expect(threadTime(new Date(2024, 0, 3).getTime(), new Date(2026, 0, 3).getTime())).toContain("2024");
+  });
+  it("steps through threads in list order and wraps, past the five-row cap", () => {
+    expect(stepThread(tasks, ["2"], "2", 1)?.threadId).toBe("8");
+    expect(stepThread(tasks, ["2"], "2", -1)?.threadId).toBe("0");
+    expect(stepThread(tasks, [], "1", 1)?.threadId).toBe("0");
+    expect(stepThread([tasks[0]], [], "0", 1)).toBeUndefined();
+  });
+  it("opens the rail flyout after a pause, at once while skimming", () => {
+    expect(railOpenDelay(10_000, 0)).toBe(RAIL_OPEN_DELAY);
+    expect(railOpenDelay(10_000, 9_800)).toBe(0);
   });
 });

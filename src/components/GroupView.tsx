@@ -20,6 +20,7 @@ import {
   type Message,
 } from "@/state/store";
 import { BotAvatar, PersonFace } from "./Avatar";
+import { SpeakButton } from "./SpeakButton";
 import { RoomRoster } from "./RoomRoster";
 import { ThreadChip } from "./ThreadChip";
 import { ToolActivity } from "./ToolActivity";
@@ -52,8 +53,10 @@ import { GroupCallButton, GroupCallOverlay } from "./GroupCallView";
 import { ApprovalCard } from "./ApprovalCard";
 import { QuestionCard } from "./QuestionCard";
 import { ManageMembersPanel } from "./ManageMembersPanel";
-import { groupActivityRuns } from "@/lib/activity-runs";
+import { groupActivityRuns, groupTranscript, describeRun } from "@/lib/activity-runs";
 import { ActivityRun } from "./ActivityRun";
+import { TurnNarrationRun } from "./TurnNarrationRun";
+import { BAD, FeedbackButtons, GOOD, SpeakerHeader, TurnActionRow, TurnCopyButton, ShareButton, turnActionClass } from "./TurnActions";
 import { useDesktopCapabilities, useCaptionChrome } from "./DesktopCapabilities";
 import { cn } from "@/lib/cn";
 import { useFocusMessage } from "@/lib/focus-message";
@@ -217,18 +220,10 @@ export function RoomToolChip({ message, roomId }: { message: Message; roomId?: s
   );
 }
 
-/** Sender name above the first bubble of a run, in the bot's own color.
- * Text bubbles carry the avatar beside them, so their label lines up with
- * the bubble edge; cards and tool runs keep the small avatar inline. */
-function ClusterLabel({ bot, name, color, bubble = false }: { bot?: Bot; name: string; color: string; bubble?: boolean }) {
+/** Compact identity for activity runs and structured cards. Text replies
+ * use SpeakerHeader so the face sits beside the name above the prose. */
+function ClusterLabel({ bot, name, color }: { bot?: Bot; name: string; color: string }) {
   const tint = resolveMausColor(bot?.color ?? color);
-  if (bubble) {
-    return (
-      <div className="-mb-2 mt-1 truncate pl-[42px] text-[12px] font-medium" style={{ color: tint }}>
-        {name}
-      </div>
-    );
-  }
   return (
     <div className="mt-1 flex items-center gap-1.5 pl-0.5">
       <BotAvatar
@@ -259,15 +254,15 @@ function PinToggle({ group, message }: { group: Group; message: Message }) {
         })
       }
       aria-label={pinned ? t("chat.unpinMessage") : t("chat.pinMessage")}
-      className="rounded-md p-1.5 text-ink-secondary opacity-0 transition-opacity hover:bg-raised hover:text-ink focus-visible:opacity-100 group-hover:opacity-100 group-focus-within:opacity-100"
+      className={turnActionClass}
       title={pinned ? t("chat.unpinHint") : t("room.pinHint")}
     >
-      {pinned ? <PinOff size={14} /> : <Pin size={14} />}
+      {pinned ? <PinOff size={18} /> : <Pin size={18} />}
     </button>
   );
 }
 
-const Transcript = memo(function Transcript({
+export const Transcript = memo(function Transcript({
   group,
   members,
   messages,
@@ -275,6 +270,7 @@ const Transcript = memo(function Transcript({
   emergingId,
   streamedAt,
   onReply,
+  foldNarration = true,
 }: {
   group: Group;
   members: Bot[];
@@ -288,6 +284,7 @@ const Transcript = memo(function Transcript({
   /** When each member last streamed; its saved reply is already on screen. */
   streamedAt: ReadonlyMap<string, number>;
   onReply: (message: Message) => void;
+  foldNarration?: boolean;
 }) {
   const { state, dispatch } = useStore();
   // Messages that land while the room is open spring in; history stays still.
@@ -298,23 +295,34 @@ const Transcript = memo(function Transcript({
   const memberOf = (id?: string) => members.find((b) => b.id === id);
   const meId = useMultiplayerMe()?.actorId;
   // Several bots working at once turn a room into a wall of chips; fold the
-  // finished ones the same way a 1:1 chat does.
+  // finished ones and settled narration the same way a 1:1 chat does.
   // Hidden runs are dropped here, not at render, so the bubbles either side
   // of one still read as neighbours.
-  const items = useMemo(() => groupActivityRuns(messages.filter(message =>
+  const items = useMemo(() => (foldNarration ? groupTranscript : groupActivityRuns)(messages.filter(message =>
     message.kind !== "activity" || roomActivityVisible(message, showToolCalls)))
-    .filter((item) => showToolCalls || item.kind !== "run"), [messages, showToolCalls]);
+    .filter((item) => showToolCalls || item.kind !== "run"), [messages, showToolCalls, foldNarration]);
   const newestMessageId = messages.at(-1)?.id;
   const newestUserMessageId = [...messages].reverse().find((message) => message.role === "user")?.id;
+  const newestBotMessageId = [...transcript].reverse().find(message => message.role === "bot" && message.kind === "text")?.id;
   const focus = state.focusMessage;
   const focusedId = focus && !focus.consumed && focus.threadId === group.threadId ? focus.messageId : null;
   return (
     <>
       {items.map((item, i) => {
         const previous = items[i - 1];
-        const prev = previous && (previous.kind === "run" ? previous.messages.at(-1) : previous.message);
-        const first = item.kind === "run" ? item.messages[0] : item.message;
-        const newDay = !prev || new Date(prev.at).toDateString() !== new Date(first.at).toDateString();
+        const prev = previous && (previous.kind !== "message" ? previous.messages.at(-1) : previous.message);
+        const first = item.kind !== "message" ? item.messages[0] : item.message;
+        const newDay = (foldNarration || i > 0) && (!prev || new Date(prev.at).toDateString() !== new Date(first.at).toDateString());
+        if (item.kind === "turn") {
+          const shown = showToolCalls ? item.messages : item.messages.filter(message => message.kind === "text");
+          if (!shown.length) return null;
+          const label = showToolCalls && item.steps.length ? `${item.label} · ${describeRun(item.steps)}` : item.label;
+          return <div key={item.id} className="contents">
+            {newDay && <div className="py-3 text-center text-[13px] text-ink-secondary">{dayLabel(first.at)} {formatTime(first.at)}</div>}
+            <TurnNarrationRun label={label} forceOpen={item.messages.some(message => message.id === focusedId)}>
+            <Transcript group={group} members={members} locale={activeLocale()} messages={shown} transcript={transcript} emergingId={emergingId} streamedAt={streamedAt} onReply={onReply} foldNarration={false} />
+          </TurnNarrationRun></div>;
+        }
         if (item.kind === "run") {
           const cluster = !prev || prev.role !== first.role || prev.from?.botId !== first.from?.botId || newDay;
           return (
@@ -343,9 +351,7 @@ const Transcript = memo(function Transcript({
         const person = user ? roomSender(m, group, meId) : null;
         const other = Boolean(person && !person.mine);
         const right = user && !other;
-        const following = items[i + 1];
         const runStarts = !sameBubbleRun(prev, m);
-        const runEnds = !sameBubbleRun(m, following && following.kind !== "run" ? following.message : undefined);
         const attachments = user && m.text ? splitTranscriptAttachments(m.text) : null;
         const newCluster = !prev || prev.role !== m.role || prev.from?.botId !== m.from?.botId || prev.sender?.id !== m.sender?.id || Boolean(prev.comm) || newDay;
         const routineOwner = m.kind === "routine.run" ? memberOf(m.from?.botId) : undefined;
@@ -402,55 +408,23 @@ const Transcript = memo(function Transcript({
             showToolCalls ? <DigestChip message={m} /> : null
           ) : m.kind === "text" && (m.text || m.attachments?.length) ? (
             <div className={cn(
-              "group flex w-full flex-col",
+              "group flex w-full min-w-0 flex-col gap-2",
               right ? "items-end" : "items-start",
-              !runStarts && "-mt-2",
+              user && !runStarts && "-mt-2",
               isArriving(arrivals.current, m.id) && m.id !== emergingId
                 && !(m.from?.botId && now - (streamedAt.get(m.from.botId) ?? 0) < 2000)
                 && (right ? "msg-spring origin-right" : "msg-spring origin-left"),
             )}>
-              <div className={cn("flex w-full items-end gap-1.5", right ? "justify-end" : "justify-start")}>
-                {other && (
-                  <span className="w-6 shrink-0 self-end">
-                    {runEnds && person && <PersonFace person={person.person ?? { name: person.name }} size={24} />}
-                  </span>
+              {!user && <SpeakerHeader bot={memberOf(m.from?.botId) ?? { name: m.from?.name ?? t("room.aBot"), color: (m.from?.color ?? "blue") as Bot["color"] }} name={m.from?.name ?? t("room.aBot")} />}
+              {other && person && <div className="flex items-center gap-2"><PersonFace person={person.person ?? { name: person.name }} size={24} /><span className="text-sm font-semibold text-ink">{person.name}</span></div>}
+              {user && attachments && <AttachmentGallery images={attachments.images} files={attachments.files} message={{ threadId: group.threadId, messageId: m.id, remoteRoom: Boolean(group.home) }} eager={m.id === newestMessageId || m.id === newestUserMessageId} className="mb-0 max-w-[70%]" />}
+              {(!user || Boolean(attachments?.display ?? m.text) || m.replyToId || m.via === "api") && <div
+                className={cn(
+                  "min-w-0 text-ink",
+                  user ? "chat-user-bubble chat-text w-fit whitespace-pre-wrap" : "w-full",
+                  !user && m.id === emergingId && "turn-answer",
                 )}
-                {!user && (
-                  <span className="w-6 shrink-0 self-end">
-                    {runEnds && m.from && (
-                      <BotAvatar
-                        bot={memberOf(m.from.botId) ?? { name: m.from.name, color: m.from.color as Bot["color"] }}
-                        state={normalizeState(memberOf(m.from.botId)?.mascotExpression) ?? "happy"}
-                        size={24}
-                        motion="none"
-                        motionKey={0}
-                        animated={false}
-                      />
-                    )}
-                  </span>
-                )}
-                {right && (
-                  <>
-                    <button
-                      type="button"
-                      onClick={() => onReply(m)}
-                      aria-label={t("chat.replyToMessage")}
-                      title={t("chat.reply")}
-                      className="rounded-md p-1.5 text-ink-secondary opacity-0 transition-opacity hover:bg-raised hover:text-ink focus-visible:opacity-100 group-hover:opacity-100 group-focus-within:opacity-100"
-                    >
-                      <MessageSquareReply size={14} />
-                    </button>
-                    <PinToggle group={group} message={m} />
-                  </>
-                )}
-                <div
-                  className={cn(
-                    "w-fit max-w-[min(42rem,78%)] rounded-2xl p-3 text-[15px] leading-relaxed",
-                    !user && m.id === emergingId && "turn-answer",
-                    right ? "chat-text whitespace-pre-wrap bg-bubble-user text-ink" : user ? "chat-text whitespace-pre-wrap bg-card text-ink" : "bg-card text-ink",
-                  )}
-                  title={new Date(m.at).toLocaleString()}
-                >
+              >
                   {m.replyToId && (() => {
                     const target = transcript.find((candidate) => candidate.id === m.replyToId);
                     return target ? (
@@ -469,7 +443,6 @@ const Transcript = memo(function Transcript({
                   })()}
                   {user ? (
                     <>
-                      {attachments && <AttachmentGallery images={attachments.images} files={attachments.files} message={{ threadId: group.threadId, messageId: m.id, remoteRoom: Boolean(group.home) }} eager={m.id === newestMessageId || m.id === newestUserMessageId} className={!attachments.display ? "mb-0" : undefined} />}
                       <ThreadRefText text={attachments?.display ?? m.text ?? ""} peers={members} everyone={!group.dm} />
                       {m.via === "api" && (
                         <div className="mt-1 text-[11px] text-ink-secondary">Sent through the API, not typed here</div>
@@ -481,25 +454,19 @@ const Transcript = memo(function Transcript({
                       {m.text ? <RoomReplyText message={m} members={members} everyone={!group.dm} threadId={group.threadId} forceOpen={m.id === focusedId} /> : null}
                     </>
                   )}
-                </div>
-                {!right && (
-                  <>
-                    <button
-                      type="button"
-                      onClick={() => onReply(m)}
-                      aria-label={t("chat.replyToMessage")}
-                      title={t("chat.reply")}
-                      className="rounded-md p-1.5 text-ink-secondary opacity-0 transition-opacity hover:bg-raised hover:text-ink focus-visible:opacity-100 group-hover:opacity-100 group-focus-within:opacity-100"
-                    >
-                      <MessageSquareReply size={14} />
-                    </button>
-                    <PinToggle group={group} message={m} />
-                  </>
-                )}
-                <span className="self-end pb-1 text-[11px] tabular-nums text-ink-secondary/70 opacity-0 transition-opacity group-hover:opacity-100">
-                  {formatTime(m.at)}
-                </span>
-              </div>
+                </div>}
+              <TurnActionRow persistent={!user && m.id === newestBotMessageId} align={right ? "end" : "start"} at={m.at}>
+                <TurnCopyButton text={m.text ?? ""} label={user ? "Copy message" : "Copy response"} />
+                {!user && <SpeakButton text={m.text ?? ""} botId={m.from?.botId} messageId={m.id} voiceId={memberOf(m.from?.botId)?.voice} iconSize={18} className={`${turnActionClass} opacity-100`} />}
+                {!user && !group.home && <FeedbackButtons active={{ good: Boolean(m.reactions?.some(r => r.emoji === GOOD && r.by === "user")), bad: Boolean(m.reactions?.some(r => r.emoji === BAD && r.by === "user")) }} onReact={emoji => {
+                  void api<{ message: Message }>(`/api/threads/${encodeURIComponent(group.threadId)}/messages/${encodeURIComponent(m.id)}/reactions`, { method: "POST", body: JSON.stringify({ emoji }) })
+                    .then(({ message }) => dispatch({ type: "messagePatched", threadId: group.threadId, message }))
+                    .catch(cause => dispatch({ type: "error", message: cause instanceof Error ? cause.message : String(cause) }));
+                }} />}
+                {!user && <ShareButton text={m.text ?? ""} />}
+                <button type="button" onClick={() => onReply(m)} aria-label={t("chat.replyToMessage")} title={t("chat.reply")} className={turnActionClass}><MessageSquareReply size={18} /></button>
+                <PinToggle group={group} message={m} />
+              </TurnActionRow>
             </div>
           ) : null;
         if (!row) return null;
@@ -510,11 +477,8 @@ const Transcript = memo(function Transcript({
                 {dayLabel(m.at)} {formatTime(m.at)}
               </div>
             )}
-            {!user && m.from && newCluster && !(m.kind === "activity" && m.comm) && (
-              <ClusterLabel bot={memberOf(m.from.botId)} name={m.from.name} color={m.from.color} bubble={m.kind === "text"} />
-            )}
-            {other && person?.name && newCluster && m.kind === "text" && (
-              <ClusterLabel name={person.name} color={person.person?.color ?? ""} bubble />
+            {!user && m.from && newCluster && m.kind !== "text" && !(m.kind === "activity" && m.comm) && (
+              <ClusterLabel bot={memberOf(m.from.botId)} name={m.from.name} color={m.from.color} />
             )}
             {row}
           </div>
@@ -1063,7 +1027,7 @@ function RoomSetup({ group, members }: { group: Group; members: Bot[] }) {
 }
 // One member's in-flight reply. It subscribes to its own stream key, so a
 // token repaints this bubble alone, not the transcript, header or composer.
-// It wears the finished bubble's exact shape, so when the saved reply takes
+// It wears the finished reply's exact shape, so when the saved reply takes
 // its place the room does not jump. `streamedAt` notes when each member last
 // streamed, so that saved reply skips its own entrance.
 const RoomStreamBubble = memo(function RoomStreamBubble({ threadId, member, members, everyone, streamedAt }: {
@@ -1072,14 +1036,9 @@ const RoomStreamBubble = memo(function RoomStreamBubble({ threadId, member, memb
   const text = useStreamText(roomMemberStreamKey(threadId, member.id));
   if (text) streamedAt.set(member.id, Date.now());
   if (!text) return null;
-  return <div className="flex min-w-0 flex-col items-start" aria-label={`${member.name} is replying`}>
-    <ClusterLabel bot={member} name={member.name} color={member.color} bubble />
-    <div className="mt-3 flex w-full items-end gap-1.5">
-      <BotAvatar bot={member} state={normalizeState(member.mascotExpression) ?? undefined} size={24} motion="none" motionKey={0} animated={false} />
-      <div className="bubble-in w-fit max-w-[min(42rem,78%)] rounded-2xl bg-card p-3 text-[15px] leading-relaxed text-ink">
-        <ChatMarkdown text={text} streaming mentionPeers={members} everyone={everyone} />
-      </div>
-    </div>
+  return <div className="flex w-full min-w-0 flex-col gap-3" aria-label={`${member.name} is replying`}>
+    <SpeakerHeader bot={member} name={member.name} />
+    <ChatMarkdown text={text} streaming mentionPeers={members} everyone={everyone} />
   </div>;
 });
 
@@ -1518,7 +1477,7 @@ export function GroupView({ group }: { group: Group }) {
       <div className="relative min-h-0 flex-1">
       <div
         ref={scrollRef}
-        className="h-full overflow-x-hidden overflow-y-auto px-5 [overflow-anchor:none]"
+        className="chat-thread h-full overflow-x-hidden overflow-y-auto [overflow-anchor:none]"
         onWheel={(e) => {
           if (e.deltaY < 0) setBottomFollow(false);
           else if (atEnd()) setBottomFollow(true);
@@ -1550,7 +1509,7 @@ export function GroupView({ group }: { group: Group }) {
         ) : (
         <div
           ref={transcriptRef}
-          className="flex w-full flex-col gap-3"
+          className="chat-column mx-auto flex w-full max-w-[800px] flex-col gap-3 px-4"
           style={{ paddingBottom: composerDock.pad }}
           role="log"
           aria-live="polite"

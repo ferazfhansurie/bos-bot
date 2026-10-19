@@ -1,0 +1,22 @@
+{
+  "id": "meeting-prep",
+  "name": "Meeting Prep",
+  "version": "0.1.0",
+  "description": "Prepare the person for a meeting, call or standup: find it on their calendar and give a one-page brief.",
+  "defaultEnabled": true,
+  "triggerTerms": [
+    "meeting",
+    "prep me",
+    "standup",
+    "stand-up",
+    "call with",
+    "catch up with",
+    "catch-up",
+    "agenda",
+    "1:1",
+    "one on one"
+  ],
+  "requiredCapabilities": [
+    "starterSkills"
+  ]
+}

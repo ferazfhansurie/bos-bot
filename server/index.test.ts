@@ -108,6 +108,8 @@ let child: ChildProcess;
 /** stands in for the box provider so config saving never touches the network */
 let boxStub: Server;
 let boxStubPort = 0;
+const boxComputeCalls: string[] = [];
+const boxComputeSandboxes: Array<{ id: string; workspaceId: string; name: string; state: string; size?: string }> = [];
 const boxRouteCalls: Array<{ method: string; path: string }> = [];
 const boxPromptBodies: Array<Record<string, unknown>> = [];
 let boxSlowRequestCount = 0;
@@ -731,6 +733,38 @@ beforeAll(async () => {
   );
 
   boxStub = createServer(async (req, res) => {
+    if (req.url?.startsWith("/api/v2/")) {
+      // BoxCompute: one key, one workspace, sandboxes created running.
+      let raw = "";
+      for await (const chunk of req) raw += chunk;
+      const route = `${req.method} ${req.url.slice("/api/v2".length)}`;
+      boxComputeCalls.push(route);
+      const json = (status: number, body: unknown) => {
+        res.writeHead(status, { "content-type": "application/json" });
+        res.end(JSON.stringify(body));
+      };
+      if (req.headers.authorization !== "Bearer bc_live_index") return json(401, { code: "UNAUTHORIZED", error: "bad key" });
+      if (route === "GET /me") return json(200, { apiKey: { scopes: ["sandbox:read", "sandbox:create", "sandbox:execute"] } });
+      if (route === "GET /workspaces") return json(200, { workspaces: [{ id: "ws_index", name: "BOS Bot" }] });
+      if (route === "GET /sandboxes") return json(200, { sandboxes: boxComputeSandboxes });
+      if (route === "POST /sandboxes") {
+        const sandbox = { id: `sbx_${boxComputeSandboxes.length + 1}`, workspaceId: "ws_index", name: JSON.parse(raw).name, state: "running", size: JSON.parse(raw).size };
+        boxComputeSandboxes.push(sandbox);
+        return json(202, { sandbox });
+      }
+      const removed = route.match(/^DELETE \/sandboxes\/(sbx_\d+)$/);
+      if (removed) {
+        boxComputeSandboxes.splice(boxComputeSandboxes.findIndex((entry) => entry.id === removed[1]), 1);
+        res.writeHead(204);
+        return res.end();
+      }
+      if (route.startsWith("POST /sandboxes/") && route.endsWith("/execute")) {
+        const argv = JSON.parse(raw).argv as string[];
+        const stdout = argv[3] === "bos-desktop" && argv[4] === "screenshot" ? "image/png\niVBORw0KGgo=" : "index ok\n";
+        return json(200, { result: { stdout, stderr: "", exitCode: 0, timedOut: false, stdoutTruncated: false, stderrTruncated: false } });
+      }
+      return json(500, { code: "UNEXPECTED", error: route });
+    }
     if (req.url?.startsWith("/v1/capabilities/")) {
       let raw = "";
       for await (const chunk of req) raw += chunk;
@@ -1003,6 +1037,7 @@ beforeAll(async () => {
       OMB_WEBHOOK_PORT: String(WEBHOOK_PORT),
       OMB_EXTRA_PATH: fakeDockerDir,
       OMB_BOX_API: `http://127.0.0.1:${boxStubPort}`,
+      OMB_BOXCOMPUTE_API: `http://127.0.0.1:${boxStubPort}`,
       OMB_COMPOSIO_API: `http://127.0.0.1:${boxStubPort}/api/v3.1`,
       OMB_COMPOSIO_TOOLKITS_API: `http://127.0.0.1:${boxStubPort}/api/v3`,
       OMB_STATIC_DIR: staticDir,
@@ -2577,6 +2612,85 @@ describe("harness HTTP API", () => {
     // The existing coordinator retries the durable request after recovery.
     await expect.poll(() => journal().some((request) => request.id === id), { timeout: 8_000 }).toBe(false);
     if (target === "profile") expect((await api("DELETE", `/api/bots/${bot.id}`)).status).toBe(200);
+  });
+
+  it("mounts a BoxCompute sandbox only with a verified key and relays its tools", async () => {
+    let botId: string | undefined;
+    try {
+      const rejected = await api("PUT", "/api/config", { boxCompute: { token: "bc_live_wrong" } });
+      expect(rejected.status).toBe(400);
+      expect(rejected.body.error).toMatch(/rejected this API key/);
+      const bot = (await api("POST", "/api/bots")).body.bot;
+      botId = bot.id;
+      expect((await api("PATCH", `/api/bots/${bot.id}`, { modelSelection: { instanceId: "claude", model: "claude-sonnet-5" } })).status).toBe(200);
+      type SandboxDump = { mcpConfig: { mcpServers: { sandbox?: { env: { OMB_SANDBOX_TOKEN: string; OMB_SANDBOX_DESKTOP?: string } } } } };
+
+      rmSync(fakeClaudeDump, { force: true });
+      expect((await api("POST", `/api/bots/${bot.id}/messages`, { text: "no sandbox yet" })).status).toBe(202);
+      expect((await readJsonFileWhenReady<SandboxDump>(fakeClaudeDump)).mcpConfig.mcpServers.sandbox).toBeUndefined();
+      await api("POST", `/api/bots/${bot.id}/interrupt`);
+
+      expect((await api("PUT", "/api/config", { boxCompute: { token: "bc_live_index" } })).status).toBe(200);
+      expect((await api("GET", "/api/config")).body.boxCompute).toEqual({ configured: true });
+      rmSync(fakeClaudeDump, { force: true });
+      expect((await api("POST", `/api/bots/${bot.id}/messages`, { text: "use the sandbox" })).status).toBe(202);
+      const sandbox = (await readJsonFileWhenReady<SandboxDump>(fakeClaudeDump)).mcpConfig.mcpServers.sandbox;
+      expect(JSON.stringify(sandbox)).not.toContain("bc_live_index");
+      const relay = (tool: string, token: string) => fetch(`${BASE}/api/internal/sandbox/${tool}`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+        body: JSON.stringify({ command: "echo ok" }),
+      });
+      const ran = await relay("sandbox_exec", sandbox!.env.OMB_SANDBOX_TOKEN);
+      expect(ran.status).toBe(200);
+      expect(await ran.json()).toEqual({ text: "exit 0\nstdout:\nindex ok\n" });
+      expect(boxComputeSandboxes.map((entry) => entry.name)).toEqual([`bos-${bot.id}`]);
+      expect((await relay("sandbox_shell", sandbox!.env.OMB_SANDBOX_TOKEN)).status).toBe(404);
+      // On Auto the cloud desktop is neither listed nor answered.
+      expect(sandbox!.env.OMB_SANDBOX_DESKTOP).toBeUndefined();
+      expect((await relay("sandbox_desktop_screenshot", sandbox!.env.OMB_SANDBOX_TOKEN)).status).toBe(403);
+      const agentsToken = await mintTestCapability(BASE, bot.id, bot.threadId);
+      expect((await relay("sandbox_exec", agentsToken)).status).toBe(403);
+      expect((await api("POST", `/api/bots/${bot.id}/interrupt`)).status).toBe(200);
+      await expect.poll(async () => (await api("GET", "/api/bots?messages=0")).body.bots
+        .find((candidate: { id: string }) => candidate.id === bot.id)?.busy, { timeout: 5_000 }).toBe(false);
+
+      // Works on BoxCompute: the desktop tools answer, a small sandbox is
+      // refused rather than deleted, and the rebuilt one is large.
+      expect(boxComputeSandboxes[0].size).toBe("small");
+      expect((await api("PATCH", `/api/bots/${bot.id}`, { computer: "boxcompute" })).status).toBe(200);
+      rmSync(fakeClaudeDump, { force: true });
+      expect((await api("POST", `/api/bots/${bot.id}/messages`, { text: "use the desktop" })).status).toBe(202);
+      const desktop = (await readJsonFileWhenReady<SandboxDump>(fakeClaudeDump)).mcpConfig.mcpServers.sandbox;
+      expect(desktop!.env.OMB_SANDBOX_DESKTOP).toBe("1");
+      const small = await relay("sandbox_desktop_screenshot", desktop!.env.OMB_SANDBOX_TOKEN);
+      expect(small.status).toBe(409);
+      expect(((await small.json()) as { error: string }).error).toMatch(/needs a large sandbox/);
+      expect(boxComputeSandboxes).toHaveLength(1);
+      expect(await (await relay("sandbox_reset", desktop!.env.OMB_SANDBOX_TOKEN)).json()).toEqual({ text: expect.stringContaining("fresh large one") });
+      const shot = await relay("sandbox_desktop_screenshot", desktop!.env.OMB_SANDBOX_TOKEN);
+      expect(shot.status).toBe(200);
+      expect(((await shot.json()) as { image: unknown }).image).toEqual({ data: "iVBORw0KGgo=", mimeType: "image/png" });
+      expect(boxComputeSandboxes.map((entry) => entry.size)).toEqual(["large"]);
+      await api("POST", `/api/bots/${bot.id}/interrupt`);
+      await expect.poll(async () => (await api("GET", "/api/bots?messages=0")).body.bots
+        .find((candidate: { id: string }) => candidate.id === bot.id)?.busy, { timeout: 5_000 }).toBe(false);
+
+      // "Works on: Off" covers the cloud sandbox too.
+      expect((await api("PATCH", `/api/bots/${bot.id}`, { computer: "off" })).status).toBe(200);
+      rmSync(fakeClaudeDump, { force: true });
+      expect((await api("POST", `/api/bots/${bot.id}/messages`, { text: "computer off" })).status).toBe(202);
+      expect((await readJsonFileWhenReady<SandboxDump>(fakeClaudeDump)).mcpConfig.mcpServers.sandbox).toBeUndefined();
+      await api("POST", `/api/bots/${bot.id}/interrupt`);
+
+      // Deleting the bot deletes its sandbox, so it stops billing.
+      expect((await api("DELETE", `/api/bots/${bot.id}`)).status).toBe(200);
+      botId = undefined;
+      await expect.poll(() => boxComputeSandboxes.length, { timeout: 5_000 }).toBe(0);
+    } finally {
+      await api("PUT", "/api/config", { boxCompute: { token: "" } });
+      if (botId) await api("DELETE", `/api/bots/${botId}`);
+    }
   });
 
   it("clears an explicit computer to Auto and refuses passive Auto Box provisioning", async () => {

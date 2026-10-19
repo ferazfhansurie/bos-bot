@@ -28,7 +28,9 @@ describe("DigestChip", () => {
   });
   it("shows total counts rather than only the truncated sample", () => {
     const html = renderToStaticMarkup(createElement(DigestChip, { message }));
-    expect(html).toContain("Did 19 tool calls · 5 files changed");
+    expect(html).toContain("Edited ");
+    expect(html).toContain("5 files");
+    expect(html).toContain("View changes");
     expect(html).toContain('title="Observed work, not a completion verdict"');
   });
 

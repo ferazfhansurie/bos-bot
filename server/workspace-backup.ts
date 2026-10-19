@@ -41,6 +41,10 @@ const EXCLUDED = new Set([
   // Windows populates it with OS junctions such as INetCache\Content.IE5, so it
   // is never part of a workspace snapshot and survives a restore untouched.
   "provider-home",
+  // Enterprise first-launch provisioning (server/enterprise-provision.ts): the
+  // receipt, the resume state and the node shim belong to this install. They
+  // must survive the very restore that provisioning applies.
+  "enterprise-provision.json", "enterprise-provision-state.json", "enterprise-runtime",
 ]);
 const EXCLUSION_NOTES = [
   "Device pairing, server identity, live leases and runtime files (existing destination identities are preserved).",

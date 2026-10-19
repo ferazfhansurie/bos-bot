@@ -216,10 +216,12 @@ export const CLIENT_ALLOW: ReadonlyArray<{ methods: readonly string[]; path: Reg
   // clearing is the same read-a-reply and dismiss-a-card a client already may do
   { methods: ["POST"], path: /^\/api\/inbox\/clear$/ },
   { methods: ["GET"], path: /^\/api\/digest$/ },
+  { methods: ["GET"], path: /^\/api\/bots\/[\w-]+\/request-continuation$/ },
   { methods: ["GET"], path: /^\/api\/threads\/[\w-]+\/messages$/ },
   { methods: ["GET"], path: /^\/api\/threads\/[\w-]+\/messages\/[\w-]+\/image$/ },
   { methods: ["GET"], path: /^\/api\/threads\/[\w-]+\/export$/ },
   { methods: ["GET", "POST"], path: /^\/api\/threads\/[\w-]+\/messages\/[\w-]+\/file$/ },
+  { methods: ["POST"], path: /^\/api\/(?:bots|groups)\/[\w-]+\/queue\/resume$/ },
   // chat, one to one
   { methods: ["POST"], path: /^\/api\/bots\/[\w-]+\/messages$/ },
   { methods: ["POST"], path: /^\/api\/bots\/[\w-]+\/threads\/[\w-]+\/recovery\/[\w-]+\/resume$/ },
@@ -280,10 +282,14 @@ export const CLIENT_ALLOW: ReadonlyArray<{ methods: readonly string[]; path: Reg
   { methods: ["GET", "POST"], path: /^\/api\/multiplayer\/rooms\/[\w-]+\/attachments(?:\/[\w-]+)?$/ },
   { methods: ["GET", "POST"], path: /^\/api\/multiplayer\/peer-threads\/[\w-]+\/attachments(?:\/[\w.-]+)?$/ },
   { methods: ["POST"], path: /^\/api\/threads\/[\w-]+\/messages\/[\w-]+\/reactions$/ },
+  { methods: ["POST"], path: /^\/api\/threads\/[\w-]+\/messages\/[\w-]+\/output-draft$/ },
+  { methods: ["POST"], path: /^\/api\/threads\/[\w-]+\/outbound-reviews\/[\w-]+$/ },
   // attachments
   { methods: ["POST"], path: /^\/api\/attachments$/ },
   { methods: ["GET"], path: /^\/api\/attachments\/[\w.-]+$/ },
   { methods: ["POST"], path: /^\/api\/files$/ },
+  // a recorded voice message's words, for an attachment this home holds
+  { methods: ["POST"], path: /^\/api\/stt$/ },
   // voice: labels and audio, never the key
   { methods: ["GET"], path: /^\/api\/tts\/voices$/ },
   { methods: ["POST"], path: /^\/api\/tts\/prepare$/ },
@@ -299,6 +305,8 @@ export const CLIENT_ALLOW: ReadonlyArray<{ methods: readonly string[]; path: Reg
   { methods: ["GET"], path: /^\/api\/webhooks$/ },
   // configured-or-not booleans; the handler strips the few identifying fields for clients
   { methods: ["GET"], path: /^\/api\/config$/ },
+  // Chat needs model capabilities; the handler returns only a scoped, sanitized catalog.
+  { methods: ["GET"], path: /^\/api\/instances$/ },
 ];
 
 const LEGACY_PEER_LABELS = new Set(["BOS multiplayer bridge", "BOS team link", "BOS team bridge"]);

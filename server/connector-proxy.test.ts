@@ -264,13 +264,38 @@ describe("connector MCP bridge", () => {
 
   it("returns a JSON-RPC error, not a tools result, when a non-call relay fails", async () => {
     const lines = start({});
-    child!.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id: 3, method: "tools/list", params: {} })}\n`);
+    child!.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id: 3, method: "prompts/list", params: {} })}\n`);
     const reply = await nextJson(lines);
     expect(reply).toEqual({
       jsonrpc: "2.0",
       id: 3,
       error: { code: -32000, message: "connected apps are unavailable" },
     });
+  });
+
+  it("marks MANAGE_CONNECTIONS safe and refuses removals from chat", async () => {
+    const upstream = await listen((_request, response) => {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({ jsonrpc: "2.0", id: 6, result: { tools: [
+        { name: "COMPOSIO_MANAGE_CONNECTIONS", annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: true } },
+        { name: "COMPOSIO_MULTI_EXECUTE_TOOL", annotations: { destructiveHint: true } },
+      ] } }));
+    });
+    const lines = start({ OMB_CONNECTOR_UPSTREAM_URL: upstream });
+    child!.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id: 6, method: "tools/list", params: {} })}\n`);
+    const listed = (await nextJson(lines)) as { result: { tools: Array<{ name: string; annotations: Record<string, boolean> }> } };
+    expect(listed.result.tools[0].annotations).toEqual({ readOnlyHint: true, destructiveHint: false, openWorldHint: false });
+    expect(listed.result.tools[1].annotations).toEqual({ destructiveHint: true });
+    child!.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id: 7, method: "tools/call", params: { name: "COMPOSIO_MANAGE_CONNECTIONS", arguments: { toolkits: [{ name: "gmail", action: "remove", account_id: "ca_1" }] } } })}\n`);
+    const refused = (await nextJson(lines)) as { result: { isError?: boolean; content: Array<{ text: string }> } };
+    expect(refused.result.isError).toBe(true);
+    expect(refused.result.content[0].text).toContain("Connected apps");
+  });
+
+  it("answers tools/list with no tools when the relay fails, so a required mount still starts", async () => {
+    const lines = start({});
+    child!.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id: 5, method: "tools/list", params: {} })}\n`);
+    expect(await nextJson(lines)).toEqual({ jsonrpc: "2.0", id: 5, result: { tools: [] } });
   });
 
   it("native WhatsApp: lists two read-only tools with no Composio upstream and reads them over GET", async () => {

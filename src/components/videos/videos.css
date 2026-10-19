@@ -1,0 +1,23 @@
+/* Video editor: only what utilities cannot say. Layers the playback engine
+   creates, the slider, and the two short animations clips use to speak. */
+.video-layer{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;user-select:none;-webkit-user-drag:none}
+
+.video-range{-webkit-appearance:none;appearance:none;width:100%;height:16px;background:transparent;cursor:pointer;margin:0}
+.video-range:focus{outline:none}
+.video-range::-webkit-slider-runnable-track{height:4px;border-radius:2px;background:linear-gradient(to right,var(--color-accent) var(--fill,0%),color-mix(in srgb,var(--color-ink) 14%,transparent) var(--fill,0%))}
+.video-range::-webkit-slider-thumb{-webkit-appearance:none;width:12px;height:12px;border-radius:50%;background:var(--color-ink);margin-top:-4px;box-shadow:0 1px 3px #0007}
+.video-range:focus-visible::-webkit-slider-thumb{box-shadow:0 0 0 3px var(--color-focus)}
+
+/* bos just touched this clip */
+@keyframes video-pulse{0%,100%{box-shadow:0 0 0 2px transparent}20%,60%{box-shadow:0 0 0 2px var(--color-accent),0 0 12px 1px color-mix(in srgb,var(--color-accent) 55%,transparent)}}
+.video-pulse{animation:video-pulse 1.4s ease-out 2}
+
+/* a drop that does not fit */
+@keyframes video-refuse{0%,100%{transform:translateX(0)}25%{transform:translateX(-3px)}75%{transform:translateX(3px)}}
+.video-refuse{outline:2px solid var(--color-danger);outline-offset:-1px}
+
+.video-scroll{scrollbar-width:thin;scrollbar-color:var(--color-scrollbar) transparent}
+.video-scroll::-webkit-scrollbar{width:10px;height:10px}
+.video-scroll::-webkit-scrollbar-thumb{background:var(--color-scrollbar);border-radius:8px;border:3px solid transparent;background-clip:content-box}
+.video-scroll::-webkit-scrollbar-corner{background:transparent}
+

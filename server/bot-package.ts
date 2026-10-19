@@ -146,6 +146,13 @@ const packageSchema = z.object({
         optional: z.boolean().optional(),
       })).max(30),
       capabilities: z.array(requiredText(80)).max(20),
+      tools: z.array(z.object({
+        slug: key,
+        kind: z.enum(["browser", "computer", "plugin"]),
+        label: requiredText(100),
+        reason: requiredText(240),
+        optional: z.boolean().optional(),
+      })).max(30).optional(),
       platforms: z.array(requiredText(80)).max(10).optional(),
     }),
     agents: z.array(z.object({
@@ -185,6 +192,7 @@ const packageSchema = z.object({
       schedule: packageRoutineScheduleSchema,
       durationMinutes: z.number().int().min(5).max(240),
       timeoutMinutes: z.number().int().min(5).max(240).optional(),
+      notificationPolicy: z.enum(["all", "important", "failures"]).optional(),
       overlap: z.enum(["skip", "queue"]).optional(),
       enabledAfterInstall: z.literal(false),
     })).max(50).optional(),
@@ -381,9 +389,13 @@ export function renderBotPackageMarkdown(document: ParsedBotPackage): string {
     "",
     example.output,
   ].join("\n")).join("\n\n");
-  const connections = pkg.requirements.apps.length
+  const appConnections = pkg.requirements.apps.length
     ? pkg.requirements.apps.map((app) => `- **${app.label}${app.optional ? " (optional)" : ""}:** ${app.reason}`).join("\n")
     : "- No connected apps are required.";
+  const connections = [appConnections,
+    ...(pkg.requirements.tools ?? []).map(tool => `- **${tool.label}${tool.optional ? " (optional)" : ""}:** ${tool.reason} (set up in ${tool.kind === "plugin" ? "Plugins" : "bot tool access"})`),
+    ...pkg.requirements.capabilities.map(capability => `- **Required capability:** ${capability}`),
+  ].join("\n");
 
   const markdown = `---\n${frontmatter}\n---\n\n# ${pkg.name}\n\n${pkg.tagline}\n\n> **Give this file to your Chief of Staff.** It is the complete team blueprint. Any agent system can run it; BOS Bot can also install it directly.\n\n## Activation\n\nYou are the Chief of Staff for this blueprint. Read the whole document before acting. Confirm the user's goal and any missing inputs, then create or delegate to the specialist roles below. Preserve their names, ownership, boundaries, shared-room rules, and playbooks. If your platform cannot literally spawn agents, perform the roles one at a time and keep their outputs clearly separated.\n\nNever request pasted passwords or secret keys. Use the platform's normal connection flow. Do not send messages, publish content, spend money, delete data, or enable a schedule without the user's explicit approval. All routines start paused.\n\n## Mission\n\n${pkg.summary}\n\n## Outcomes\n\n${list(pkg.outcomes)}\n\n## Connections\n\n${connections}\n\n## Team\n\n${agents}\n\n## Chief of Staff\n\nThe Chief of Staff role is \`${pkg.chiefOfStaff ?? pkg.agents[0].key}\`. This role owns delegation, synthesis, conflict resolution, and the final answer to the user.\n${rooms ? `\n## Shared rooms\n\n${rooms}\n` : ""}${routines ? `\n## Suggested routines\n\n${routines}\n` : ""}${playbooks ? `\n## Playbooks\n\n${playbooks}\n` : ""}${examples ? `\n## Example job\n\n${examples}\n` : ""}\n## Completion rule\n\nReturn one clear result to the user, distinguish evidence from inference, cite source links when the work uses external material, and state what still needs human approval or a connected app.\n`;
   if (Buffer.byteLength(markdown) > BOT_PACKAGE_MARKDOWN_MAX_BYTES) throw new Error("The bot playbook is too large");

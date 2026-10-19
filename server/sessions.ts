@@ -599,6 +599,18 @@ export class SessionRegistry {
     return this.sessions.map(publicSession);
   }
 
+  /** Revoke every session one account signed in (password logins use
+   * `password:<id>`), so removing a login or resetting it ends its devices. */
+  revokeUser(userId: string): number {
+    const doomed = this.sessions.filter((s) => s.userId === userId);
+    if (!doomed.length) return 0;
+    const ids = new Set(doomed.map((s) => s.id));
+    this.sessions = this.sessions.filter((s) => !ids.has(s.id));
+    for (const session of doomed) this.forget(session.id);
+    this.persist();
+    return doomed.length;
+  }
+
   revoke(id: string): boolean {
     const before = this.sessions.length;
     this.sessions = this.sessions.filter((s) => s.id !== id);

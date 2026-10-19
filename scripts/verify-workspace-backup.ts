@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import { spawn, type ChildProcess } from "node:child_process";
 import { createHash } from "node:crypto";
 import { closeSync, existsSync, mkdirSync, openSync, readFileSync, writeFileSync } from "node:fs";
-import { basename, dirname, join, relative, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { launchVerificationServer, runControlOmb, type VerificationServer } from "./control-omb.ts";
 import { waitForExit } from "../server/testing/cleanup.ts";
@@ -15,7 +15,8 @@ const PASSWORD = "fixture-backup-password-only";
 
 /** Same temporary home and exact port, but a new process. The launcher's
  * close() still owns cleanup; stop this replacement before calling it. */
-async function restartFixture(fixture: VerificationServer): Promise<ChildProcess> {
+export async function restartFixture(fixture: VerificationServer, serverEntry = join(ROOT, "server", "index.ts")): Promise<ChildProcess> {
+  assert.ok(isAbsolute(serverEntry) && existsSync(serverEntry), "fixture server entry must be an existing absolute file path");
   await waitForExit(fixture.child, { signal: "SIGTERM" });
   const dataDir = fixture.info.dataDir;
   const config = JSON.parse(readFileSync(join(dataDir, "config.json"), "utf8"));
@@ -36,10 +37,11 @@ async function restartFixture(fixture: VerificationServer): Promise<ChildProcess
     OMB_DATA_DIR: dataDir, OMB_PORT: new URL(fixture.info.url).port,
     OMB_WEBHOOK_PORT: String(Number(new URL(fixture.info.url).port) + 1),
     FAKE_CLAUDE_MODE: "happy", FAKE_CLAUDE_DUMP: fixture.fixtureDumpPath,
+    BOS_NO_PING: "1", BOS_NO_MANAGED_CODEX: "1", BOS_NO_MANAGED_CLAUDE: "1",
     PATH: dirname(process.execPath),
   });
   const log = openSync(fixture.info.logPath, "a", 0o600);
-  const child = spawn(process.execPath, ["--experimental-strip-types", join(ROOT, "server", "index.ts")], {
+  const child = spawn(process.execPath, ["--experimental-strip-types", serverEntry], {
     cwd: ROOT, env, stdio: ["ignore", log, log],
   });
   closeSync(log);
@@ -61,12 +63,12 @@ async function restartFixture(fixture: VerificationServer): Promise<ChildProcess
   }
 }
 
-async function launchBackupFixture(): Promise<VerificationServer> {
+export async function launchBackupFixture(serverEntry?: string): Promise<VerificationServer> {
   const fixture = await launchVerificationServer({});
   try {
     // The general fixture uses DATA_DIR as HOME. Backups intentionally reject
     // auth homes among portable files, so keep this fixture's home excluded.
-    const child = await restartFixture(fixture);
+    const child = await restartFixture(fixture, serverEntry);
     return { ...fixture, child, info: { ...fixture.info, pid: child.pid! }, close: async () => {
       await waitForExit(child, { signal: "SIGTERM" });
       await fixture.close();
@@ -74,7 +76,7 @@ async function launchBackupFixture(): Promise<VerificationServer> {
   } catch (error) { await fixture.close(); throw error; }
 }
 
-export async function verifyWorkspaceBackup(report: (event: unknown) => void = () => {}) {
+export async function verifyWorkspaceBackup(report: (event: unknown) => void = () => {}, options: { destinationServerEntry?: string } = {}) {
   const events: unknown[] = [];
   const record = (event: unknown) => { events.push(event); report(event); };
   const source = await launchBackupFixture();
@@ -97,8 +99,8 @@ export async function verifyWorkspaceBackup(report: (event: unknown) => void = (
     return { status: response.status, body: result };
   };
   try {
-    destination = await launchBackupFixture();
-    record({ destination: destination.info });
+    destination = await launchBackupFixture(options.destinationServerEntry);
+    record({ destination: destination.info, serverEntry: options.destinationServerEntry || join(ROOT, "server", "index.ts") });
     assert.equal((await control(source, "doctor") as { ok: boolean }).ok, true);
     const { bot } = await control(source, "new-bot", "--name", "Full backup probe", "--section", "Fixture team") as { bot: { id: string; threadId: string } };
     const { bot: oldBot } = await control(destination, "new-bot", "--name", "Original destination") as { bot: { id: string } };
@@ -192,7 +194,7 @@ export async function verifyWorkspaceBackup(report: (event: unknown) => void = (
     assert.equal((await api(destination, "POST", "/api/bots", { name: "Must wait for restart" })).status, 503);
     assert.deepEqual(readFileSync(join(destination.info.dataDir, "bots.json")), oldBytes);
 
-    restarted = await restartFixture(destination);
+    restarted = await restartFixture(destination, options.destinationServerEntry);
     record({ command: "restart exact destination fixture", oldPid: destination.info.pid, newPid: restarted.pid, url: destination.info.url, logPath: destination.info.logPath });
     const after = (await api(destination, "GET", "/api/bots?messages=200")).body;
     assert.deepEqual(after.bots.map((candidate: { id: string }) => candidate.id).sort(), before.bots.map((candidate: { id: string }) => candidate.id).sort());
@@ -240,7 +242,10 @@ export async function verifyWorkspaceBackup(report: (event: unknown) => void = (
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  verifyWorkspaceBackup((event) => console.log(JSON.stringify(event))).catch((error) => {
+  const flag = process.argv.indexOf("--destination-server");
+  const destinationServerEntry = flag < 0 ? undefined : process.argv[flag + 1];
+  if (flag >= 0) assert.ok(destinationServerEntry && isAbsolute(destinationServerEntry) && existsSync(destinationServerEntry), "--destination-server requires an existing absolute file path");
+  verifyWorkspaceBackup((event) => console.log(JSON.stringify(event)), { destinationServerEntry }).catch((error) => {
     console.error(error);
     process.exitCode = 1;
   });

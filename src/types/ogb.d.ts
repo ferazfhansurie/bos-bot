@@ -14,6 +14,8 @@ export interface ToolsBrowserDownload {
 // The narrow bridge the Electron preload exposes. Absent in the browser.
 
 declare global {
+  interface AppshotRow { id: string; kind: "window" | "screen"; title: string; thumbnail: string; icon: string | null }
+  interface AppshotListing { permission: "ok" | "needs-permission" | "needs-relaunch"; rows: AppshotRow[]; shortcut: string | null }
   type CompanyBackupEntry = Omit<import("../../electron/company-backups.mjs").CompanyBackupMetadata, "status"> & { status: "creating" | "uploading" | "completing" | "ready" | "cleanup" };
   interface CompanyBackupScheduleState {
     enabled: boolean;
@@ -205,6 +207,13 @@ const __APP_VERSION__: string;
       /** Arms one user-initiated display capture request from this frame. */
       beginScreenPreviewIntent(): boolean;
       screenFrame(): Promise<string | null>;
+      /** Appshots (electron/appshot.mjs); absent on older shells and remote pages. */
+      appshot?: {
+        list(): Promise<AppshotListing>;
+        capture(id: string): Promise<{ name: string; data: Uint8Array }>;
+        openSettings(): Promise<boolean>;
+        onOpen(cb: (listing: AppshotListing & { source: "shortcut" }) => void): () => void;
+      };
       androidDevice?: {
         status(): Promise<AndroidDeviceStatus>;
         frame(serial: string): Promise<{ serial: string; dataUrl: string }>;
@@ -316,7 +325,7 @@ const __APP_VERSION__: string;
       workspaceOpenIn?(filePath: string, target: "cursor" | "vscode" | "reveal" | "default"): Promise<boolean>;
       /** Save a provider credential through Electron's OS-backed store. */
       setCredential?(
-        name: "composioApiKey" | "xaiApiKey" | "xaiManagementKey" | "boxToken" | "opencodeGoApiKey" | "ttsKey" | "fishAudioKey" | "openaiImageApiKey" | "customImageApiKey",
+        name: "composioApiKey" | "xaiApiKey" | "xaiManagementKey" | "boxToken" | "boxComputeApiKey" | "opencodeGoApiKey" | "ttsKey" | "fishAudioKey" | "openaiImageApiKey" | "customImageApiKey",
         value: string,
       ): Promise<ConfigStatus>;
       /** In-app auto-update (packaged app only; dormant in dev). onState

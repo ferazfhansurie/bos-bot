@@ -34,6 +34,7 @@ export function queuedTextEditable(text: string): boolean {
 export function QueuedComposerMessages({
   items,
   onSteer,
+  onResume,
   steerMode = "all",
   steering = false,
   steerInterrupts = false,
@@ -44,8 +45,9 @@ export function QueuedComposerMessages({
   onReorder,
   onSteerItem,
 }: {
-  items: Array<{ queueId: string; text: string; reason?: "capacity" }>;
+  items: Array<{ queueId: string; text: string; paused?: boolean; reason?: "capacity" }>;
   onSteer?: () => void;
+  onResume?: () => void;
   steerMode?: "all" | "next";
   steering?: boolean;
   /** True when Steer is backed by an interrupt (engine without live steer):
@@ -171,6 +173,7 @@ export function QueuedComposerMessages({
       {visible.some((item) => item.reason === "capacity") && (
         <p className="px-3 pt-2 text-[12px] text-ink-secondary">{t("composer.queued.capacity")}</p>
       )}
+      {items.some(item => item.paused) && <div className="flex items-center gap-3 px-3 pt-2 text-xs text-ink-secondary" role="status"><span>Paused after stop</span><button type="button" className="font-medium underline" onClick={onResume}>Resume</button></div>}
       <ul className="divide-y divide-hairline/25" aria-label={t("composer.queued.list")}>
         {visible.map((item, index) => editing?.queueId === item.queueId ? (
           <li key={item.queueId} className="flex min-h-10 min-w-0 items-center gap-2 px-2.5 py-1.5">

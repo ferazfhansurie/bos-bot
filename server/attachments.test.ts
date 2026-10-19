@@ -447,6 +447,14 @@ describe("shared files", () => {
     expect(readdirSync(ATTACHMENTS_DIR)).toEqual([`${UPLOAD_A}${extension}`]);
   });
 
+  it.each([["text/vtt", ".vtt"], ["application/x-subrip", ".srt"]])("stores %s transcript files privately", async (mime, extension) => {
+    const bytes = Buffer.from("00:00:00.000 --> 00:00:01.000\nhello");
+    const saved = await saveFile((async function* () { yield bytes; })(), "memo" + extension, mime);
+    expect(saved.path.endsWith(extension)).toBe(true);
+    expect(readFileSync(saved.path)).toEqual(bytes);
+    if (process.platform !== "win32") expect(statSync(saved.path).mode & 0o777).toBe(0o600);
+  });
+
   it("rejects empty and oversized streams without leaving partial files", async () => {
     await expect(saveFile((async function* () {})(), "empty.txt", "text/plain")).rejects.toThrow(/empty file/);
     expect(readdirSync(ATTACHMENTS_DIR)).toEqual([]);

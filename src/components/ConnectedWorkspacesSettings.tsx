@@ -2,18 +2,15 @@ import { useEffect, useRef, useState } from "react";
 import { Check, Cloud, Laptop, Loader2, Trash2 } from "lucide-react";
 import { Card } from "./SettingsPrimitives";
 import { ComputerSharingSettings } from "./ComputerSharingSettings";
-import { useStore } from "@/state/store";
-import { sharedComputersEnabled } from "@/lib/feature-flags";
 
 type SavedWorkspaces = Awaited<ReturnType<NonNullable<NonNullable<Window["ogb"]>["environments"]>["state"]>>;
 
 /** These are this desktop's connections, not a fleet administration API. */
 export function ConnectedWorkspacesSettings() {
   const bridge = window.ogb?.environments;
-  // Computer sharing is off unless this workspace's server turned it on. The
-  // desktop bridge alone is not enough: never offer access the server refuses.
-  const { state } = useStore();
-  const sharingOffered = sharedComputersEnabled(state.config) && Boolean(window.ogb?.computerSharing);
+  // Only the local owner renderer receives this bridge. Discovery grants nothing;
+  // native review explicitly enables the local feature and the workspace grant.
+  const sharingOffered = Boolean(window.ogb?.computerSharing);
   const [saved, setSaved] = useState<SavedWorkspaces | null>(null);
   const [address, setAddress] = useState("");
   const [name, setName] = useState("");

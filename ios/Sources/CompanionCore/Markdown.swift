@@ -28,6 +28,9 @@ public enum MarkdownBlock: Equatable, Sendable {
     case code(language: String?, text: String)
     case quote(String)
     case rule
+    /// A GFM pipe table: a header row, a `---` row, then body rows. Cells
+    /// are raw inline markdown. Rows are padded or cut to the header width.
+    case table(headers: [String], rows: [[String]])
 }
 
 public enum Markdown {
@@ -92,6 +95,24 @@ public enum Markdown {
                 continue
             }
 
+            // A pipe row followed by a separator row opens a table; it runs
+            // until the first line that is not a pipe row.
+            if trimmed.hasPrefix("|"), let next = lines.first,
+               let headers = Optional(tableCells(trimmed)), !headers.isEmpty,
+               isTableSeparatorRow(next, columns: headers.count) {
+                flushParagraph()
+                lines = lines.dropFirst()
+                var rows: [[String]] = []
+                while let row = lines.first, row.trimmingCharacters(in: .whitespaces).hasPrefix("|") {
+                    lines = lines.dropFirst()
+                    var cells = tableCells(row.trimmingCharacters(in: .whitespaces))
+                    if cells.count < headers.count { cells += Array(repeating: "", count: headers.count - cells.count) }
+                    rows.append(Array(cells.prefix(headers.count)))
+                }
+                blocks.append(.table(headers: headers, rows: rows))
+                continue
+            }
+
             if let heading = heading(trimmed) {
                 flushParagraph()
                 blocks.append(heading)
@@ -114,6 +135,42 @@ public enum Markdown {
         }
         flushParagraph()
         return blocks
+    }
+
+    public static func tableCells(_ line: String) -> [String] {
+        var body = line.trimmingCharacters(in: .whitespaces)
+        if body.first == "|" { body.removeFirst() }
+        if body.last == "|", !body.hasSuffix("\\|") { body.removeLast() }
+        var cells: [String] = []
+        var cell = ""
+        var escaped = false
+        for character in body {
+            if escaped {
+                if character != "|" { cell.append("\\") }
+                cell.append(character)
+                escaped = false
+            } else if character == "\\" {
+                escaped = true
+            } else if character == "|" {
+                cells.append(cell.trimmingCharacters(in: .whitespaces))
+                cell = ""
+            } else {
+                cell.append(character)
+            }
+        }
+        if escaped { cell.append("\\") }
+        cells.append(cell.trimmingCharacters(in: .whitespaces))
+        return cells
+    }
+
+    private static func isTableSeparatorRow(_ line: String, columns: Int) -> Bool {
+        let trimmed = line.trimmingCharacters(in: .whitespaces)
+        guard trimmed.contains("-"), trimmed.allSatisfy({ "|-: \t".contains($0) }) else { return false }
+        let cells = tableCells(trimmed)
+        return cells.count == columns && cells.allSatisfy { cell in
+            let core = cell.replacingOccurrences(of: " ", with: "").trimmingCharacters(in: CharacterSet(charactersIn: ":"))
+            return core.count >= 1 && core.allSatisfy { $0 == "-" }
+        }
     }
 
     private static func heading(_ trimmed: String) -> MarkdownBlock? {

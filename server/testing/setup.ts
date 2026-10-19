@@ -10,6 +10,13 @@ import { afterAll, afterEach } from "vitest";
 
 import { removeTempDir } from "./cleanup.ts";
 
+// The test runner may itself be launched by a live bot. Strip every product
+// alias before importing application modules or spawning fixture children.
+// Per-test fixtures can then explicitly install only their own capabilities.
+for (const key of Object.keys(process.env)) {
+  if (/^(?:BOSBOT_|BOS_|OMB_|OPENMAUSBOT_|AIOS_)/.test(key)) delete process.env[key];
+}
+
 const home = mkdtempSync(join(tmpdir(), "omb-test-home-"));
 compatEnv.HOME = home;
 compatEnv.USERPROFILE = home;

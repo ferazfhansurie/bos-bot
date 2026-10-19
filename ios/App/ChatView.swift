@@ -91,7 +91,7 @@ struct ChatView: View {
     private var sendingMessage: Bool { pendingSendPreview?.uploading == true }
     /// Direct chats default to immediate steer. An explicit Queue choice
     /// remains selected so the next send respects the person's choice.
-    @State private var sendPriority: MessagePriority = .queue
+    @State private var sendPriority: MessagePriority = .steer
     /// The held send open in the queued-message editor.
     @State private var editingQueued: QueuedSend?
     @State private var attachmentError: String?
@@ -155,7 +155,7 @@ struct ChatView: View {
         self.chat = chat
         self.onClose = onClose
         _selectedThreadId = State(initialValue: chat.threadId)
-        if case .bot = chat { _sendPriority = State(initialValue: .block) }
+        if case .bot = chat { _sendPriority = State(initialValue: .steer) }
     }
 
     /// The live bubble's scroll target. A constant because there is at most
@@ -228,13 +228,15 @@ struct ChatView: View {
         let live = Set(memberSteps.values.joined().map(\.id))
         let settled = !live.isEmpty ? messages.filter { !live.contains($0.id) }
             : liveSteps.isEmpty ? messages : Array(messages.dropLast(liveSteps.count))
+        // Each settled turn's steps and narration fold behind "Worked for …",
+        // ChatGPT's shape; the turn still running is left as it is.
         if case .room = current {
-            return transcriptRows(groupRoomTurns(settled), detail: detail, foldFailures: true)
+            return foldWorkedTurns(transcriptRows(groupRoomTurns(settled), detail: detail, foldFailures: true), holdingLastTurn: current.busy)
         }
         // A failed step joins its run too: the run's chip counts what didn't
         // work, and a long turn reads as one row instead of being split at
         // every failed command into a wall of chips.
-        return transcriptRows(settled, detail: detail, foldFailures: true)
+        return foldWorkedTurns(transcriptRows(settled, detail: detail, foldFailures: true), holdingLastTurn: current.busy)
     }
 
     /// One full fold of the open thread; `TranscriptMemo` keeps it until
@@ -312,6 +314,13 @@ struct ChatView: View {
         let steps = derived.value.steps
         let liveSteps = derived.value.liveSteps
         let transcript = derived.value.rows
+        // The work behind each answer, for its "Edited N files" card, and
+        // the newest answer, which alone keeps its action row on screen.
+        let workedByAnswer = Dictionary(transcript.compactMap { row -> (String, WorkedTurn)? in
+            if case let .worked(turn) = row { return (turn.answerId, turn) }
+            return nil
+        }, uniquingKeysWith: { first, _ in first })
+        let latestAnswerId = current.busy ? nil : transcript.last(where: { $0.role == .bot && $0.kind == .text })?.id
         let versions = derived.value.versions
         let replyTargets = derived.value.replyTargets
         let _ = arrivals.track(threadId: threadId, messages: derived.fresh ? visible.map { ($0.id, $0.at) } : [], now: Date().timeIntervalSince1970)
@@ -385,6 +394,10 @@ struct ChatView: View {
                                         .padding(.top, 10)
                                         .padding(.bottom, 4)
                                 }
+                                if leadsBotTurn(at: index, in: transcript) {
+                                    AssistantLeadLine(chat: current, botId: row.head.from?.botId, fallbackName: row.head.from?.name)
+                                        .padding(.top, index == 0 ? 0 : 10)
+                                }
                                 switch row {
                                 case let .message(message):
                                     MessageRow(
@@ -400,8 +413,17 @@ struct ChatView: View {
                                     )
                                     .equatable()
                                     .arrivalSpring(arrives(message), fromTrailing: message.role == .user && !message.isFromAnotherPerson(selfID: roomSelfID), reduceMotion: reduceMotion)
+                                    if let turn = workedByAnswer[message.id], case let changes = turn.fileChanges, !changes.isEmpty {
+                                        FileChangeCard(changes: changes, steps: turn.messages)
+                                            .padding(.top, 10)
+                                    }
+                                    if message.id == latestAnswerId {
+                                        ReplyActionRow(chat: current, message: message, onReply: { replyTarget = $0; composerFocused = true })
+                                    }
                                 case let .activityRun(items):
                                     ActivityRunChip(items: items, openThread: openThread)
+                                case let .worked(turn):
+                                    WorkedTurnRow(turn: turn, chat: current, selfID: roomSelfID, openLink: openLink, openThread: openThread)
                                 }
                                 ForEach(voiceRecords(after: index, in: transcript)) { record in
                                     VoiceCallEndedRow(record: record)
@@ -430,19 +452,20 @@ struct ChatView: View {
                                     })
                             }
                             if room.activeBotIds == nil {
-                                LiveReplyRow(live: session.liveText.entry(threadId), color: current.color, busy: current.busy) {
+                                LiveReplyRow(live: session.liveText.entry(threadId), color: current.color, busy: current.busy,
+                                             lead: liveNeedsLead(transcript, botId: room.busyBotId) ? AnyView(AssistantLeadLine(chat: current, botId: room.busyBotId, state: .thinking, animated: true).padding(.top, 10)) : nil) {
                                     WorkingSteps(items: liveSteps, startedAt: Date(timeIntervalSince1970: (liveSteps.first?.at ?? messages.last?.at ?? Date().timeIntervalSince1970 * 1000) / 1000))
                                 }
                             }
                         } else {
-                            LiveReplyRow(live: session.liveText.entry(threadId), color: current.color, busy: current.busy) {
-                                // the desktop's TurnPresence: the bot's own face, moving,
-                                // leads the working line in a 1:1
-                                let face = MausState.forThread(current, in: session.state) ?? .thinking
+                            // the desktop's TurnPresence: the bot's own face, moving,
+                            // leads the reply in progress
+                            let face = MausState.forThread(current, in: session.state) ?? .thinking
+                            LiveReplyRow(live: session.liveText.entry(threadId), color: current.color, busy: current.busy,
+                                         lead: liveNeedsLead(transcript) ? AnyView(AssistantLeadLine(chat: current, state: face, animated: true).padding(.top, 10)) : nil) {
                                 WorkingSteps(
                                     items: liveSteps,
-                                    startedAt: Date(timeIntervalSince1970: (liveSteps.first?.at ?? messages.last?.at ?? Date().timeIntervalSince1970 * 1000) / 1000),
-                                    avatar: AnyView(ChatAvatarView(chat: current, size: 22, state: face, animated: true))
+                                    startedAt: Date(timeIntervalSince1970: (liveSteps.first?.at ?? messages.last?.at ?? Date().timeIntervalSince1970 * 1000) / 1000)
                                 )
                             }
                         }
@@ -457,9 +480,15 @@ struct ChatView: View {
                                         } }
                                     }.frame(maxWidth: 300)
                                 }
-                                Text(pending.text).textSelection(.enabled)
-                                    .padding(12)
-                                    .background(Color.accentColor.opacity(0.16), in: RoundedRectangle(cornerRadius: 18))
+                                if !pending.text.isEmpty {
+                                    TrailingFraction(fraction: 0.7) {
+                                        Text(pending.text).textSelection(.enabled)
+                                            .font(.system(size: 17))
+                                            .foregroundStyle(GPT.userText)
+                                            .padding(.horizontal, 16).padding(.vertical, 10)
+                                            .background(GPT.userBubble, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+                                    }
+                                }
                                 if let progress = pending.progress { ProgressView(value: progress).frame(width: 180) }
                                 Text(pending.error ?? pending.status ?? (pending.steering ? "Interrupting…" : "Sending…"))
                                     .font(.caption).foregroundStyle(.secondary)
@@ -1097,6 +1126,23 @@ struct ChatView: View {
 
     /// True when this message opens a fresh stretch of conversation — the
     /// first one, or one that follows a gap of half an hour or more.
+    /// Where a bot's reply starts and so gets its face and name: after
+    /// anyone else's line, after another member's, or after a gap in time.
+    private func leadsBotTurn(at index: Int, in rows: [TranscriptRow]) -> Bool {
+        let row = rows[index]
+        guard row.role == .bot, row.kind != .digest else { return false }
+        if index == 0 || startsANewStretch(at: index, in: rows) { return true }
+        let previous = rows[index - 1]
+        return previous.role != .bot || previous.head.from?.botId != row.head.from?.botId
+    }
+
+    /// The live row needs its own lead line when the transcript does not
+    /// already end in this bot's reply.
+    private func liveNeedsLead(_ transcript: [TranscriptRow], botId: String? = nil) -> Bool {
+        guard let last = transcript.last else { return true }
+        return last.role != .bot || last.head.from?.botId != botId
+    }
+
     private func startsANewStretch(at index: Int, in rows: [TranscriptRow]) -> Bool {
         guard index > 0 else { return true }
         return rows[index].at - rows[index - 1].endAt > 30 * 60 * 1000
@@ -1253,7 +1299,8 @@ struct ChatView: View {
     private func archiveToken(for connection: Connection) throws -> String? {
 #if DEBUG
         if ProcessInfo.processInfo.arguments.contains("-store-preview"),
-           ProcessInfo.processInfo.arguments.contains("-send-scroll-preview"), connection.id == "preview-current" {
+           ProcessInfo.processInfo.arguments.contains("-send-scroll-preview") || ProcessInfo.processInfo.arguments.contains("-chatgpt-preview"),
+           connection.id == "preview-current" {
             return "isolated-scroll-fixture-token"
         }
 #endif
@@ -1327,8 +1374,8 @@ struct ChatView: View {
         catch { attachmentError = archive.error; return }
         do { try archive.handoff(sendID: durableID) }
         catch { attachmentError = archive.error; return }
-        pendingSendPreview = PendingSendPreview(threadId: chatAtSend.threadId, id: durableID, text: text, steering: priorityAtSend == .block && chatAtSend.busy, attachments: outgoingAttachments)
-        draft = ""; attachments = []; replyTarget = nil; mentionPicks = []
+        pendingSendPreview = PendingSendPreview(threadId: chatAtSend.threadId, id: durableID, text: text, steering: priorityAtSend == .steer && chatAtSend.busy, attachments: outgoingAttachments)
+        draft = ""; attachments = []; replyTarget = nil; mentionPicks = []; sendPriority = .steer
         Haptics.impact(.light)
         attachmentError = nil
         showCommandHUD = false
@@ -1649,7 +1696,7 @@ struct ChatView: View {
 
             if !heldSends.isEmpty {
                 let roomSteer = roomSteerTarget
-                QueuedSendList(sends: heldSends, steerTargetName: roomSteer?.target?.name,
+                QueuedSendList(sends: heldSends, resume: { await session.resumeQueued(threadId: threadId, in: current) }, steerTargetName: roomSteer?.target?.name,
                                steerUnavailable: roomSteer?.unavailable, steer: { send in
                     let targetThread = threadId
                     pendingSendPreview = PendingSendPreview(threadId: targetThread, id: send.queueId, text: send.text, steering: roomSteer == nil)
@@ -1885,6 +1932,15 @@ extension ChatView {
     /// `-autopilot scroll|typing`: the UI test's gestures without the UI
     /// test. Sixteen long scrolls, or six sentences typed a key at a time.
     @MainActor fileprivate func runAutopilot(_ proxy: ScrollViewProxy) async {
+        // `-scroll-to <row id>`: park a fixture transcript on one row for a screenshot.
+        let args = ProcessInfo.processInfo.arguments
+        if let i = args.firstIndex(of: "-scroll-to"), i + 1 < args.count {
+            try? await Task.sleep(for: .seconds(2.5))
+            let anchor: UnitPoint = args.contains("-scroll-bottom") ? .bottom : .top
+            proxy.scrollTo(args[i + 1], anchor: anchor)
+            try? await Task.sleep(for: .seconds(0.6))
+            proxy.scrollTo(args[i + 1], anchor: anchor)
+        }
         guard let scenario = Autopilot.scenario, scenario == "scroll" || scenario == "typing" else { return }
         try? await Task.sleep(for: .seconds(3))
         Autopilot.log("START \(scenario)")
@@ -2221,8 +2277,8 @@ struct SendPriorityToggle: View {
 
     var body: some View {
         HStack(spacing: 2) {
-            option(.queue, "Queue", "tray.and.arrow.down")
-            option(.block, "Steer", "arrow.turn.up.right")
+            option(.queue, "After this", "tray.and.arrow.down")
+            option(.steer, "Send", "arrow.turn.up.right")
         }
         .padding(3)
         .glassCapsule()
@@ -2709,7 +2765,7 @@ struct TextBubble: View {
     var tailed = true
     let openLink: (URL, Message) -> OpenURLAction.Result
     @Environment(\.mentionContext) private var mentions
-    @ScaledMetric(relativeTo: .body) private var bodySize: CGFloat = 18
+    private let metrics = GPTMetrics()
 
     /// What you typed, as typed, with the names you tagged drawn as tokens.
     static func styledMine(_ text: String, mentions: MentionContext, mine: Bool = true) -> AttributedString {
@@ -2740,172 +2796,120 @@ struct TextBubble: View {
         return (filename, diff)
     }
 
-    private var parsedTable: (headers: [String], rows: [[String]])? {
-        guard message.role != .user, let source = message.text else { return nil }
-        let lines = source.components(separatedBy: .newlines)
-            .map { $0.trimmingCharacters(in: .whitespaces) }
-            .filter { !$0.isEmpty }
-        guard lines.count >= 3, lines.allSatisfy({ $0.hasPrefix("|") && $0.hasSuffix("|") }) else {
-            return nil
-        }
-        let headers = Self.tableCells(lines[0])
-        let separators = Self.tableCells(lines[1])
-        guard !headers.isEmpty, separators.count == headers.count,
-              separators.allSatisfy(Self.isTableSeparator) else { return nil }
-        let rows = lines.dropFirst(2).map(Self.tableCells)
-        guard rows.allSatisfy({ $0.count == headers.count }) else { return nil }
-        return (headers, rows)
-    }
-
-    private static func tableCells(_ line: String) -> [String] {
-        var body = line
-        if body.first == "|" { body.removeFirst() }
-        if body.last == "|" { body.removeLast() }
-
-        var cells: [String] = []
-        var cell = ""
-        var escaped = false
-        for character in body {
-            if escaped {
-                if character == "|" {
-                    cell.append(character)
-                } else {
-                    cell.append("\\")
-                    cell.append(character)
-                }
-                escaped = false
-            } else if character == "\\" {
-                escaped = true
-            } else if character == "|" {
-                cells.append(cell.trimmingCharacters(in: .whitespaces))
-                cell = ""
-            } else {
-                cell.append(character)
-            }
-        }
-        if escaped { cell.append("\\") }
-        cells.append(cell.trimmingCharacters(in: .whitespaces))
-        return cells
-    }
-
-    private static func isTableSeparator(_ cell: String) -> Bool {
-        let compact = cell.replacingOccurrences(of: " ", with: "")
-        let core = compact.trimmingCharacters(in: CharacterSet(charactersIn: ":"))
-        return core.count >= 3 && core.allSatisfy { $0 == "-" }
-    }
-
-
     /// The room person who wrote this line, as the room lists them.
     private var roomPerson: RoomPerson? {
         guard case let .room(room) = chat, let id = message.sender?.id else { return nil }
         return room.people?.first { $0.id == id }
     }
 
+    /// Everything the message carries besides text: generated images first,
+    /// then what was attached, each path once.
+    private var media: [DisplayedMessageAttachment] {
+        var seen = Set<String>()
+        return (message.generatedImages + attachedContent.attachments).filter { seen.insert($0.path).inserted }
+    }
+
     var body: some View {
-        // A person's line is plain text whoever wrote it; only yours sits on
-        // the trailing side.
         let fromPerson = message.role == .user
         let mine = fromPerson && !message.isFromAnotherPerson(selfID: selfID)
-        // Each of these scans the whole text; read them once per render,
-        // not once per mention below.
-        let diff = parsedDiff
-        let table = diff == nil ? parsedTable : nil
-        let customCard = diff != nil || table != nil
         let shared = attachedContent
-        // rooms attribute each line to the member who said it
-        let speaker = message.from
-        // No bot face beside the bubble: the bot's face is in the header, and
-        // in a room the name line says who spoke. Another person's lines get
-        // their face at the end of each run, as on the desktop.
-        let otherPerson = fromPerson && !mine ? roomPerson : nil
-        // A bot's line wears that bot's colour; a person's line does not.
-        let tint: String? = fromPerson ? nil : (speaker?.color ?? (chat.isBot ? chat.color : nil))
-        let ink = mine ? BubbleColor.mineText : (tint == nil ? Color.primary : BubbleColor.theirsText(tint: tint))
-        HStack(alignment: .bottom, spacing: 0) {
-            if mine { Spacer(minLength: 56) }
-            if let otherPerson {
+        if mine {
+            mineBody(shared)
+        } else if fromPerson {
+            otherPersonBody(shared)
+        } else {
+            botBody(shared)
+        }
+    }
+
+    /// Yours: attachments above, then the text in a soft bubble on the
+    /// trailing side, never wider than 70% of the column.
+    @ViewBuilder
+    private func mineBody(_ shared: AttachedMessageContent) -> some View {
+        VStack(alignment: .trailing, spacing: 8) {
+            if !media.isEmpty {
+                MessageMedia(attachments: media, threadId: chat.threadId, messageId: message.id, mine: true)
+            }
+            if !shared.text.isEmpty {
+                TrailingFraction(fraction: 0.7) {
+                    Text(Self.styledMine(shared.text, mentions: mentions, mine: true))
+                        .font(.system(size: metrics.body))
+                        .lineSpacing(metrics.body * 0.18)
+                        .foregroundStyle(GPT.userText)
+                        .textSelection(.enabled)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 10)
+                        .background(GPT.userBubble, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .trailing)
+    }
+
+    /// Another person in a room: their face at the end of a run, their name,
+    /// and a bubble on the leading side.
+    @ViewBuilder
+    private func otherPersonBody(_ shared: AttachedMessageContent) -> some View {
+        HStack(alignment: .bottom, spacing: 6) {
+            if let person = roomPerson {
                 Group {
-                    if tailed { PersonFaceView(name: otherPerson.name, avatar: otherPerson.avatar, size: 26) }
-                    else { Color.clear }
+                    if tailed { PersonFaceView(name: person.name, avatar: person.avatar, size: 26) } else { Color.clear }
                 }
                 .frame(width: 26, height: 26)
-                .padding(.trailing, 6)
                 .accessibilityHidden(true)
             }
-
             VStack(alignment: .leading, spacing: 4) {
-                if let speaker, !mine, !chat.isBot {
-                    Text(speaker.name)
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(MausPalette.color(speaker.color))
-                } else if fromPerson, !mine, let person = message.sender {
+                if let person = message.sender {
                     Text(person.name)
                         .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(GPT.secondaryText)
                         .accessibilityIdentifier("room-sender-" + message.id)
                 }
-                ForEach(message.generatedImages, id: \.path) { attachment in
-                    TranscriptAttachmentView(
-                        attachment: attachment, threadId: chat.threadId,
-                        messageId: message.id, foreground: mine ? BubbleColor.mineText : .primary
-                    )
+                if !media.isEmpty {
+                    MessageMedia(attachments: media, threadId: chat.threadId, messageId: message.id, mine: true)
+                        .fixedSize(horizontal: true, vertical: false)
                 }
-                // Bots get markdown, you do not — the same split the desktop
-                // makes. Markdown you did not intend is worse than markdown
-                // you did: a message about `**` should show the asterisks.
-                if let diff {
-                    GitPRDiffCardView(filename: diff.filename, diffText: diff.diff)
-                } else if let table {
-                    SQLResultTableView(columns: table.headers, rows: table.rows)
-                } else if fromPerson {
-                    ForEach(Array(shared.attachments.enumerated()), id: \.offset) { _, attachment in
-                        TranscriptAttachmentView(
-                            attachment: attachment,
-                            threadId: chat.threadId,
-                            messageId: message.id
-                        )
-                    }
-                    if !shared.text.isEmpty {
-                        Text(Self.styledMine(shared.text, mentions: mentions, mine: mine))
-                            .font(.system(size: bodySize))
-                            .foregroundStyle(mine ? BubbleColor.mineText : Color.primary)
-                            .textSelection(.enabled)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                } else {
-                    ForEach(Array(shared.attachments.enumerated()), id: \.offset) { _, attachment in
-                        if !message.generatedImages.contains(where: { $0.path == attachment.path }) {
-                            TranscriptAttachmentView(
-                                attachment: attachment, threadId: chat.threadId,
-                                messageId: message.id, foreground: .primary
-                            )
-                        }
-                    }
-                    if ChannelTextPresentation.canCollapse(message) {
-                        ExpandableBotReply(source: shared.text) { openLink($0, message) }
-                            .foregroundStyle(ink)
-                    } else if !shared.text.isEmpty {
-                        MarkdownText(source: shared.text) { openLink($0, message) }
-                            .foregroundStyle(ink).textSelection(.enabled)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
+                if !shared.text.isEmpty {
+                    Text(Self.styledMine(shared.text, mentions: mentions, mine: false))
+                        .font(.system(size: metrics.body))
+                        .foregroundStyle(Color.primary)
+                        .textSelection(.enabled)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 10)
+                        .background(GPT.otherBubble, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
                 }
             }
-            .padding(.horizontal, customCard ? 0 : 15)
-            .padding(.vertical, customCard ? 0 : 11)
-            .background(
-                Group {
-                    if !customCard {
-                        RoundedRectangle(cornerRadius: 22)
-                            .fill(mine ? BubbleColor.mine : BubbleColor.theirs(tint: tint))
-                    }
-                }
-            )
-            // leave room for the tail below, so the next row does not sit on it
-            .padding(.bottom, 0)
-
-            if !mine { Spacer(minLength: 44) }
+            Spacer(minLength: 44)
         }
+    }
+
+    /// A bot's reply: no bubble, full-width prose, then its media and the
+    /// cards for links it put on their own line. Who said it is the lead
+    /// line the transcript draws above.
+    @ViewBuilder
+    private func botBody(_ shared: AttachedMessageContent) -> some View {
+        let diff = parsedDiff
+        VStack(alignment: .leading, spacing: 12) {
+            if let diff {
+                GitPRDiffCardView(filename: diff.filename, diffText: diff.diff)
+            } else if !shared.text.isEmpty {
+                MarkdownText(source: shared.text) { openLink($0, message) }
+                    .foregroundStyle(Color.primary)
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            if !media.isEmpty {
+                MessageMedia(attachments: media, threadId: chat.threadId, messageId: message.id)
+            }
+            if diff == nil {
+                ForEach(standaloneLinks(in: shared.text), id: \.self) { url in
+                    LinkPreviewCard(url: url) { _ = openLink($0, message) }
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
@@ -3642,15 +3646,22 @@ private struct LiveReplyRow<Working: View>: View {
     @ObservedObject var live: LiveText
     let color: String
     let busy: Bool
+    /// The bot's face and name, when the transcript does not already end
+    /// in this bot's reply.
+    var lead: AnyView? = nil
     @ViewBuilder let working: () -> Working
 
     var body: some View {
-        if !live.text.isEmpty {
-            StreamingBubble(text: live.text, reasoning: nil, color: color)
-                .id(ChatView.liveBubbleId)
-        } else if busy {
-            working()
-                .id(ChatView.liveBubbleId)
+        if !live.text.isEmpty || busy {
+            VStack(alignment: .leading, spacing: 6) {
+                if let lead { lead }
+                if !live.text.isEmpty {
+                    StreamingBubble(text: live.text, reasoning: nil, color: color)
+                } else {
+                    working()
+                }
+            }
+            .id(ChatView.liveBubbleId)
         }
     }
 }
@@ -3675,7 +3686,14 @@ private struct RoomMemberLiveReply: View {
     var body: some View {
         if !live.text.isEmpty || !live.reasoning.isEmpty || busy {
             VStack(alignment: .leading, spacing: 6) {
-                HStack(spacing: 6) { BotAvatarView(bot: bot, size: 24, state: face ?? .idle, animated: face?.showsActivity == true); if named { Text(bot.name).font(.caption.weight(.semibold)) } }
+                if named {
+                    HStack(spacing: 8) {
+                        BotAvatarView(bot: bot, size: 22, state: face ?? .idle, animated: face?.showsActivity == true)
+                        Text(bot.name).font(.system(size: 15, weight: .semibold)).lineLimit(1)
+                    }
+                    .accessibilityElement(children: .combine)
+                    .padding(.bottom, 2)
+                }
                 if !live.text.isEmpty || !live.reasoning.isEmpty {
                     StreamingBubble(text: live.text, reasoning: live.reasoning, color: bot.color)
                 } else { WorkingSteps(items: steps, startedAt: startedAt) }
@@ -3837,39 +3855,31 @@ struct StreamingBubble: View {
     var color: String = "blue"
 
     var body: some View {
-        HStack(alignment: .bottom, spacing: 0) {
-            VStack(alignment: .leading, spacing: 4) {
-                if let reasoning, !reasoning.isEmpty, text?.isEmpty != false {
-                    AgentThoughtChamberView(
-                        reasoning: String(reasoning.suffix(2_000)),
-                        botName: "Bot",
-                        mascotColor: MausPalette.color(color),
-                        isStreaming: true
-                    )
-                }
-                // Image and attachment lines have no message to fetch
-                // through yet; they appear as thumbnails once it settles.
-                if let text = text.map({ AttachedMessageContent.parse($0, markdownImages: true).text }),
-                   !text.isEmpty {
-                    // Same renderer as the settled bubble, for the same
-                    // reason as the padding: a live reply showing `**bold**`
-                    // that snaps to bold on arrival is the message jumping,
-                    // just in a different dimension. The parser tolerates the
-                    // half-finished markdown this is always holding — an
-                    // unclosed fence renders as code, an unclosed link as the
-                    // characters typed so far.
-                    MarkdownText(source: text, caret: true)
-                        .foregroundStyle(BubbleColor.theirsText(tint: color))
-                }
+        VStack(alignment: .leading, spacing: 4) {
+            if let reasoning, !reasoning.isEmpty, text?.isEmpty != false {
+                AgentThoughtChamberView(
+                    reasoning: String(reasoning.suffix(2_000)),
+                    botName: "Bot",
+                    mascotColor: MausPalette.color(color),
+                    isStreaming: true
+                )
             }
-            .padding(.horizontal, 15)
-            .padding(.vertical, 11)
-            // tinted like the settled bubble, so arriving does not recolour it
-            .background(RoundedRectangle(cornerRadius: 22).fill(BubbleColor.theirs(tint: color)))
-            Spacer(minLength: 44)
+            // Image and attachment lines have no message to fetch
+            // through yet; they appear as media once it settles.
+            if let text = text.map({ AttachedMessageContent.parse($0, markdownImages: true).text }),
+               !text.isEmpty {
+                // Same renderer and the same bubble-less column as the
+                // settled reply, so its arrival does not move a line. The
+                // parser tolerates the half-finished markdown this is always
+                // holding: an unclosed fence renders as code, an unclosed
+                // link as the characters typed so far.
+                MarkdownText(source: text, caret: true)
+                    .foregroundStyle(Color.primary)
+            }
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
         // No `.textSelection` on purpose: selecting text that is still growing
-        // fights the reader, and the settled bubble a frame later is
+        // fights the reader, and the settled reply a frame later is
         // selectable anyway.
     }
 }
@@ -3879,6 +3889,7 @@ struct StreamingBubble: View {
 /// capacity rather than because a turn is running.
 private struct QueuedSendList: View {
     let sends: [QueuedSend]
+    var resume: (() async -> Void)? = nil
     /// Room steer: the one running member the server will deliver the head
     /// to, so the button names who actually receives it.
     var steerTargetName: String? = nil
@@ -3899,6 +3910,12 @@ private struct QueuedSendList: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
+            if sends.contains(where: { $0.paused == true }) {
+                HStack {
+                    Text("Paused after stop").font(.caption).foregroundStyle(.secondary)
+                    Button("Resume") { Task { await resume?() } }.font(.caption.weight(.semibold))
+                }
+            }
             if showsCapacityNote {
                 Text("Queued — starts when this bot has a free thread slot.")
                     .font(.system(size: 12))
@@ -3917,7 +3934,7 @@ private struct QueuedSendList: View {
                             .foregroundStyle(Color.secondary)
                             .lineLimit(1)
                             .layoutPriority(-1)
-                    } else if index == 0 {
+                    } else if index == 0 && !sends.contains(where: { $0.paused == true }) {
                         Button(steerTargetName.map { String(localized: "Steer \($0)") } ?? String(localized: "Steer")) {
                             guard !steering else { return }
                             steering = true

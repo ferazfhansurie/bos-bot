@@ -7,6 +7,7 @@ import {
   currentTaskBot,
   initialState,
   loadSnapshotBoundary,
+  NEW_THREAD_PENDING,
   openNotificationTarget,
   openThread,
   persistBotUpdate,
@@ -2204,10 +2205,26 @@ describe("thread switch feedback", () => {
   it("clears switch feedback when a new thread supersedes the request", () => {
     let state = reducer(start(), { type: "switchTask", botId: "bot", threadId: "second" });
     state = reducer(state, { type: "newTask", botId: "bot" });
-    expect(state.pendingThreadSwitch.bot).toBeUndefined();
+    // the chat swaps to an empty new-thread shell before the server answers
+    expect(state.pendingThreadSwitch.bot).toBe(NEW_THREAD_PENDING);
     state = reducer(state, { type: "taskSwitched", bot: { ...bot, threadId: "new-thread" } });
     expect(state.pendingThreadSwitch.bot).toBeUndefined();
     expect(state.bots[0].threadId).toBe("new-thread");
+  });
+  it("drops the new-thread shell when creating the thread fails", () => {
+    let state = reducer(start(), { type: "newTask", botId: "bot" });
+    state = reducer(state, { type: "threadSwitchFailed", botId: "bot", threadId: NEW_THREAD_PENDING });
+    expect(state.pendingThreadSwitch.bot).toBeUndefined();
+  });
+  it("caches a hovered thread's page once, never over the live transcript", () => {
+    const row: Message = { id: "warm", role: "bot", kind: "text", text: "warm", at: 1 };
+    let state = reducer(start(), { type: "threadPrefetched", threadId: "second", messages: [row], hasMore: true });
+    expect(state.threadCache.second).toMatchObject({ messages: [row], hasMore: true });
+    const cached = state.threadCache.second;
+    state = reducer(state, { type: "threadPrefetched", threadId: "second", messages: [], hasMore: false });
+    expect(state.threadCache.second).toBe(cached);
+    state = reducer(state, { type: "threadPrefetched", threadId: bot.threadId, messages: [row], hasMore: false });
+    expect(state.threadCache[bot.threadId]).toBeUndefined();
   });
   it("does not clear a newer navigation for a late failure or snapshot", () => {
     let state = reducer(start(), { type: "switchTask", botId: "bot", threadId: "second" });

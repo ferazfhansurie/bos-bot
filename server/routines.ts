@@ -1,3 +1,4 @@
+import type { RoutineNotificationPolicy } from "../shared/routine-notifications.ts";
 import { randomUUID } from "node:crypto";
 import { mkdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -96,6 +97,8 @@ export interface Routine {
    * work builds on itself instead of restarting cold. Optional so existing
    * files migrate in place. */
   continuity?: boolean;
+  /** Missing means all; each run snapshots its policy. */
+  notificationPolicy?: RoutineNotificationPolicy;
   /** Default skips overlapping scheduled occurrences. Queue retains at most
    * one pending scheduled run; manual/webhook requests stay independent. */
   overlap?: "skip" | "queue";
@@ -157,6 +160,8 @@ export interface RoutineRun {
   startedAt?: number;
   finishedAt?: number;
   output?: string;
+  notificationPolicy?: RoutineNotificationPolicy;
+  important?: boolean;
   /** The run finished with nothing worth surfacing (its whole reply was the
    * quiet marker): no notification, no unread badge, no carried report. */
   quiet?: boolean;
@@ -217,6 +222,7 @@ export interface RoutineInput {
   timeoutMinutes?: number | null;
   attachments?: RoutineContextAttachment[];
   continuity?: boolean;
+  notificationPolicy?: RoutineNotificationPolicy;
   overlap?: "skip" | "queue";
   /** Omission preserves routing; null creates a new dedicated results task. */
   resultsThreadId?: string | null;
@@ -724,6 +730,7 @@ function sanitizeInput(input: RoutineInput, after: number): Omit<Routine, "id" |
   if (runOn === "cloud" && attachments.length > 0) {
     throw new Error("Attachments can only run on this computer until cloud file staging is available");
   }
+  if (input.notificationPolicy !== undefined && !["all", "important", "failures"].includes(input.notificationPolicy)) throw new Error("Choose a valid notification policy");
   const continuity = input.continuity === true;
   if (input.overlap !== undefined && input.overlap !== "skip" && input.overlap !== "queue") {
     throw new Error("Choose skip or queue for overlapping runs");
@@ -744,6 +751,7 @@ function sanitizeInput(input: RoutineInput, after: number): Omit<Routine, "id" |
     ...(timeoutMinutes === undefined ? {} : { timeoutMinutes }),
     attachments,
     ...(continuity ? { continuity: true } : {}),
+    notificationPolicy: input.notificationPolicy ?? "all",
     ...(input.overlap === "queue" ? { overlap: "queue" as const } : {}),
   };
 }
@@ -1044,6 +1052,7 @@ export class RoutineManager {
       timeoutMinutes: Object.hasOwn(patch, "timeoutMinutes") ? patch.timeoutMinutes : routine.timeoutMinutes,
       attachments: patch.attachments ?? routine.attachments,
       continuity: patch.continuity ?? routine.continuity,
+      notificationPolicy: patch.notificationPolicy ?? routine.notificationPolicy,
       overlap: Object.hasOwn(patch, "overlap") ? patch.overlap : routine.overlap,
     }, now);
     if (this.targetState(clean) === "missing") throw new Error(this.missingTargetMessage(clean.target));
@@ -1535,6 +1544,7 @@ export class RoutineManager {
             continue;
           }
           const triggerSource = run.triggerSource ?? (run.manual ? "manual" : "schedule");
+          const policyPrompt = run.notificationPolicy === "important" ? `${prompt}\n\nReporting: prefix your final reply with IMPORTANT_UPDATE: only if it contains a material change, actionable finding, or decision needed. Ordinary successful checks need no prefix. Use the usual quiet marker when nothing changed.` : prompt;
           if (run.target === "room-goal") {
             if (!run.groupId || !this.options.startGoal) {
               this.failThread(task.threadId, "Room goal routines are unavailable");
@@ -1543,7 +1553,7 @@ export class RoutineManager {
             await this.options.startGoal(
               run.groupId,
               task.threadId,
-              prompt,
+              policyPrompt,
               run.botId,
               run.id,
               (message) => this.failThread(task.threadId, message),
@@ -1552,7 +1562,7 @@ export class RoutineManager {
             await this.options.startTurn(
               run.botId,
               task.threadId,
-              composeExecutionPrompt(prompt, run.attachments, this.continuityCarry(run)),
+              composeExecutionPrompt(policyPrompt, run.attachments, this.continuityCarry(run)),
               run.runOn ?? "maus",
               triggerSource,
               (message) => this.failThread(task.threadId, message),
@@ -1610,6 +1620,10 @@ export class RoutineManager {
         queueMicrotask(() => void this.tick());
         return cloneRun(run);
       }
+      if (run.output?.startsWith("IMPORTANT_UPDATE:")) {
+        run.important = true;
+        run.output = run.output.slice("IMPORTANT_UPDATE:".length).trim();
+      }
       const pending = this.options.hasPendingDelegations?.(event.threadId) === true;
       if (!pending && isQuietRoutineReply(run.output)) {
         run.quiet = true;
@@ -1642,7 +1656,9 @@ export class RoutineManager {
         ["running", "waiting"].includes(candidate.status),
     );
     if (!run || status === "working") return null;
-    const safeDetail = redactSecretsInText(detail).trim();
+    const markedImportant = detail.trim().startsWith("IMPORTANT_UPDATE:");
+    const safeDetail = redactSecretsInText(markedImportant ? detail.trim().slice("IMPORTANT_UPDATE:".length) : detail).trim();
+    if (markedImportant) run.important = true;
     run.goalStatus = status;
     // Only a completed goal is a completed run. A team asking the human a
     // question is still waiting on them, and a blocked or turn-capped goal
@@ -1666,6 +1682,7 @@ export class RoutineManager {
       run.finishedAt = this.now();
       run.error = undefined;
       if (status !== "stopped") run.output = safeDetail.slice(0, 2_000) || undefined;
+      if (status === "completed" && isQuietRoutineReply(run.output)) { run.quiet = true; run.output = undefined; }
       this.save();
       this.emitRun(run);
     }
@@ -1737,6 +1754,7 @@ export class RoutineManager {
       id: randomUUID(),
       routineId: routine.id,
       routineName: routine.name,
+      notificationPolicy: routine.notificationPolicy,
       prompt: routine.prompt,
       durationMinutes: routine.durationMinutes,
       ...(routine.timeoutMinutes === undefined ? {} : { timeoutMinutes: routine.timeoutMinutes }),

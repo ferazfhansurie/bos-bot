@@ -7,7 +7,7 @@ export interface EnvironmentDescriptor {
   label: string;
   platform: string;
   version: string;
-  capabilities: { remoteSessions: true; selfUpdate: "desktop-managed" | "operator"; emailSignIn?: boolean; sharedComputers?: true };
+  capabilities: { remoteSessions: true; selfUpdate: "desktop-managed" | "operator"; emailSignIn?: boolean; passwordSignIn?: boolean; sharedComputers?: true };
 }
 
 export type SessionState =
@@ -121,6 +121,11 @@ export function startEmailSignIn(email: string, fetchImpl: typeof fetch = fetch)
 /** Exchange the emailed code for a session cookie. */
 export function verifyEmailSignIn(input: { email: string; code: string; label: string }, fetchImpl: typeof fetch = fetch): Promise<{ ok: true } | { ok: false; error: string }> {
   return postAuth("/api/auth/email/verify", { email: input.email, code: input.code, label: input.label }, fetchImpl);
+}
+
+/** Sign in with a staff login the owner created (username or phone number). */
+export function signInWithPassword(input: { username: string; password: string }, fetchImpl: typeof fetch = fetch): Promise<{ ok: true } | { ok: false; error: string }> {
+  return postAuth("/api/auth/password", { username: input.username, password: input.password }, fetchImpl);
 }
 
 /** The gate's ordinary "you have no session" wording is why the pair page is

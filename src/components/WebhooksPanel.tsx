@@ -1,3 +1,4 @@
+import { ROUTINE_EVENT_PRESETS, type RoutineEventSource } from "../../shared/routine-events";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Check,
@@ -75,7 +76,13 @@ function outcomeLabel(outcome: WebhookAttempt["outcome"], run?: RoutineRun) {
   return "Accepted";
 }
 
-function terminalCommand(credential: WebhookCredential) {
+function terminalCommand(credential: WebhookCredential, source?: RoutineEventSource | null) {
+  if (source) {
+    const event = source.kind === "github-pr" ? "pull_request" : source.kind === "github-ci" ? "workflow_run" : "app_mention";
+    const payload = source.kind === "slack-mention" ? { team_id: source.teamId, event: { type: "app_mention", channel: source.channelId, text: "local filter test" } } : { repository: { full_name: source.repository }, action: source.action ?? (source.kind === "github-pr" ? "opened" : "completed"), ...(source.kind === "github-pr" ? { pull_request: { number: 1 } } : { workflow_run: { id: 1 } }) };
+    const quote = (value: string) => "'" + value.replace(/'/g, "'\\''") + "'";
+    return `curl -sS ${quote(credential.endpointUrl)} -H ${quote(`Authorization: Bearer ${credential.secret}`)} -H ${quote(`X-Webhook-Event: ${event}`)} --json ${quote(JSON.stringify(payload))}`;
+  }
   return `curl -sS '${credential.url}' --json '{"task":"A customer wrote: This app saved me hours. Write a short thank-you reply."}'`;
 }
 
@@ -85,6 +92,11 @@ function WebhookEditor({ webhook, bots, onClose, onCredential }: { webhook?: Web
   const [name, setName] = useState(webhook?.name ?? "");
   const [prompt, setPrompt] = useState(webhook?.prompt ?? "");
   const [runOn, setRunOn] = useState<RoutineRunOn>(webhook?.runOn ?? "maus");
+  const [eventKind, setEventKind] = useState<RoutineEventSource["kind"] | "custom">(webhook?.eventSource?.kind ?? "custom");
+  const [repository, setRepository] = useState(webhook?.eventSource && "repository" in webhook.eventSource ? webhook.eventSource.repository : "");
+  const [eventAction, setEventAction] = useState(webhook?.eventSource && "action" in webhook.eventSource ? webhook.eventSource.action ?? "" : "");
+  const [teamId, setTeamId] = useState(webhook?.eventSource?.kind === "slack-mention" ? webhook.eventSource.teamId : "");
+  const [channelId, setChannelId] = useState(webhook?.eventSource?.kind === "slack-mention" ? webhook.eventSource.channelId : "");
   const [eventTypes, setEventTypes] = useState((webhook?.eventTypes ?? []).join(", "));
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
@@ -133,6 +145,11 @@ function WebhookEditor({ webhook, bots, onClose, onCredential }: { webhook?: Web
   const save = async () => {
     const bot = bots.find((candidate) => candidate.id === botId);
     const input: WebhookTriggerInput = { name: name.trim() || suggestedName(prompt, bot), prompt: prompt.trim(), botId, runOn, ...webhookActivationDefaults(webhook), eventTypes: eventTypes.split(",").map((value) => value.trim()).filter(Boolean) };
+    if (eventKind !== "custom") {
+      input.eventSource = eventKind === "slack-mention" ? { kind: eventKind, teamId, channelId } : { kind: eventKind, repository, ...(eventAction.trim() ? { action: eventAction.trim() } : {}) };
+      input.eventTypes = eventKind === "slack-mention" ? ["app_mention", "event_callback"] : [eventKind === "github-pr" ? "pull_request" : "workflow_run"];
+      if (!webhook) { input.enabled = false; input.verificationPending = true; }
+    } else input.eventSource = null;
     setSaving(true);
     setError("");
     try {
@@ -154,6 +171,12 @@ function WebhookEditor({ webhook, bots, onClose, onCredential }: { webhook?: Web
         <div className="min-h-0 flex-1 space-y-5 overflow-y-auto p-5">
           <div><div className="mb-2 text-[12px] font-medium text-ink-secondary">Who receives the tasks?</div><div className="grid grid-cols-2 gap-2 sm:grid-cols-3">{bots.map((bot) => <button key={bot.id} type="button" data-initial-focus={botId === bot.id ? "" : undefined} onClick={() => setBotId(bot.id)} className={cn("flex min-w-0 items-center gap-2 rounded-xl border px-3 py-2 text-left", botId === bot.id ? "border-accent/70 bg-accent/10" : "border-hairline/50 bg-inset hover:bg-raised/60")}><BotAvatar bot={bot} state={botId === bot.id ? "happy" : "idle"} size={38} animated={false} /><span className="min-w-0 flex-1 truncate text-[13px] font-medium text-ink">{bot.name}</span></button>)}</div></div>
           <div className="rounded-xl border border-accent/20 bg-accent/5 px-3.5 py-3 text-[11.5px] leading-relaxed text-ink-secondary">Send the task in the request: <code className="text-ink">{`{"task":"Check the failed build"}`}</code>. The MAUS keeps its model, tools, permissions, and computer setup.</div>
+          <div className="space-y-3 rounded-xl border border-hairline p-3 text-[12px]">
+            <label>Event source <select aria-label="Event source" value={eventKind} onChange={e => setEventKind(e.target.value as typeof eventKind)} className="ml-2 rounded-lg bg-inset p-2"><option value="custom">Custom webhook</option>{ROUTINE_EVENT_PRESETS.map(p => <option key={p.kind} value={p.kind}>{p.label}</option>)}</select></label>
+            {eventKind !== "custom" && <><p className="text-ink-secondary">Authenticated relay setup required. Connect your provider with Composio or your own relay, validate the upstream signature and account there, then forward JSON with this webhook’s bearer secret and event-type header. BOS does not install a subscription. Never forward the secret to event payloads.</p>
+            {eventKind === "slack-mention" ? <><input aria-label="Slack team ID" placeholder="T012ABC" value={teamId} onChange={e => setTeamId(e.target.value)} className="w-full rounded bg-inset p-2" /><input aria-label="Slack channel ID" placeholder="C012ABC" value={channelId} onChange={e => setChannelId(e.target.value)} className="w-full rounded bg-inset p-2" /></> : <><input aria-label="GitHub repository" placeholder="owner/repository" value={repository} onChange={e => setRepository(e.target.value)} className="w-full rounded bg-inset p-2" /><input aria-label="GitHub event action" placeholder="optional action, e.g. opened or completed" value={eventAction} onChange={e => setEventAction(e.target.value)} className="w-full rounded bg-inset p-2" /></>}
+            <p className="text-ink-secondary">Starts paused. Send one matching request to verify filters, then turn it on. This verifies relay receipt, not the upstream subscription.</p></>}
+          </div>
           <details className="group rounded-xl border border-hairline/45 bg-inset/45 px-4 py-3" open={Boolean(webhook)}>
             <summary className="cursor-pointer text-[12.5px] font-medium text-ink">Advanced options</summary>
             <div className="mt-4 space-y-4">
@@ -274,7 +297,7 @@ export function WebhooksPanel({
         saveWebhookCredential(webhookCredentialStore(), webhook.id, credential!);
       }
       if (!credential) throw new Error("Could not create a terminal command");
-      await navigator.clipboard.writeText(terminalCommand(credential));
+      await navigator.clipboard.writeText(terminalCommand(credential, webhook.eventSource));
       setCopiedId(webhook.id);
       setTimeout(() => setCopiedId((current) => current === webhook.id ? null : current), 1_800);
     } catch (cause) {
@@ -286,7 +309,7 @@ export function WebhooksPanel({
 
   const ingress = state.webhookIngress;
   const credential = selected ? credentials[selected.id] : undefined;
-  const command = credential ? terminalCommand(credential) : "";
+  const command = credential ? terminalCommand(credential, selected?.eventSource) : "";
 
   return (
     <div className="min-h-0 flex-1 overflow-y-auto p-4 md:p-6">

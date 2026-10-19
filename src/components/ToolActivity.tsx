@@ -1,4 +1,4 @@
-import { ChevronRight, Square, X } from "lucide-react";
+import { ChevronRight, Square, Info, Terminal, BookOpen, Search, Folder, Pencil, Globe, Bot, Wrench } from "lucide-react";
 import { useRef, useState } from "react";
 import { api, type Message } from "@/state/store";
 import { cn } from "@/lib/cn";
@@ -48,6 +48,12 @@ export function ToolActivity({ tool, place = null, stopReason }: { stopReason?: 
   const stopped = tool.name === "stopped" || (tool.name === "turn failed" && stopReason === "interrupted");
   const name = stopped ? "stopped" : tool.name;
   const failed = tool.ok === false && !stopped;
+  const terminalFailure = failed && (name === "turn failed" || name.startsWith("error:"));
+  const displayName = stopped ? "stopped" : failed ? t(terminalFailure ? "toolDetail.requestIncomplete" : "toolDetail.stepIncomplete") : (nameIsCommand(name) || /^(bash|shell|exec_command|terminal|run_command)$/i.test(name)) ? t("toolDetail.commandStep") : name;
+  const rowLabel = !failed && !stopped && tool.summary
+    ? `${/bash|shell|command|terminal/i.test(name) || nameIsCommand(name) ? "Ran" : name} ${tool.summary}`
+    : displayName;
+  const Icon = /read/i.test(name) ? BookOpen : /search|grep/i.test(name) ? Search : /list|glob/i.test(name) ? Folder : /edit|write|patch/i.test(name) ? Pencil : /web|browse|fetch/i.test(name) ? Globe : /agent/i.test(name) ? Bot : /bash|shell|command|terminal/i.test(name) ? Terminal : Wrench;
   const status = stopped ? "stopped" : tool.ok === undefined ? t("toolDetail.running") : failed ? t("toolDetail.failed") : t("toolDetail.completed");
   return (
     <div className="max-w-full space-y-2">
@@ -55,17 +61,19 @@ export function ToolActivity({ tool, place = null, stopReason }: { stopReason?: 
       <summary
         role="button"
         aria-expanded={expanded}
-        aria-label={t("toolDetail.label", { name, status })}
-        className={cn("flex min-h-8 cursor-pointer list-none items-center gap-2 rounded-lg px-2 py-1.5 hover:bg-raised/50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent [&::-webkit-details-marker]:hidden", failed ? "text-danger" : "text-ink-secondary")}
+        aria-label={t("toolDetail.label", { name: displayName, status })}
+        className={cn("chat-step flex min-h-7 cursor-pointer list-none items-center gap-1.5 rounded-lg py-1 text-[14px] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent [&::-webkit-details-marker]:hidden")}
       >
-        <span className="shrink-0" aria-hidden="true">{stopped ? <Square size={11} /> : tool.ok === undefined ? <WorkingDots size={3.5} /> : failed ? <X size={13} /> : <span className="block size-1 rounded-full bg-ink-tertiary" />}</span>
+        <span className="shrink-0" aria-hidden="true">{stopped ? <Square size={11} /> : tool.ok === undefined ? <WorkingDots size={3.5} /> : failed ? <Info size={13} /> : <Icon size={16} />}</span>
         {place && <PlaceIcon place={place} size={13} className="shrink-0 opacity-70" role="img" aria-label={t(placeLabelKey(place))} data-testid="tool-place" />}
-        <span className="min-w-0 max-w-[30rem] truncate font-medium">{name}</span>
-        {tool.summary && tool.summary !== tool.name && !nameIsCommand(tool.name) && <span className="min-w-0 flex-1 truncate text-ink-tertiary" title={tool.summary}>{tool.summary}</span>}
+        <span className="min-w-0 max-w-[30rem] truncate font-normal">{rowLabel}</span>
+
         <ChevronRight size={13} className="ml-auto shrink-0 group-open/tool:rotate-90" aria-hidden="true" />
       </summary>
       <div className="space-y-3 border-t border-hairline/40 p-3 text-ink-secondary">
-        <div className={cn("text-[11px] font-medium", failed && "text-danger")}>{status}</div>
+        {failed && <p>{t(terminalFailure ? "toolDetail.requestIncompleteHelp" : "toolDetail.stepIncompleteHelp")}</p>}
+        <div className="break-words font-mono text-[11px]">{name}</div>
+        <div className="text-[11px] font-medium">{status}</div>
         <div>
           <div className="mb-1 text-[11px] font-medium">{t("toolDetail.input")}</div>
           <pre dir="ltr" className="max-h-52 overflow-auto rounded-lg bg-inset p-2.5 font-mono text-xs whitespace-pre-wrap break-words text-ink">{tool.input ?? t("toolDetail.noInput")}</pre>

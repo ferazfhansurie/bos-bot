@@ -16,6 +16,9 @@ it("owner configures reply access, actual turns mount it, disconnected sends fai
     capture.insert({ accountId: "60111111111@c.us", id: "fixture-inbound", chatId: "60222222222@c.us", from: "60222222222@c.us", chatName: "fixture client", author: null, fromMe: false, timestamp: Date.now() / 1000, type: "chat", body: "fixture hello", hasMedia: false });
     capture.close();
     expect((await api("PATCH", `/api/bots/${bot.id}`, { composio: true })).status).toBe(200);
+    expect((await api("GET", `/api/bots/${bot.id}/whatsapp-replies`)).body.policy).toBeNull();
+    expect((await api("PUT", `/api/bots/${bot.id}/whatsapp-replies`, { accountId: "60111111111@c.us", chatIds: [], autoDispatch: false, outreach: false })).status).toBe(200);
+    expect((await api("GET", `/api/bots/${bot.id}/whatsapp-replies`)).body.policy.chatIds).toEqual([]);
     expect((await api("PUT", `/api/bots/${bot.id}/whatsapp-replies`, { accountId: "60111111111@c.us", chatIds: null })).status).toBe(200);
     await runControlOmb(["send", "--bot", bot.id, "--task", bot.threadId, "--text", "fixture reply tool setup", "--url", fixture.info.url]);
     await expect.poll(() => existsSync(fixture.fixtureDumpPath), { timeout: 15000 }).toBe(true);
@@ -25,6 +28,11 @@ it("owner configures reply access, actual turns mount it, disconnected sends fai
     expect(dump.systemPrompt).toContain("No further approval is needed for these replies");
     expect(dump.systemPrompt).not.toContain("You cannot send, reply to, or mark WhatsApp");
     const token = connector.env.OMB_CONNECTOR_TOKEN;
+    const ownerChoices = await api("GET", "/api/whatsapp/permissions");
+    expect(ownerChoices.status).toBe(200);
+    expect(ownerChoices.body).toEqual({ accountId: null, chats: [] });
+    const botChoices = await api("GET", "/api/whatsapp/permissions", undefined, token);
+    expect([401, 403]).toContain(botChoices.status);
     const deniedConfig = await api("PUT", `/api/bots/${bot.id}/whatsapp-replies`, { accountId: "60111111111@c.us", chatIds: null }, token);
     expect([401, 403]).toContain(deniedConfig.status);
     expect((await api("POST", "/api/internal/connectors/whatsapp/reply", { account_id: "60111111111@c.us", chat_id: "60222222222@c.us", message_id: "fixture-inbound", text: "hello" }, token)).status).toBe(403);

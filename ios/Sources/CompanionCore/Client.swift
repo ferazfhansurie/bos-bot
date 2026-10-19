@@ -1280,6 +1280,12 @@ public struct CompanionClient: Sendable {
         return try await send(try makeRequest("GET", "/api/threads/\(threadId)/messages", query: query), as: ThreadPage.self)
     }
 
+    public func requestContinuation(_ link: RequestContinuation) async throws -> RequestContinuationTarget {
+        let query = [URLQueryItem(name: "home", value: link.home), URLQueryItem(name: "threadId", value: link.threadId),
+                     URLQueryItem(name: "messageId", value: link.messageId), URLQueryItem(name: "requestId", value: link.requestId)]
+        return try await send(try makeRequest("GET", "/api/bots/\(link.botId)/request-continuation", query: query), as: RequestContinuationTarget.self)
+    }
+
     public func search(_ query: String, limit: Int = 40) async throws -> [SearchHit] {
         let items = [
             URLQueryItem(name: "q", value: query),
@@ -1353,6 +1359,19 @@ public struct CompanionClient: Sendable {
     }
 
     /// `botId` names the room member the steer must reach; the server then
+    public func resumeQueued(to destination: MessageDestination) async throws {
+        let owner: String
+        let threadId: String
+        switch destination {
+        case let .bot(id, thread):
+            guard Self.validRouteID(id) else { throw APIError.badURL }; owner = "bots/\(id)"; threadId = thread
+        case let .room(id, thread):
+            guard Self.validRouteID(id) else { throw APIError.badURL }; owner = "groups/\(id)"; threadId = thread
+        }
+        guard Self.validRouteID(threadId) else { throw APIError.badURL }
+        try await send(try makeRequest("POST", "/api/\(owner)/queue/resume", body: ["threadId": threadId]))
+    }
+
     /// refuses rather than deliver it to a different running member.
     @discardableResult
     public func steerQueued(queueId: String, to destination: MessageDestination, botId: String? = nil) async throws -> SteerReceipt {
@@ -1370,7 +1389,6 @@ public struct CompanionClient: Sendable {
         }
         guard Self.validRouteID(queueId), Self.validRouteID(threadId) else { throw APIError.badURL }
         var body: [String: Any] = ["threadId": threadId]
-        if case .bot = destination { body["interrupt"] = true }
         if case .room = destination, let botId {
             guard Self.validRouteID(botId) else { throw APIError.badURL }
             body["botId"] = botId
@@ -1974,7 +1992,7 @@ public struct CompanionClient: Sendable {
         to destination: MessageDestination,
         sendId: String,
         replyToId: String? = nil,
-        priority: MessagePriority = .queue
+        priority: MessagePriority = .steer
     ) async throws -> SendReceipt {
         let route: String
         let threadId: String
@@ -1994,7 +2012,7 @@ public struct CompanionClient: Sendable {
         if let replyToId { body["replyToId"] = replyToId }
         // Queue is the server's default, so a queued send stays byte-for-byte
         // what older computers already accept.
-        if priority == .block { body["priority"] = MessagePriority.block.rawValue }
+        body["priority"] = priority.rawValue
         return try await sendForReceipt(try makeRequest("POST", route, body: body), retrySafe: true)
     }
 

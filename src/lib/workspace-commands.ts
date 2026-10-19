@@ -2,7 +2,7 @@
  * the ⌘K palette and the shortcuts sheet all read it, so a binding is
  * changed in exactly one place. Running a command is a window event the
  * workspace provider listens for; nothing here knows about React. */
-import { FileSearch, FolderTree, GitCompare, Globe, History, PanelBottom, PanelRight, SquareTerminal, type LucideIcon } from "lucide-react";
+import { FileSearch, FolderTree, GitCompare, Globe, History, Maximize2, MessageSquarePlus, PanelBottom, PanelRight, Plus, SquareTerminal, type LucideIcon } from "lucide-react";
 
 export type WorkspaceCommandId =
   | "workspace-layout"
@@ -12,7 +12,10 @@ export type WorkspaceCommandId =
   | "workspace-file-search"
   | "workspace-reopen"
   | "workspace-changes"
-  | "workspace-browser";
+  | "workspace-browser"
+  | "workspace-full"
+  | "workspace-sidechat"
+  | "workspace-new-tab";
 
 export interface WorkspaceCommand {
   id: WorkspaceCommandId;
@@ -32,8 +35,14 @@ const mod = (event: Chord, mac: boolean, code: string, shift: boolean) =>
   (mac ? event.metaKey && !event.ctrlKey : event.ctrlKey && !event.metaKey);
 
 export const WORKSPACE_COMMANDS: readonly WorkspaceCommand[] = [
-  { id: "workspace-layout", label: "cycle workspace layout", keywords: "panel split full hide tools side", icon: PanelRight,
+  { id: "workspace-layout", label: "hide tabs", keywords: "panel split show hide tools side tabs", icon: PanelRight,
     macKeys: ["⌘", "⇧", "B"], winKeys: ["Ctrl", "Shift", "B"], match: (e, mac) => mod(e, mac, "KeyB", true) },
+  { id: "workspace-full", label: "full view", keywords: "panel expand full maximise tabs", icon: Maximize2,
+    macKeys: ["⌘", "⇧", "F"], winKeys: ["Ctrl", "Shift", "F"], match: (e, mac) => mod(e, mac, "KeyF", true) },
+  { id: "workspace-sidechat", label: "new side chat", keywords: "side chat thread conversation aside", icon: MessageSquarePlus,
+    macKeys: ["⌥", "⌘", "S"], winKeys: ["Ctrl", "Alt", "S"],
+    match: (e, mac) => e.code === "KeyS" && e.altKey && !e.shiftKey && (mac ? e.metaKey && !e.ctrlKey : e.ctrlKey && !e.metaKey) },
+  { id: "workspace-new-tab", label: "new tab", keywords: "tab browser tools new", icon: Plus },
   { id: "workspace-terminal", label: "terminal", keywords: "shell console command line pty", icon: SquareTerminal,
     macKeys: ["⌃", "`"], winKeys: ["Ctrl", "`"],
     match: (e) => e.code === "Backquote" && e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey },

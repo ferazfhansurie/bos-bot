@@ -38,6 +38,37 @@ describe("shared computer authority and lifecycle", () => {
     await expect(broker.request(operation, () => true)).rejects.toThrow(/offline/);
     broker.close();
   });
+  it("routes independently to two granted computers and revokes only the selected one", async () => {
+    const broker = new SharedComputers(() => true);
+    const first = { ...registration(), name: "Laptop" }, second = { ...registration(), name: "Desktop" };
+    const secondSecret = "b".repeat(64);
+    try {
+      broker.register(first, "laptop-owner", secret);
+      broker.register(second, "desktop-owner", secondSecret);
+      expect(broker.list().map(computer => computer.id)).toEqual([first.id, second.id]);
+      const firstOperation = { computer_id: first.id, action: "list_files" as const };
+      const secondOperation = { computer_id: second.id, action: "list_files" as const };
+      const firstResult = broker.request(firstOperation, () => true);
+      const secondResult = broker.request(secondOperation, () => true);
+      const firstJob = await broker.poll(first.id, "laptop-owner", secret);
+      const secondJob = await broker.poll(second.id, "desktop-owner", secondSecret);
+      expect(firstJob?.operation).toEqual(firstOperation);
+      expect(secondJob?.operation).toEqual(secondOperation);
+      expect(firstJob!.id).not.toBe(secondJob!.id);
+      const revoked = expect(firstResult).rejects.toThrow(/in-flight/);
+      broker.disconnect(first.id, "laptop-owner", secret);
+      await revoked;
+      expect(broker.list()).toEqual([second]);
+      await expect(broker.request(firstOperation, () => true)).rejects.toThrow(/offline/);
+      expect(broker.liveJob(second.id, "desktop-owner", secondSecret, secondJob!.id)).toBe(true);
+      broker.complete(second.id, "desktop-owner", secondSecret, secondJob!.id, { computer: "desktop" });
+      await expect(secondResult).resolves.toEqual({ computer: "desktop" });
+      const nextResult = broker.request(secondOperation, () => true);
+      const nextJob = await broker.poll(second.id, "desktop-owner", secondSecret);
+      broker.complete(second.id, "desktop-owner", secondSecret, nextJob!.id, { stillUsable: true });
+      await expect(nextResult).resolves.toEqual({ stillUsable: true });
+    } finally { broker.close(); }
+  });
   it("turn cancellation rejects queued and already delivered actions", async () => {
     vi.useFakeTimers();
     const broker = new SharedComputers(() => true);

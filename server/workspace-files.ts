@@ -14,6 +14,8 @@ const GIT_MS = 5000;
 const RAW_TYPES: Record<string, string> = {
   ".png":"image/png", ".jpg":"image/jpeg", ".jpeg":"image/jpeg", ".gif":"image/gif", ".webp":"image/webp", ".avif":"image/avif",
   ".bmp":"image/bmp", ".ico":"image/x-icon", ".svg":"image/svg+xml", ".pdf":"application/pdf",
+  ".mp4":"video/mp4", ".m4v":"video/x-m4v", ".webm":"video/webm", ".mov":"video/quicktime",
+  ".mp3":"audio/mpeg", ".m4a":"audio/mp4", ".aac":"audio/aac", ".wav":"audio/wav", ".flac":"audio/flac", ".ogg":"audio/ogg", ".opus":"audio/opus",
 };
 const SKIP = new Set([".git","node_modules",".next","dist","build",".venv","venv","__pycache__",".cache","target","coverage",".turbo","Pods","DerivedData"]);
 type Options = {

@@ -2,7 +2,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 import type { UpdateView } from "@/lib/bos-update";
-import { ConfirmUpdateLine, UpdatePill, UpdateProgress, UpdatesPanel, UpdateResultToast, VersionFooter, busyEntries } from "./BosUpdate";
+import { ConfirmUpdateLine, UpdatePill, UpdateProgress, UpdatesPanel, UpdateResultToast, VersionFooter, busyEntries, FeedUpdatesPanel, sourceMissing } from "./BosUpdate";
 import type { Bot } from "@/state/store";
 
 vi.mock("./Avatar", () => ({ BotAvatar: () => createElement("span", { "data-avatar": "" }) }));
@@ -145,5 +145,17 @@ describe("BosUpdate", () => {
   it("toast says rolled back with the reason", () => {
     const html = renderToStaticMarkup(createElement(UpdateResultToast, { notice: { key: "k", tone: "warn", title: "Update failed, rolled back to 1.2.0", detail: "health check failed" }, onDismiss: noop }));
     expect(html).toContain("Update failed, rolled back to 1.2.0");
+  });
+});
+
+describe("installs without a source checkout", () => {
+  it("hands Settings → Updates to the download feed", () => {
+    const view = { status: { state: "idle", busyTurns: [], current: { version: "2.0.4", sha: "a".repeat(40) }, reason: "check failed: update source not configured: set OMB_UPDATE_REPO or updates/source.json to the canonical checkout" }, state: "idle", offline: false, error: null, log: [], pending: null, checking: false } as unknown as UpdateView;
+    expect(sourceMissing(view)).toBe(true);
+    expect(sourceMissing({ ...view, status: { ...view.status!, reason: "up to date: 2.0.4" } })).toBe(false);
+    const html = renderToStaticMarkup(createElement(FeedUpdatesPanel, { feed: { status: "available", version: "2.0.5" }, current: "2.0.4" }));
+    expect(html).toContain("BOS 2.0.5 is available.");
+    expect(html).toContain("Download");
+    expect(html).not.toContain("OMB_UPDATE_REPO");
   });
 });
