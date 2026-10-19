@@ -17,8 +17,8 @@ export function requestBody(model,task){
 export function score(id,content){
  if(typeof content!=='string')return 0;
  if(id==='website'){
-  const structure=/<html\b/i.test(content)&&/<main\b/i.test(content)&&/<h1\b/i.test(content)&&/name=[\"']viewport[\"']/i.test(content)&&/<style\b/i.test(content)&&/<\/html>/i.test(content);
-  const complete=['Sunrise Bakery','Bread','Croissant','Cake','hello@example.invalid'].every(x=>content.includes(x))&&/id=[\"']products[\"']/i.test(content)&&/id=[\"']contact[\"']/i.test(content)&&/href=[\"']#contact[\"']/i.test(content)&&!/<script\b|https?:\/\//i.test(content);
+  const structure=/<html\b/i.test(content)&&/<main\b/i.test(content)&&/<h1\b/i.test(content)&&/name=["']viewport["']/i.test(content)&&/<style\b/i.test(content)&&/<\/html>/i.test(content);
+  const complete=['Sunrise Bakery','Bread','Croissant','Cake','hello@example.invalid'].every(x=>content.includes(x))&&/id=["']products["']/i.test(content)&&/id=["']contact["']/i.test(content)&&/href=["']#contact["']/i.test(content)&&!/<script\b|https?:\/\//i.test(content);
   return Number(structure)+Number(structure&&complete);
  }
  let a; try{a=JSON.parse(content);}catch{return 0;}

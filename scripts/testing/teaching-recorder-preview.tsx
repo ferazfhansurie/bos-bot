@@ -4,7 +4,7 @@ import { createRoot } from 'react-dom/client';
 import { StoreProvider, useStore } from '../../src/state/store';
 import { TeachingRecorder } from '../../src/components/bot-settings/TeachingRecorder';
 import '../../src/styles.css';
-const proof = { streams: [] as MediaStream[], stopped: 0, uploads: 0, hold: false, release: () => {}, setThread: (_: string) => {} };
+const proof = { streams: [] as MediaStream[], stopped: 0, uploads: 0, hold: false, release: () => {}, setThread: () => {} };
 Object.assign(window, { teachingFixture: proof });
 Object.defineProperty(navigator.mediaDevices, 'getDisplayMedia', { configurable: true, value: async () => {
   const canvas = document.createElement('canvas'); canvas.width = 640; canvas.height = 360;

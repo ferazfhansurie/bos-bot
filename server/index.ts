@@ -14311,7 +14311,7 @@ const setupImportDeps: SetupImportDeps = {
     broadcast({ kind: "bot", bot: wireBot(updated) });
     return { ok: true };
   },
-  mcpConfig: () => ({ ...(cfg.mcpServers ?? {}) }),
+  mcpConfig: () => ({ ...cfg.mcpServers }),
   persistMcp: (next) => persistMcpServers(next),
   setBotMcpServers: (botId, names) => {
     const updated = store.patchBot(botId, { mcpServers: names });

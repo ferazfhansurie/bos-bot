@@ -2,7 +2,7 @@ import { WORKSPACE_CREDENTIAL_ENV } from "../server/config.ts";
 import { describe, expect, it } from "vitest";
 import { createRequire } from "node:module";
 import { EventEmitter } from "node:events";
-import { mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 

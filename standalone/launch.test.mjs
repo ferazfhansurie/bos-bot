@@ -140,7 +140,7 @@ describe("standalone launcher", () => {
   });
 
   it("loop applies a handoff the server left on exit", async () => {
-    const { root, resources, configPath } = install();
+    const { resources, configPath } = install();
     const { started, startChild } = fakeChildren();
     const sup = createSupervisor(configPath, { startChild, healthy: async () => true, log: () => undefined, pollMs: 5, stableMs: 10 });
     const done = sup.loop({ once: true });

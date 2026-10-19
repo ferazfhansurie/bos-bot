@@ -35,7 +35,7 @@ test('routes use pinned workspace/host/room namespace and reject path injection'
   }
   assert.throws(() => requestBinding('approvalDecision', { ...scope, approval_id: '../a' }, decision));
   assert.throws(() => requestBinding('approvalDecision', scope, { ...decision, actor_id: 'forged' }));
-  assert.throws(() => requestBinding('hostHeartbeat', scope, { ...run, fence_gen: 9007199254740993 }));
+  assert.throws(() => requestBinding('hostHeartbeat', scope, { ...run, fence_gen: 9007199254740993 } /* oxlint-disable-line no-loss-of-precision -- deliberately past MAX_SAFE_INTEGER */));
   assert.throws(() => requestBinding('attachmentComplete', scope, { object_key: 'foreign' }));
   assert.equal(requestBinding('approvalDecision', scope, decision).body.decision, 'deny');
 });

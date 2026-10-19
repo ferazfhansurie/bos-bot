@@ -276,7 +276,7 @@ function parseTomlValue(text: string, start: number): [TomlValue, number] {
     }
   }
   let j = i;
-  while (j < text.length && !/[,\]\}\n#]/.test(text[j]!)) j += 1;
+  while (j < text.length && !/[,\]}\n#]/.test(text[j]!)) j += 1;
   const bare = text.slice(i, j).trim();
   if (bare === "true") return [true, j];
   if (bare === "false") return [false, j];

@@ -311,7 +311,7 @@ async function handle(message: Json): Promise<void> {
     // refused below, so it carries no side effect worth a prompt.
     const tools = (Array.isArray(result.tools) ? result.tools : []).map((tool) =>
       tool && typeof tool === "object" && /MANAGE_CONNECTIONS$/i.test(String((tool as Json).name ?? ""))
-        ? { ...(tool as Json), annotations: { ...((tool as Json).annotations as Json ?? {}), readOnlyHint: true, destructiveHint: false, openWorldHint: false } }
+        ? { ...(tool as Json), annotations: { ...((tool as Json).annotations as Json | undefined), readOnlyHint: true, destructiveHint: false, openWorldHint: false } }
         : tool);
     const local = WHATSAPP_NATIVE ? [...WHATSAPP_TOOLS, ...(WHATSAPP_REPLIES ? WHATSAPP_REPLY_TOOLS : [])] : [];
     send({ jsonrpc: "2.0", id, result: { ...result, tools: [...tools, ...local] } });

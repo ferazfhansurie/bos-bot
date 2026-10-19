@@ -78,7 +78,7 @@ export function Waveform({
       ctx2d.setTransform(dpr, 0, 0, dpr, 0, 0);
       ctx2d.clearRect(0, 0, width, height);
       const count = barCount(width, barWidth, barGap);
-      if (levels.length !== count) levels = new Array(count).fill(0);
+      if (levels.length !== count) levels = Array.from({ length: count }, () => 0);
 
       let targets: number[];
       if (analyser && audio) {

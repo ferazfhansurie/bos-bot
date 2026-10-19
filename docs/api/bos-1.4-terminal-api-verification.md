@@ -1,7 +1,7 @@
 # piece 9 terminal endpoint handoff
 
 implementation: `v14/api-terminal`, based on `v14/api-server` at `eb92a515`.
-worktree: `/Users/firazfhansurie/.bos-bot/workspaces/6ca32513-1716-40e6-b006-59a6130e3570/v14-api-terminal`.
+worktree: a local `v14-api-terminal` worktree.
 status: endpoint committed at `9d67c6d4`; bos's one auth/data review requested
 workspace credential stripping. the follow-up below addresses that condition;
 bos authorized integration after the fix with no second review. not installed.

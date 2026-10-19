@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
-import { root, room, digest } from './slice34-service-adapter.mjs';
+import { root, digest } from './slice34-service-adapter.mjs';
 import { freezeManifest } from './oracle.mjs';
 
 /** Uses production conversation-only provider isolation. Never infers the

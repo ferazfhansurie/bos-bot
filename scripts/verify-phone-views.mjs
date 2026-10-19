@@ -13,10 +13,10 @@ const server = createServer(async (req, res) => {
   if (req.headers.authorization !== 'Bearer browser-fixture-token') return json(401, {error:'fixture bearer required'});
   if (path === '/fixture/stats') return json(200, {acknowledgements, captures});
   if (path === '/fixture/deny-preview') { denied = true; return json(200, {ok:true}); }
-  if (/\/computer\/preview$/.test(path)) { captures++; return denied
+  if (path.endsWith('/computer/preview')) { captures++; return denied
     ? json(403, {error:'Enable computer viewing for this phone in BOS settings.'})
     : json(200, {surface:'vm', png, format:'image/png'}); }
-  if (/\/browser\/live$/.test(path)) {
+  if (path.endsWith('/browser/live')) {
     res.writeHead(200, {'content-type':'text/event-stream','cache-control':'no-store'});
     const viewer = {res, seq:0}; viewers.add(viewer);
     viewer.send = () => { if (!res.destroyed) res.write(`event: frame\ndata: ${JSON.stringify({seq:++viewer.seq,data:png,metadata:{deviceWidth:width,deviceHeight:height}})}\n\n`); };
@@ -24,7 +24,7 @@ const server = createServer(async (req, res) => {
     viewer.send();
     res.on('close', () => viewers.delete(viewer)); return;
   }
-  if (/\/browser\/action$/.test(path)) {
+  if (path.endsWith('/browser/action')) {
     const chunks = []; for await (const chunk of req) chunks.push(chunk);
     const action = JSON.parse(Buffer.concat(chunks).toString());
     if (action.type === 'ack') {

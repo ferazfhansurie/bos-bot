@@ -17,7 +17,7 @@ import { createServer } from "node:net";
 import { DatabaseSync, backup } from "node:sqlite";
 import assert from "node:assert/strict";
 import pg from "pg";
-import { connect, migrate, inventory, mappedId } from "./tool.mjs";
+import { connect, migrate, mappedId } from "./tool.mjs";
 const node = process.execPath;
 const root = await mkdtemp(join(tmpdir(), "bos-migration-rehearsal-"));
 let server, c;

@@ -172,7 +172,7 @@ export function filmstripSlots(clip: VideoClip, thumbs: { every: number; count: 
 
 /** Waveform peaks for a clip's visible span, resampled to `columns` bars. */
 export function peaksForClip(peaks: number[], perSecond: number, clip: VideoClip, columns: number): number[] {
-  const out: number[] = new Array(Math.max(0, columns)).fill(0);
+  const out: number[] = Array.from({ length: Math.max(0, columns) }, () => 0);
   if (!peaks.length || columns <= 0) return out;
   const speed = clipSpeed(clip);
   const from = (clip.in ?? 0) * perSecond;

@@ -3,7 +3,7 @@ import {writeFileSync} from 'node:fs';
 import {connectFixture} from './fixture-client.mjs';
 const [server,state,evidence]=process.argv.slice(2),c=await connectFixture(server,state,evidence);
 try{
-const h=await c.humans('boundaries'),outside=await c.actor('outside'),root=`/v2/workspaces/${h.w}`,room=root+'/rooms/'+h.r.room_id,plans=[];
+const h=await c.humans('boundaries'),outside=await c.actor('outside'),plans=[];
 for(const [name,reason,change] of [
  ['policy','policy_changed',e=>e.expected_policy_revision='999'],
  ['bot','invalid_mention',e=>{e.text='@bot';e.mentions=[{kind:'bot',id:'fictional_bot',start:0,end:4}];}],

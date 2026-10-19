@@ -34,6 +34,9 @@ export const CREDENTIAL_ENV_NAMES = expandEnvNames([
   "OMB_USER_DATA",
   "OMB_CUA_WINDOWS_DESCRIPTOR",
   "OMB_CUA_WINDOWS_SUPERVISED",
+  "OMB_STANDALONE_DIR",
+  "OMB_STANDALONE_SUPERVISED",
+  "OMB_STANDALONE_SUPERVISOR_PID",
 ]);
 
 // Credential-shaped tokens (server/redact.ts parity): unmistakable formats

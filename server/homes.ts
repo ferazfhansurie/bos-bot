@@ -159,7 +159,7 @@ export class HomeLinks {
       try { body = await readRaw(req, BODY_LIMIT); } catch (error) { return void send(res, 413, { error: error instanceof Error ? error.message : "body too large" }); }
     }
     const abort = new AbortController();
-    const stream = rest === "/api/events" || /\/events$/.test(rest);
+    const stream = rest === "/api/events" || rest.endsWith('/events');
     const timer = stream ? null : setTimeout(() => abort.abort(), PROXY_TIMEOUT_MS);
     res.on("close", () => abort.abort());
     let upstream: Response;

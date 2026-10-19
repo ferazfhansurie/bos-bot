@@ -14,7 +14,7 @@ const account = join(home, ".claude");
 const workspace = join(home, "workspace");
 mkdirSync(account);
 mkdirSync(workspace);
-compatEnv = {
+process.env = {
   HOME: home, USERPROFILE: home, XDG_CONFIG_HOME: join(home, ".config"),
   PATH: compatEnv.PATH, OMB_DATA_DIR: join(home, "omb"),
   CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",

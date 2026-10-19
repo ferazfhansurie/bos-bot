@@ -173,7 +173,7 @@ export async function connect({ server, candidate, schema, evidence, record, nat
     return {
       describe: async () => ({ url: f.url, isolated: true, real_issuer: true, acceptance_hooks: true, modeled: false,
         candidate, schema, scope: { workspace_id: scope.w, room_id: scope.r.room_id, fictional: true },
-        native_provider_available: false, limitations: ['fictional scanner is not malware certification', 'web reducers run in Node; browser and native lifecycle receipts remain separate'], client_artifact: c.clientArtifact, ...(native?.descriptor ?? {}) }),
+        native_provider_available: false, limitations: ['fictional scanner is not malware certification', 'web reducers run in Node; browser and native lifecycle receipts remain separate'], client_artifact: c.clientArtifact, ...native?.descriptor }),
       scenario: async spec => {
         trace = [];
         if (native && ['two-human-native', 'explicit-steer-and-two-bot-no-loop'].includes(spec.name)) return native.scenario(spec);

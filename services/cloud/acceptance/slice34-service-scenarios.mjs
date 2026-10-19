@@ -1,11 +1,8 @@
 import assert from 'node:assert/strict';
-import { randomUUID } from 'node:crypto';
 import { root, room, binding, digest } from './slice34-service-adapter.mjs';
 import { identityStallGate } from './slice34-identity-gate.mjs';
 
 export function serviceScenarios(c) {
-  const counted = rows => rows.length;
-  const forbidden = async request => { const r = await request; assert.ok([401, 403, 409].includes(r.status), JSON.stringify(r.data)); return r; };
   const state = (h, actor = h.b, outbox = []) => c.client.initialCloudRoomState({ namespace: actor.subject,
     account_id: actor.account_id, workspace_id: h.w, room_id: h.r.room_id, thread_id: h.r.thread_id, outbox });
   const entry = e => ({ envelope: e, digest: digest(e), state: 'draft', created_at: Date.now(), dispatched: false, attempts: 0 });

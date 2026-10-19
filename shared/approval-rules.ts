@@ -72,7 +72,7 @@ export function approvalRuleRisky(request: ApprovalRuleRequest): boolean {
   const summary = request.summary ?? "";
   if (!tool) return true;
   if (request.approvalScope === "local-computer" || request.requiresExplicitApproval) return true;
-  if (/^mcp__computer__/.test(tool) || /computer|browser|workbench|remote_bash|multi_execute/i.test(tool)) return true;
+  if (tool.startsWith('mcp__computer__') || /computer|browser|workbench|remote_bash|multi_execute/i.test(tool)) return true;
   if (/^(askuserquestion|ask_user)$/.test(baseTool(tool))) return true;
   if (RISKY_WORDS.test(baseTool(tool).replace(/[_-]+/g, " "))) return true;
   if (isShell(tool)) {

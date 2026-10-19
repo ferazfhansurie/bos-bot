@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
-import { readFileSync, writeFileSync } from 'node:fs';
+import { writeFileSync } from 'node:fs';
 import { connectFixture, pause, until } from './fixture-client.mjs';
 import { bothOrders, deliverySchedule } from './schedules.mjs';
 import { recipientMessages } from './protocol.mjs';
@@ -17,7 +17,6 @@ async function scenario(name,fn) {
   try {await fn();const result={name,state:'passed',duration_ms:performance.now()-started};results.push(result);c.record({type:'case_complete',...result});console.log(JSON.stringify(result));}
   catch(error){c.record({type:'case_complete',name,state:'failed',error:error.message});throw error;}
 }
-const scope=h=>({workspace_id:h.w,room_id:h.r.room_id,thread_id:h.r.thread_id});
 const send=(h,p,i,options)=>p.driver.operation(p.operations[i].id,options);
 async function replay(h,actor,s) {
   return FrameSchema.parse(await c.ok(`/v2/workspaces/${h.w}/rooms/${h.r.room_id}/replay`,actor,'POST',{thread_id:h.r.thread_id,cursor:s.cursor,...(s.snapshot_id?{snapshot_id:s.snapshot_id}:{})}));

@@ -3,7 +3,6 @@ import { readFileSync } from 'node:fs';
 // Contract schemas only. Expected hashes and outcomes never import SUT algorithms.
 import { SendEnvelopeSchema, LookupSchema, MessageSchema, SnapshotSchema,
   FrameSchema, ErrorSchema } from '../../../shared/cloud-protocol/index.ts';
-import { digest } from './oracle.mjs';
 
 export const PROTOCOL_COMMIT = 'ffd3a022d56485a11363a49c2e070d6cb075bbb8';
 export const corpus = JSON.parse(readFileSync(new URL('../../../shared/cloud-protocol/fixtures.json', import.meta.url), 'utf8'));

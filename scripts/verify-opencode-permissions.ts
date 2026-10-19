@@ -15,7 +15,7 @@ const external = join(home, "outside", "receipt.txt");
 mkdirSync(workspace);
 mkdirSync(join(home, "outside"));
 writeFileSync(external, "OMB_EXTERNAL_READ_RECEIPT");
-compatEnv = {
+process.env = {
   PATH: compatEnv.PATH, HOME: home, USERPROFILE: home,
   XDG_CONFIG_HOME: join(home, "config"), XDG_DATA_HOME: join(home, "data"),
   XDG_CACHE_HOME: join(home, "cache"), XDG_STATE_HOME: join(home, "state"),

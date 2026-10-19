@@ -19,5 +19,19 @@
     "release/**",
     "third_party/**",
     "electron/resources/**"
-  ]
+  ],
+  "rules": {
+    "unicorn/no-useless-spread": "off",
+    "no-control-regex": "off",
+    "no-unused-vars": [
+      "warn",
+      {
+        "ignoreRestSiblings": true,
+        "argsIgnorePattern": "^_",
+        "varsIgnorePattern": "^_",
+        "caughtErrorsIgnorePattern": "^_",
+        "destructuredArrayIgnorePattern": "^_"
+      }
+    ]
+  }
 }

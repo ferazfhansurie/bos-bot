@@ -523,7 +523,7 @@ test("projection rollback removes target and freeze, mismatched bindings and tam
     await migrate(c, root, w, "rollback"); // interrupted rollback completion is retryable
   }));
 test("explicit guest grant is preserved; cutover recovers a committed database with an older frozen file", async () =>
-  scenario(async ({ c, root, w, plan, alice, guest, f, r, t, inv }) => {
+  scenario(async ({ c, root, w, plan, guest, f, r, t }) => {
     const grant = {
       account_id: guest.account_id,
       evidence: plan.rooms[0].evidence,
@@ -569,7 +569,7 @@ test("explicit guest grant is preserved; cutover recovers a committed database w
   }));
 
 test("legacy versioned registries and shared snapshots preserve explicit roles/grants and quarantine unconsolidated journals", async () =>
-  scenario(async ({ c, root, w, plan, inv, evidence, f, alice, guest }) => {
+  scenario(async ({ c, root, w, plan, inv, evidence, guest }) => {
     assert.equal(inv.records.filter((r) => r.type === "actor").length, 2);
     assert.equal(inv.records.filter((r) => r.type === "membership").length, 2);
     assert.equal(

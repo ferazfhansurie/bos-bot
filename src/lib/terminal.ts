@@ -1,7 +1,7 @@
 /** Built-in terminal: a local shell in the thread's working folder, shown as
  * a pane beside the conversation. The server owns the shell; the client mints
  * a single-use ticket over HTTP, then speaks JSON frames on a websocket.
- * Contract: release/bos-1.4-terminal-api-contract.md. */
+ * Contract: docs/api/bos-1.4-terminal-api-verification.md. */
 
 export interface TerminalTarget {
   botId: string;

@@ -15,7 +15,7 @@ import { createHash } from "node:crypto";
 import { readFile, readdir, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import pg from "pg";
-import { inventory, mappedId, migrate } from "../../migrate/tool.mjs";
+import { inventory, migrate } from "../../migrate/tool.mjs";
 
 const [copy, statePath, out] = process.argv.slice(2);
 if (!copy || !statePath || !out) throw new Error("usage: attach.mjs <copyDir> <state.json> <outDir>");

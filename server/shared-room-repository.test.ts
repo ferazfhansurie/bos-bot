@@ -179,7 +179,7 @@ describe("shared room repository", () => {
     const repo = new SharedRoomRepository(file, firaz.homeId);
     const room = repo.create("Team", [actorId, contactId({ homeId: "putri-home", kind: "person", localId: "owner" })]);
     repo.append(room.id, actorId, { actor: firaz, text: "kept", sendId: "one" });
-    writeFileSync(`${file}.events`, `${readFileSync(`${file}.events`, "utf8")}{\"truncated\":`, "utf8");
+    writeFileSync(`${file}.events`, `${readFileSync(`${file}.events`, "utf8")}{"truncated":`, "utf8");
     const recovered = new SharedRoomRepository(file, firaz.homeId);
     expect(recovered.messagesAfter(room.id, actorId, 0).map(message => message.text)).toEqual(["kept"]);
     expect(readdirSync(join(root, "journal")).some(name => name.startsWith("rooms.json.events.quarantine-"))).toBe(true);

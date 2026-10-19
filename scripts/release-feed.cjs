@@ -1,4 +1,3 @@
-const { compatEnv, compatEnvironment } = require("../electron/branding-env.cjs");
 // Release-build inputs shared by electron-builder.live.cjs and
 // scripts/release-contract.mjs, so the packaged app-update.yml and the
 // contract that verifies it can never disagree.
@@ -17,6 +16,8 @@ const { compatEnv, compatEnvironment } = require("../electron/branding-env.cjs")
 //             Integrity rests on the HTTPS feed and latest.yml's sha512.
 //   unset     signed (fail closed). The release workflow sets it explicitly.
 'use strict';
+
+const { compatEnv, compatEnvironment } = require("../electron/branding-env.cjs");
 
 const DEFAULT_FEED = Object.freeze({ provider: 'github', owner: 'ferazfhansurie', repo: 'bos-bot' });
 const NAME = /^[A-Za-z0-9](?:[A-Za-z0-9._-]{0,99})$/;

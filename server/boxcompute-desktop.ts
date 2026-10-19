@@ -145,7 +145,7 @@ export function desktopAction(name: DesktopToolName, args: Record<string, unknow
     case "sandbox_desktop_key": {
       const keys = str("keys").trim().split(/\s+/).filter(Boolean);
       if (!keys.length) throw new BoxComputeError('keys is required, e.g. "ctrl+l" or "Return"', 400);
-      if (keys.length > 20 || keys.some((key) => !/^[A-Za-z0-9_+\-]{1,40}$/.test(key))) {
+      if (keys.length > 20 || keys.some((key) => !/^[A-Za-z0-9_+-]{1,40}$/.test(key))) {
         throw new BoxComputeError('keys are xdotool names separated by spaces, e.g. "ctrl+l", "Return", "Tab Tab"', 400);
       }
       return ["key", ...keys];
