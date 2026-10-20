@@ -912,6 +912,30 @@ describe("managed companion endpoints", () => {
     vi.restoreAllMocks();
   });
 
+  it("lets an installation-owned computer get an endpoint and tear it down itself", async () => {
+    const cloudflare = new FakeCloudflare();
+    const worker = createWorker(cloudflare.fetch);
+    const registered = await call(worker, "/v1/installations/register", {
+      body: { clientInstanceId: "owned-endpoint", name: "Owned Mac", platform: "darwin" },
+      method: "POST",
+    });
+    expect(registered.status).toBe(201);
+    const { credential, installation } = await registered.json<{ credential: string; installation: { id: string } }>();
+    const endpoint = await call(worker, "/v1/installations/self/endpoint", { method: "POST", token: credential });
+    expect(endpoint.status).toBe(200);
+    expect((await endpoint.json<{ endpoint: { hostname: string } }>()).endpoint.hostname).toMatch(/^c-[0-9a-f]{32}\./);
+    expect(cloudflare.tunnels.size).toBe(1);
+
+    const revoked = await call(worker, "/v1/installations/self", { method: "DELETE", token: credential });
+    expect(revoked.status).toBe(204);
+    expect((await call(worker, "/v1/installations/self", { token: credential })).status).toBe(401);
+    const cleaned = await env.DB.prepare(
+      "SELECT dns_record_id, tunnel_id, status FROM installation_endpoints WHERE installation_id = ?",
+    ).bind(installation.id).first<{ dns_record_id: string | null; status: string; tunnel_id: string | null }>();
+    expect(cleaned).toEqual({ dns_record_id: null, status: "deleted", tunnel_id: null });
+    expect(cloudflare.tunnels.size).toBe(0);
+  });
+
   it("bounds each scheduled cleanup sweep beneath the free-plan external subrequest limit", async () => {
     const cloudflare = new FakeCloudflare();
     const worker = createWorker(cloudflare.fetch);

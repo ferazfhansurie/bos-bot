@@ -7,6 +7,8 @@ const TEST_AUTH_SECRET = "test-only-better-auth-secret-with-more-than-32-charact
 const TEST_CLOUDFLARE_TOKEN = "test-only-cloudflare-api-token-with-no-real-access";
 process.env.BETTER_AUTH_SECRET ??= TEST_AUTH_SECRET;
 process.env.CLOUDFLARE_API_TOKEN ??= TEST_CLOUDFLARE_TOKEN;
+// Empty: tests never reach Resend; the sender refuses before any fetch.
+process.env.RESEND_API_KEY ??= "";
 
 export default defineConfig({
   plugins: [
@@ -16,6 +18,7 @@ export default defineConfig({
         bindings: {
           BETTER_AUTH_SECRET: TEST_AUTH_SECRET,
           CLOUDFLARE_API_TOKEN: TEST_CLOUDFLARE_TOKEN,
+          RESEND_API_KEY: "",
           ALLOWED_ORIGINS: "https://app.openmausbot.test",
           TEST_MIGRATIONS: await readD1Migrations(`${root}migrations`),
         },

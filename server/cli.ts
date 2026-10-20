@@ -58,6 +58,7 @@ import {
   type CompanionOriginEndpoint,
   type ManagedTunnelAccess,
   type RunningTunnel,
+  pruneRetiredTunnelAccess,
 } from "./tunnel.ts";
 import { controlPlaneUnavailableReason } from "../electron/companion-account-service.mjs";
 
@@ -853,6 +854,7 @@ async function planTunnel(options: CliOptions, log: (line: string) => void): Pro
     } catch (error) {
       log(`tunnel: control plane not reachable right now (${message(error)}); using the saved address`);
     }
+    await pruneRetiredTunnelAccess(account.credentials);
     access = tunnelAccess(account.credentials.read());
     if (!access) return { error: "this machine has no public address; run `bosbot login` again" };
   }

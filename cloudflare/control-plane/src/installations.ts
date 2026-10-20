@@ -241,25 +241,22 @@ async function ownedInstallation(id: string, ownerUserId: string, env: Env) {
   ).bind(id, ownerUserId).first<OwnedInstallationRow>();
 }
 
-export async function rotateInstallationCredential(
-  request: Request,
-  installationId: string,
-  env: Env,
-  auth: ControlPlaneAuth,
-): Promise<Response> {
-  const session = await requireAccount(request, auth);
-  const installation = await ownedActiveInstallation(installationId, session.user.id, env);
-  if (!installation) throw new HTTPError(404, "not_found");
-
+async function rotateCredentialRows(installationId: string, env: Env, ownerUserId: string | null) {
   const now = Date.now();
   const credential = await newCredential(now);
   try {
     await env.DB.batch([
-      env.DB.prepare(
-        `UPDATE installations
-            SET updated_at = ?, last_rotation_at = ?
-          WHERE id = ? AND owner_user_id = ? AND revoked_at IS NULL`,
-      ).bind(now, now, installationId, session.user.id),
+      ownerUserId === null
+        ? env.DB.prepare(
+          `UPDATE installations
+              SET updated_at = ?, last_rotation_at = ?
+            WHERE id = ? AND revoked_at IS NULL`,
+        ).bind(now, now, installationId)
+        : env.DB.prepare(
+          `UPDATE installations
+              SET updated_at = ?, last_rotation_at = ?
+            WHERE id = ? AND owner_user_id = ? AND revoked_at IS NULL`,
+        ).bind(now, now, installationId, ownerUserId),
       env.DB.prepare(
         `UPDATE installation_credentials
             SET revoked_at = ?
@@ -290,6 +287,18 @@ export async function rotateInstallationCredential(
   return json({ credential: credential.raw, createdAt: now, credentialExpiresAt: credential.expiresAt }, 201);
 }
 
+export async function rotateInstallationCredential(
+  request: Request,
+  installationId: string,
+  env: Env,
+  auth: ControlPlaneAuth,
+): Promise<Response> {
+  const session = await requireAccount(request, auth);
+  const installation = await ownedActiveInstallation(installationId, session.user.id, env);
+  if (!installation) throw new HTTPError(404, "not_found");
+  return rotateCredentialRows(installationId, env, session.user.id);
+}
+
 export async function revokeInstallation(
   request: Request,
   installationId: string,
@@ -300,17 +309,19 @@ export async function revokeInstallation(
   const installation = await ownedInstallation(installationId, session.user.id, env);
   if (!installation) throw new HTTPError(404, "not_found");
 
-  if (installation.revoked_at === null) {
-    const now = Date.now();
-    await env.DB.batch([
-      env.DB.prepare("UPDATE installations SET revoked_at = ?, updated_at = ? WHERE id = ? AND revoked_at IS NULL")
-        .bind(now, now, installationId),
-      env.DB.prepare(
-        "UPDATE installation_credentials SET revoked_at = ? WHERE installation_id = ? AND revoked_at IS NULL",
-      ).bind(now, installationId),
-    ]);
-  }
+  if (installation.revoked_at === null) await revokeInstallationRows(installationId, env);
   return new Response(null, { status: 204, headers: { "cache-control": "no-store" } });
+}
+
+async function revokeInstallationRows(installationId: string, env: Env) {
+  const now = Date.now();
+  await env.DB.batch([
+    env.DB.prepare("UPDATE installations SET revoked_at = ?, updated_at = ? WHERE id = ? AND revoked_at IS NULL")
+      .bind(now, now, installationId),
+    env.DB.prepare(
+      "UPDATE installation_credentials SET revoked_at = ? WHERE installation_id = ? AND revoked_at IS NULL",
+    ).bind(now, installationId),
+  ]);
 }
 
 async function authenticateInstallation(request: Request, env: Env): Promise<InstallationCredentialRow | null> {
@@ -378,4 +389,199 @@ export async function installationSelf(request: Request, env: Env): Promise<Resp
     },
     credentialExpiresAt: installation.expires_at,
   });
+}
+
+// ---------------------------------------------------------------------------
+// Installation-owned registration: a desktop gets its hosted companion address
+// with no email. It is trust on first use: the first caller for a computer
+// receives a fresh owner and credential, and from then on possession of that
+// credential is the only proof. A repeated registration never adopts or
+// returns an existing installation (the client ID is not a secret), it makes
+// a new one. Unauthenticated, so it is bounded per IP, globally, and in total.
+
+export const INSTALLATION_OWNED_EMAIL_DOMAIN = "installations.bosbot.invalid";
+const REGISTRATION_WINDOW_MS = 60 * 60 * 1_000;
+const REGISTRATION_RETENTION_MS = 24 * 60 * 60 * 1_000;
+export const REGISTRATION_PER_IP_MAX = 5;
+export const REGISTRATION_GLOBAL_MAX = 100;
+/** Active installation-owned computers, each of which may hold one tunnel on
+ * BOS Bot's Cloudflare account. Raising it is a deliberate redeploy. */
+export const INSTALLATION_OWNED_CAP = 500;
+
+const registerInstallationSchema = createInstallationSchema;
+
+async function registrationLimitKey(label: string, secret: string): Promise<string> {
+  const key = await crypto.subtle.importKey(
+    "raw",
+    new TextEncoder().encode(secret),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"],
+  );
+  return hex(await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(`installation-registration:${label}`)));
+}
+
+/** One IPv6 subscriber usually holds a whole /64, so a per-address limit is
+ * no limit at all there. IPv4 stays per address. */
+export function registrationSource(header: string | null): string {
+  const ip = header?.trim().toLowerCase() || "unknown";
+  if (!ip.includes(":")) return ip;
+  const [head, tail = ""] = ip.split("::", 2);
+  const left = head ? head.split(":") : [];
+  const right = tail ? tail.split(":") : [];
+  const groups = ip.includes("::")
+    ? [...left, ...Array(Math.max(0, 8 - left.length - right.length)).fill("0"), ...right]
+    : left;
+  return `${groups.slice(0, 4).map((group) => group.replace(/^0+(?=.)/, "")).join(":")}::/64`;
+}
+
+async function takeRegistrationAttempt(env: Env, key: string, max: number, now: number): Promise<boolean> {
+  const cutoff = now - REGISTRATION_WINDOW_MS;
+  const result = await env.DB.prepare(
+    `INSERT INTO installation_registration_limits
+      (limit_key, window_started_at, attempts, updated_at)
+     VALUES (?, ?, 1, ?)
+     ON CONFLICT(limit_key) DO UPDATE SET
+       window_started_at = CASE
+         WHEN window_started_at <= ? THEN excluded.window_started_at
+         ELSE window_started_at
+       END,
+       attempts = CASE
+         WHEN window_started_at <= ? THEN 1
+         ELSE attempts + 1
+       END,
+       updated_at = excluded.updated_at
+     WHERE window_started_at <= ? OR attempts < ?`,
+  ).bind(key, now, now, cutoff, cutoff, cutoff, max).run();
+  return result.meta.changes > 0;
+}
+
+async function installationOwned(installationId: string, env: Env): Promise<{ owner_user_id: string } | null> {
+  return env.DB.prepare(
+    `SELECT i.owner_user_id
+       FROM installations i
+       JOIN installation_owned_accounts o ON o.user_id = i.owner_user_id
+      WHERE i.id = ? AND i.revoked_at IS NULL`,
+  ).bind(installationId).first<{ owner_user_id: string }>();
+}
+
+export async function registerInstallation(request: Request, env: Env): Promise<Response> {
+  const parsed = registerInstallationSchema.safeParse(await readBoundedJSON(request));
+  if (!parsed.success) throw new HTTPError(400, "invalid_request");
+
+  const now = Date.now();
+  // Cloudflare writes cf-connecting-ip at the edge; a client cannot spoof it.
+  const ip = registrationSource(request.headers.get("cf-connecting-ip"));
+  const [ipKey, globalKey] = await Promise.all([
+    registrationLimitKey(`ip:${ip}`, env.BETTER_AUTH_SECRET),
+    registrationLimitKey("global", env.BETTER_AUTH_SECRET),
+  ]);
+  if (!(await takeRegistrationAttempt(env, ipKey, REGISTRATION_PER_IP_MAX, now))) {
+    throw new HTTPError(429, "rate_limited");
+  }
+  if (!(await takeRegistrationAttempt(env, globalKey, REGISTRATION_GLOBAL_MAX, now))) {
+    throw new HTTPError(429, "rate_limited");
+  }
+  await env.DB.prepare("DELETE FROM installation_registration_limits WHERE updated_at < ?")
+    .bind(now - REGISTRATION_RETENTION_MS).run();
+
+  const active = await env.DB.prepare(
+    `SELECT COUNT(*) AS total
+       FROM installations i
+       JOIN installation_owned_accounts o ON o.user_id = i.owner_user_id
+      WHERE i.revoked_at IS NULL`,
+  ).first<{ total: number }>();
+  if ((active?.total ?? 0) >= INSTALLATION_OWNED_CAP) {
+    console.error(JSON.stringify({ message: "installation-owned registration cap reached" }));
+    throw new HTTPError(503, "registration_closed");
+  }
+
+  const ownerUserId = crypto.randomUUID();
+  const installationId = crypto.randomUUID();
+  const credential = await newCredential(now);
+  const stamp = new Date(now).toISOString();
+  await env.DB.batch([
+    // An owner row for this one computer. Its address is unroutable, it is
+    // never verified, and OTP mail to its domain is refused, so it can never
+    // sign in as a person or enroll anything that needs a verified human.
+    env.DB.prepare(
+      `INSERT INTO "user" (id, name, email, "emailVerified", image, "createdAt", "updatedAt")
+       VALUES (?, 'BOS Bot computer', ?, 0, NULL, ?, ?)`,
+    ).bind(ownerUserId, `${ownerUserId}@${INSTALLATION_OWNED_EMAIL_DOMAIN}`, stamp, stamp),
+    env.DB.prepare("INSERT INTO installation_owned_accounts (user_id, created_at) VALUES (?, ?)")
+      .bind(ownerUserId, now),
+    env.DB.prepare(
+      `INSERT INTO installations
+        (id, owner_user_id, client_instance_id, display_name, platform, app_version, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).bind(
+      installationId,
+      ownerUserId,
+      parsed.data.clientInstanceId,
+      parsed.data.name,
+      parsed.data.platform,
+      parsed.data.appVersion ?? null,
+      now,
+      now,
+    ),
+    env.DB.prepare(
+      `INSERT INTO installation_credentials
+        (id, installation_id, lookup_id, secret_hash, created_at, expires_at)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+    ).bind(crypto.randomUUID(), installationId, credential.lookupId, credential.secretHash, now, credential.expiresAt),
+  ]);
+
+  return json({
+    installation: {
+      id: installationId,
+      clientInstanceId: parsed.data.clientInstanceId,
+      name: parsed.data.name,
+      platform: parsed.data.platform,
+      appVersion: parsed.data.appVersion ?? null,
+      createdAt: now,
+      updatedAt: now,
+      lastSeenAt: null,
+    },
+    credential: credential.raw,
+    credentialExpiresAt: credential.expiresAt,
+  }, 201);
+}
+
+/** An installation-owned computer whose credential lapsed can never prove
+ * itself again, so it is revoked: that frees its place under the cap and lets
+ * the endpoint sweep delete its tunnel. Account-owned installations are left
+ * to their owner. */
+export async function reapLapsedInstallationOwned(env: Env, now = Date.now()): Promise<number> {
+  const result = await env.DB.prepare(
+    `UPDATE installations
+        SET revoked_at = ?, updated_at = ?
+      WHERE revoked_at IS NULL
+        AND owner_user_id IN (SELECT user_id FROM installation_owned_accounts)
+        AND NOT EXISTS (
+          SELECT 1 FROM installation_credentials c
+           WHERE c.installation_id = installations.id
+             AND c.revoked_at IS NULL
+             AND c.expires_at > ?
+        )`,
+  ).bind(now, now, now).run();
+  return result.meta.changes;
+}
+
+/** Installation-owned computers have no account bearer to rotate with, so the
+ * current credential renews itself before it expires. */
+export async function rotateSelfCredential(request: Request, env: Env): Promise<Response> {
+  const installation = await requireInstallation(request, env);
+  const owned = await installationOwned(installation.installation_id, env);
+  if (!owned) throw new HTTPError(403, "forbidden");
+  return rotateCredentialRows(installation.installation_id, env, owned.owner_user_id);
+}
+
+/** Sign-out for an installation-owned computer. Returns the revoked ID so the
+ * caller can schedule endpoint cleanup, exactly like an owner revocation. */
+export async function revokeSelf(request: Request, env: Env): Promise<string> {
+  const installation = await requireInstallation(request, env);
+  const owned = await installationOwned(installation.installation_id, env);
+  if (!owned) throw new HTTPError(403, "forbidden");
+  await revokeInstallationRows(installation.installation_id, env);
+  return installation.installation_id;
 }

@@ -8,9 +8,9 @@ import { approvalModeFor } from "../shared/approval-mode.ts";
 import { resolveCompanionControlPlaneURL } from "../electron/companion-account-service.mjs";
 import type { Store } from "./store.ts";
 
-/** The owner authority is the configured control plane (BOS_CONTROL_PLANE_URL
- * or legacy OMB_CONTROL_PLANE_URL). There is no hosted default: unset means
- * Remote Full is "not configured" and no authority request is ever made. */
+/** The owner authority is the control plane: accounts.bosbot.my unless
+ * BOS_CONTROL_PLANE_URL (or legacy OMB_CONTROL_PLANE_URL) says otherwise. Set
+ * empty, Remote Full is "not configured" and no authority request is made. */
 export function remoteFullAuthorityOrigin(env: NodeJS.ProcessEnv = compatEnv): string {
   return resolveCompanionControlPlaneURL({ environment: env });
 }

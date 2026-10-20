@@ -6,7 +6,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import { createAuth } from "../src/auth";
 import { readConfig } from "../src/config";
-import { buildOTPEmail, sendOTPEmail } from "../src/email";
+import { buildOTPEmail, resendSender, sendOTPEmail } from "../src/email";
 import worker from "../src/index";
 import { sha256 } from "../src/installations";
 
@@ -148,7 +148,7 @@ describe("control-plane migrations and health", () => {
   it("reports an unhealthy deployment without exposing invalid configuration", async () => {
     const misconfiguredEnv: Env = {
       DB: env.DB,
-      EMAIL: env.EMAIL,
+      RESEND_API_KEY: env.RESEND_API_KEY,
       BETTER_AUTH_URL: env.BETTER_AUTH_URL,
       EMAIL_FROM: env.EMAIL_FROM,
       ALLOWED_ORIGINS: env.ALLOWED_ORIGINS,
@@ -352,6 +352,27 @@ describe("Better Auth email OTP and bearer boundary", () => {
     expect(logged).not.toContain("recipient@example.com");
     expect(logged).not.toContain("12345678");
     error.mockRestore();
+  });
+
+  it("sends OTP mail through Resend and refuses without a key", async () => {
+    const calls: Array<{ url: string; init: RequestInit }> = [];
+    const okFetch = (async (url: string, init: RequestInit) => {
+      calls.push({ url, init });
+      return new Response("{}", { status: 200 });
+    }) as unknown as typeof fetch;
+    const message = buildOTPEmail("noreply@bosbot.my", { email: "to@example.com", otp: "12345678", type: "sign-in" });
+    await resendSender("re_test", okFetch).send(message);
+    expect(calls).toHaveLength(1);
+    expect(calls[0].url).toBe("https://api.resend.com/emails");
+    expect(new Headers(calls[0].init.headers).get("authorization")).toBe("Bearer re_test");
+    expect(JSON.parse(String(calls[0].init.body))).toMatchObject({
+      from: "BOS Bot <noreply@bosbot.my>", to: ["to@example.com"], subject: "Your BOS Bot sign-in code",
+    });
+
+    const failFetch = (async () => new Response("no", { status: 403 })) as unknown as typeof fetch;
+    await expect(resendSender("re_test", failFetch).send(message)).rejects.toThrow("resend 403");
+    await expect(resendSender("", okFetch).send(message)).rejects.toThrow("email not configured");
+    expect(calls).toHaveLength(1);
   });
 
   it("requires account bearers and never confuses installation credentials", async () => {

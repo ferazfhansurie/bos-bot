@@ -927,6 +927,14 @@ const TranscriptRow = memo(function TranscriptRow({
             onReply={() => onReply(m)}
           />
         );
+        if (m.routineRun) {
+          return (
+            <div className="flex flex-col gap-1">
+              {bubble}
+              <RoutineFooter bot={bot} message={m} />
+            </div>
+          );
+        }
         const card = m.onboarding?.card?.kind;
         return card === "engine" || card === "suggestions" ? (
           <div className="flex flex-col gap-2.5">
@@ -973,6 +981,34 @@ function RoutineRunRow({ bot, message }: { bot: Bot; message: Message }) {
           )
         : undefined}
     />
+  );
+}
+
+/** A routine's result reads as a normal message; this quiet line says which
+ * routine sent it and opens the run's own thread. */
+function RoutineFooter({ bot, message }: { bot: Bot; message: Message }) {
+  const { state, dispatch } = useStore();
+  const run = message.routineRun!;
+  const executionThreadId = run.executionThreadId;
+  const canOpen = executionThreadId && state.bots.some((candidate) =>
+    candidate.threadId === executionThreadId || hasRoutineExecutionTask(candidate.tasks, executionThreadId)
+  );
+  return (
+    <div className="pl-1 text-[11px] text-muted-foreground/70">
+      from {run.routineName}{message.at ? ` · ${formatTime(message.at)}` : ""}
+      {canOpen && executionThreadId && (
+        <>
+          {" · "}
+          <button
+            type="button"
+            className="underline-offset-2 hover:underline"
+            onClick={() => openNotificationTarget(dispatch, { botId: bot.id, threadId: executionThreadId }, state)}
+          >
+            log
+          </button>
+        </>
+      )}
+    </div>
   );
 }
 

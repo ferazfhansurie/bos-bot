@@ -2,10 +2,16 @@
 // (server/tunnel.ts). Keep in step with the implementation.
 export declare const MANAGED_COMPANION_ENDPOINT_FIELD: string;
 export declare const MANAGED_COMPANION_TOKEN_FIELD: string;
+export declare const LEGACY_MANAGED_COMPANION_ENDPOINT_FIELD: string;
+export declare const LEGACY_MANAGED_COMPANION_TOKEN_FIELD: string;
+export declare const LEGACY_MANAGED_COMPANION_RETIRE_AT_FIELD: string;
+export declare const LEGACY_MANAGED_COMPANION_GRACE_MS: number;
 
 export interface ManagedTunnelAccess {
   endpoint: string;
   token: string;
+  /** A retiring connector from a previous control plane, run beside this one. */
+  legacy?: { endpoint: string; token: string } | null;
 }
 
 export interface ManagedTunnelState {
@@ -40,6 +46,16 @@ export declare function companionKeepAwakeWanted(options?: {
 }): boolean;
 export declare function normalizeManagedCompanionEndpoint(value: unknown): string;
 export declare function managedCompanionTunnelAccess(credentials: Record<string, unknown>): ManagedTunnelAccess | null;
+export declare function legacyManagedCompanionTunnelAccess(
+  credentials: Record<string, unknown>,
+  now?: number,
+): { endpoint: string; token: string } | null;
+export declare function hasExpiredLegacyManagedCompanionTunnel(credentials: Record<string, unknown>, now?: number): boolean;
+export declare function withLegacyManagedCompanionTunnel<T extends Record<string, unknown>>(
+  credentials: T,
+  options?: { now?: number },
+): T;
+export declare function withoutLegacyManagedCompanionTunnel<T extends Record<string, unknown>>(credentials: T): T;
 export declare function resolveCloudflaredBinary(options?: {
   isPackaged?: boolean;
   resourcesPath?: string;

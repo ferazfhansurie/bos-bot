@@ -378,6 +378,74 @@ export function createControlPlaneClient({
       };
     },
 
+    // Email-free registration: this computer becomes the owner of its own
+    // installation. Never adopts an existing record; the credential returned
+    // here is the only proof from now on.
+    async registerInstallation({ clientInstanceId, name, platform, appVersion }) {
+      if (!validClientInstance(clientInstanceId)) throw new ControlPlaneError("invalid_client_identity");
+      const { payload } = await request("/v1/installations/register", {
+        method: "POST",
+        body: { clientInstanceId, name, platform, appVersion },
+      });
+      const installation = validatedInstallation(payload.installation);
+      const credential = stringValue(payload.credential);
+      if (
+        !installation ||
+        installation.clientInstanceId !== clientInstanceId ||
+        credential === null ||
+        !INSTALLATION_CREDENTIAL.test(credential)
+      ) {
+        throw new ControlPlaneError("invalid_response");
+      }
+      return {
+        installation,
+        credential,
+        credentialExpiresAt: Number.isSafeInteger(payload.credentialExpiresAt) ? payload.credentialExpiresAt : null,
+      };
+    },
+
+    async inspectSelf(installationCredential) {
+      if (typeof installationCredential !== "string" || !INSTALLATION_CREDENTIAL.test(installationCredential)) {
+        throw new ControlPlaneError("signed_out", 401);
+      }
+      const { payload } = await request("/v1/installations/self", { token: installationCredential });
+      const installation = validatedInstallation(payload.installation);
+      if (!installation) throw new ControlPlaneError("invalid_response");
+      return {
+        installation,
+        credentialExpiresAt: Number.isSafeInteger(payload.credentialExpiresAt) ? payload.credentialExpiresAt : null,
+      };
+    },
+
+    async rotateSelfCredential(installationCredential) {
+      if (typeof installationCredential !== "string" || !INSTALLATION_CREDENTIAL.test(installationCredential)) {
+        throw new ControlPlaneError("signed_out", 401);
+      }
+      const { payload } = await request("/v1/installations/self/credentials/rotate", {
+        method: "POST",
+        token: installationCredential,
+      });
+      const credential = stringValue(payload.credential);
+      if (credential === null || !INSTALLATION_CREDENTIAL.test(credential)) {
+        throw new ControlPlaneError("invalid_response");
+      }
+      return {
+        credential,
+        credentialExpiresAt: Number.isSafeInteger(payload.credentialExpiresAt) ? payload.credentialExpiresAt : null,
+      };
+    },
+
+    async revokeSelf(installationCredential) {
+      if (typeof installationCredential !== "string" || !INSTALLATION_CREDENTIAL.test(installationCredential)) {
+        throw new ControlPlaneError("signed_out", 401);
+      }
+      await request("/v1/installations/self", {
+        method: "DELETE",
+        token: installationCredential,
+        allowEmpty: true,
+      });
+    },
+
     async ensureEndpoint(installationCredential) {
       if (
         typeof installationCredential !== "string" ||

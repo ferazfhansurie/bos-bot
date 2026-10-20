@@ -13,7 +13,6 @@ import {
   ArrowLeft,
   Check,
   Loader2,
-  Mail,
   QrCode,
   ShieldCheck,
   Smartphone,
@@ -43,6 +42,7 @@ import {
   invalidatePhonePairingAttempt,
   newlyPairedDeviceForFlow,
   normalizePhoneSetupActionError,
+  companionMoveRequired,
   phonePairingGate,
   phoneSetupBaseline,
   phoneSetupReducer,
@@ -197,6 +197,8 @@ export interface PhoneSetupController {
   address: string | undefined;
   pairingPort: number;
   hostedReady: boolean;
+  /** Signed out here while the only hosted route is the old control plane's. */
+  moveRequired: boolean;
   localFallback: boolean;
   tailscaleFallback: boolean;
   tailscaleAvailable: boolean;
@@ -526,7 +528,28 @@ export function usePhoneSetupController(profileEmail = ""): PhoneSetupController
     ) {
       setProvisioning(true);
       void openPairing("automatic", account, generation);
+      return;
     }
+    // No address of its own yet: the desktop gets one by itself (no email),
+    // so connecting a phone simply asks it to try now, then pairs.
+    const remote = companionAccountBridge();
+    if (!remote || !account?.available) return;
+    setAccountBusy(true);
+    setProvisioning(true);
+    void mutateCompanionBridgeState(companionMutationEpoch, () => remote.retry())
+      .then(async (next) => {
+        if (!mounted.current || setupGeneration.current !== generation) return;
+        setAccount(next);
+        await openPairing("automatic", next, generation);
+      })
+      .catch((cause: unknown) => {
+        if (!mounted.current || setupGeneration.current !== generation) return;
+        setProvisioning(false);
+        setAccountError(normalizePhoneSetupActionError(cause, t("phone.error.restore")));
+      })
+      .finally(() => {
+        if (mounted.current && setupGeneration.current === generation) setAccountBusy(false);
+      });
   }, [account, openPairing, state]);
 
   const useLocal = useCallback(() => {
@@ -844,6 +867,7 @@ export function usePhoneSetupController(profileEmail = ""): PhoneSetupController
     address: pairingRoute?.address,
     pairingPort: pairingRoute?.port ?? state?.port ?? 8810,
     hostedReady: Boolean(state?.endpoints?.some((endpoint) => endpoint.kind === "hosted")),
+    moveRequired: companionMoveRequired(account, state),
     localFallback: flow.localFallback,
     tailscaleFallback: flow.tailscaleFallback,
     tailscaleAvailable: Boolean(state && companionPairingRoute(state, "tailscale")),
@@ -931,7 +955,6 @@ export function PhoneSetupFlowView({
 }) {
   const c = controller;
   const actionError = companionAccountActionError(c.account, c.accountError);
-  const canSubmitEmail = /^\S+@\S+\.\S+$/.test(c.email.trim());
   const manualCodeMode = phonePairingManualCodeMode(Boolean(c.state?.pairing), c.pairingLink);
 
   if (c.phase === "intro" && compactHeader) {
@@ -1032,17 +1055,18 @@ export function PhoneSetupFlowView({
 
   if (c.phase === "sign-in") {
     const unavailable = !c.account?.available;
-    const failed = c.account?.status === "error" || c.setupTimedOut;
+    // Signed out here on purpose (or not started yet): one tap turns it back on.
+    const off = !unavailable && !c.setupTimedOut && c.account?.status === "signed-out";
     return (
       <div className="mx-auto flex w-full max-w-[430px] flex-col">
         <button onClick={c.cancel} className="mb-4 flex w-fit items-center gap-1.5 text-[12px] text-ink-secondary hover:text-ink">
           <ArrowLeft size={13} /> {t("phone.back")}
         </button>
         <div className="flex size-11 items-center justify-center rounded-xl bg-accent/12 text-accent">
-          <Mail size={20} />
+          <ShieldCheck size={20} />
         </div>
         <h2 className="mt-3 text-[18px] font-semibold text-ink">
-          {unavailable || failed ? t("phone.signIn.attention") : t("phone.signIn.title")}
+          {off ? t("phone.secure.offTitle") : t("phone.signIn.attention")}
         </h2>
         <p
           role={c.setupTimedOut ? "alert" : undefined}
@@ -1052,112 +1076,47 @@ export function PhoneSetupFlowView({
             ? t("phone.signIn.unavailable")
             : c.setupTimedOut
               ? t("phone.signIn.timedOut")
-            : failed
-              ? c.account?.message ?? t("phone.signIn.failed")
-              : t("phone.signIn.emailPrompt")}
+              : off
+                ? t("phone.secure.offDetail")
+                : c.account?.message ?? t("phone.signIn.failed")}
         </p>
-
-        {!unavailable && !failed && (
-          <div className="mt-5 flex flex-col gap-3">
-            <label className="flex flex-col gap-1.5">
-              <span className="text-[12px] font-medium text-ink-secondary">{t("phone.signIn.email")}</span>
-              <input
-                autoFocus
-                autoComplete="email"
-                inputMode="email"
-                value={c.email}
-                disabled={c.accountBusy || c.codeSent}
-                onChange={(event) => c.setEmail(event.target.value)}
-                onKeyDown={(event) => {
-                  if (event.key === "Enter" && !c.codeSent && canSubmitEmail) c.requestCode();
-                }}
-                placeholder="you@example.com"
-                className="rounded-lg border border-hairline/50 bg-inset px-3 py-2.5 text-[14px] text-ink outline-none placeholder:text-ink-secondary/60 focus:border-accent disabled:opacity-50"
-              />
-            </label>
-            {c.codeSent && (
-              <label className="flex flex-col gap-1.5">
-                <span className="text-[12px] font-medium text-ink-secondary">{t("phone.signIn.code")}</span>
-                <input
-                  autoFocus
-                  autoComplete="one-time-code"
-                  inputMode="numeric"
-                  value={c.code}
-                  disabled={c.accountBusy}
-                  onChange={(event) => c.setCode(event.target.value)}
-                  onKeyDown={(event) => {
-                    if (event.key === "Enter" && c.code.length === 8) c.verifyCode();
-                  }}
-                  placeholder="12345678"
-                  className="rounded-lg border border-hairline/50 bg-inset px-3 py-2.5 font-mono text-[16px] tracking-[0.18em] text-ink outline-none placeholder:tracking-normal placeholder:text-ink-secondary/60 focus:border-accent disabled:opacity-50"
-                />
-              </label>
-            )}
-            <button
-              disabled={c.accountBusy || (!c.codeSent && !canSubmitEmail) || (c.codeSent && c.code.length !== 8)}
-              onClick={c.codeSent ? c.verifyCode : c.requestCode}
-              className="rounded-lg bg-accent py-2.5 text-[14px] font-medium text-white hover:opacity-90 disabled:opacity-40"
-            >
-              {c.accountBusy ? t("phone.signIn.working") : c.codeSent ? t("phone.signIn.verify") : t("phone.signIn.sendCode")}
-            </button>
-            {c.codeSent && (
-              <button
-                disabled={c.accountBusy}
-                onClick={c.changeEmail}
-                className="text-[12px] text-ink-secondary hover:text-ink disabled:opacity-40"
-              >
-                {t("phone.signIn.otherEmail")}
-              </button>
-            )}
-            {c.codeSent && !actionError && (
-              <p className="text-[11.5px] text-ink-secondary">{t("phone.signIn.expires")}</p>
-            )}
-          </div>
-        )}
-
-        {(unavailable || failed) && (
-          <button
-            disabled={c.accountBusy}
-            onClick={c.retryAccount}
-            className="mt-5 rounded-lg bg-accent py-2.5 text-[14px] font-medium text-white disabled:opacity-40"
-          >
-            {c.accountBusy ? t("remote.account.retrying") : t("phone.signIn.retry")}
-          </button>
-        )}
+        <button
+          disabled={c.accountBusy}
+          onClick={c.retryAccount}
+          className="mt-5 rounded-lg bg-accent py-2.5 text-[14px] font-medium text-white disabled:opacity-40"
+        >
+          {c.accountBusy ? t("remote.account.retrying") : off ? t("phone.secure.turnOn") : t("phone.signIn.retry")}
+        </button>
         {actionError && <p role="alert" className="mt-3 text-[12.5px] text-danger">{actionError}</p>}
-        {/* One way to connect: the secure sign-in. The other routes only show
-            when it cannot work right now, so nobody has to choose a network. */}
-        {(unavailable || failed) && (
+        {/* Secure access is automatic. These routes only show when it cannot
+            work right now, so nobody has to choose a network. */}
+        <div className="my-4 flex items-center gap-3 text-[11px] text-ink-secondary">
+          <span className="h-px flex-1 bg-hairline/40" /> {t("phone.signIn.or")} <span className="h-px flex-1 bg-hairline/40" />
+        </div>
+        {variant === "onboarding" && c.tailscaleAvailable && (
           <>
-            <div className="my-4 flex items-center gap-3 text-[11px] text-ink-secondary">
-              <span className="h-px flex-1 bg-hairline/40" /> {t("phone.signIn.or")} <span className="h-px flex-1 bg-hairline/40" />
-            </div>
-            {variant === "onboarding" && c.tailscaleAvailable && (
-              <>
-                <button
-                  disabled={c.busy || c.accountBusy}
-                  onClick={c.useTailscale}
-                  className="flex items-center justify-center gap-2 rounded-lg border border-hairline/50 py-2.5 text-[13px] text-ink hover:bg-control disabled:opacity-40"
-                >
-                  <ShieldCheck size={15} /> {t("remote.pairOverTailscale")}
-                </button>
-                <p className="mt-2 text-center text-[11px] leading-relaxed text-ink-secondary">
-                  {t("phone.signIn.tailnetNote")}
-                </p>
-              </>
-            )}
             <button
               disabled={c.busy || c.accountBusy}
-              onClick={c.useLocal}
-              className={`${variant === "onboarding" && c.tailscaleAvailable ? "mt-3" : ""} flex items-center justify-center gap-2 rounded-lg border border-hairline/50 py-2.5 text-[13px] text-ink hover:bg-control disabled:opacity-40`}
+              onClick={c.useTailscale}
+              className="flex items-center justify-center gap-2 rounded-lg border border-hairline/50 py-2.5 text-[13px] text-ink hover:bg-control disabled:opacity-40"
             >
-              <Wifi size={15} /> {t("phone.signIn.wifiInstead")}
+              <ShieldCheck size={15} /> {t("remote.pairOverTailscale")}
             </button>
             <p className="mt-2 text-center text-[11px] leading-relaxed text-ink-secondary">
-              {t("phone.signIn.wifiNote")}
+              {t("phone.signIn.tailnetNote")}
             </p>
           </>
         )}
+        <button
+          disabled={c.busy || c.accountBusy}
+          onClick={c.useLocal}
+          className={`${variant === "onboarding" && c.tailscaleAvailable ? "mt-3" : ""} flex items-center justify-center gap-2 rounded-lg border border-hairline/50 py-2.5 text-[13px] text-ink hover:bg-control disabled:opacity-40`}
+        >
+          <Wifi size={15} /> {t("phone.signIn.wifiInstead")}
+        </button>
+        <p className="mt-2 text-center text-[11px] leading-relaxed text-ink-secondary">
+          {t("phone.signIn.wifiNote")}
+        </p>
       </div>
     );
   }

@@ -23,6 +23,14 @@ export const MANAGED_COMPANION_ENDPOINT_FIELD = "managedCompanionEndpointUrl";
 export const MANAGED_COMPANION_TOKEN_FIELD = "managedCompanionConnectorToken";
 export const MANAGED_COMPANION_ORIGIN_VERSION_FIELD = "managedCompanionOriginVersion";
 export const MANAGED_COMPANION_ORIGIN_VERSION = 2;
+export const LEGACY_MANAGED_COMPANION_ENDPOINT_FIELD = "legacyManagedCompanionEndpointUrl";
+export const LEGACY_MANAGED_COMPANION_TOKEN_FIELD = "legacyManagedCompanionConnectorToken";
+export const LEGACY_MANAGED_COMPANION_RETIRE_AT_FIELD = "legacyManagedCompanionRetireAt";
+/** How long a previous control plane's connector keeps running after this
+ * computer signs in somewhere new. Phones learn the new hosted address on
+ * their first connection through the old one; two weeks covers a phone that
+ * sits unopened for a while. */
+export const LEGACY_MANAGED_COMPANION_GRACE_MS = 14 * 24 * 60 * 60 * 1000;
 
 const TOKEN_FILE_PATTERN = /^connector-([1-9][0-9]*)-([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.token$/;
 const TOKEN_MIN_BYTES = 40;
@@ -97,11 +105,61 @@ export function withManagedCompanionTunnelAccess(credentials, provision) {
   };
 }
 
+/** Removes every hosted route this computer holds, the retiring one too:
+ * sign-out and revocation mean no public address at all. */
 export function withoutManagedCompanionTunnelAccess(credentials) {
+  const next = withoutLegacyManagedCompanionTunnel(credentials);
+  delete next[MANAGED_COMPANION_ENDPOINT_FIELD];
+  delete next[MANAGED_COMPANION_TOKEN_FIELD];
+  delete next[MANAGED_COMPANION_ORIGIN_VERSION_FIELD];
+  return next;
+}
+
+/** Move the current connector into the retiring slot, for a computer that is
+ * switching control planes. It keeps serving phones paired over its address,
+ * unadvertised, until the grace period ends; the new control plane then
+ * provisions the primary slot. */
+export function withLegacyManagedCompanionTunnel(credentials, { now = Date.now() } = {}) {
+  const current = managedCompanionTunnelAccess(credentials);
   const next = { ...credentials };
   delete next[MANAGED_COMPANION_ENDPOINT_FIELD];
   delete next[MANAGED_COMPANION_TOKEN_FIELD];
   delete next[MANAGED_COMPANION_ORIGIN_VERSION_FIELD];
+  // Nothing current to retire: an earlier retiring route stays as it was.
+  if (!current) return next;
+  return {
+    ...next,
+    [LEGACY_MANAGED_COMPANION_ENDPOINT_FIELD]: current.endpoint,
+    [LEGACY_MANAGED_COMPANION_TOKEN_FIELD]: current.token,
+    [LEGACY_MANAGED_COMPANION_RETIRE_AT_FIELD]: now + LEGACY_MANAGED_COMPANION_GRACE_MS,
+  };
+}
+
+/** The retiring connector, or null once its grace period has passed. */
+export function legacyManagedCompanionTunnelAccess(credentials, now = Date.now()) {
+  const retireAt = credentials?.[LEGACY_MANAGED_COMPANION_RETIRE_AT_FIELD];
+  if (!Number.isSafeInteger(retireAt) || retireAt <= now) return null;
+  const endpoint = normalizeManagedCompanionEndpoint(
+    credentials?.[LEGACY_MANAGED_COMPANION_ENDPOINT_FIELD],
+  );
+  const token = credentials?.[LEGACY_MANAGED_COMPANION_TOKEN_FIELD];
+  if (!endpoint || !validConnectorToken(token)) return null;
+  return { endpoint, token };
+}
+
+/** Whether retired legacy connector material is still sitting in the store. */
+export function hasExpiredLegacyManagedCompanionTunnel(credentials, now = Date.now()) {
+  return (
+    Object.hasOwn(credentials ?? {}, LEGACY_MANAGED_COMPANION_TOKEN_FIELD) &&
+    !legacyManagedCompanionTunnelAccess(credentials, now)
+  );
+}
+
+export function withoutLegacyManagedCompanionTunnel(credentials) {
+  const next = { ...credentials };
+  delete next[LEGACY_MANAGED_COMPANION_ENDPOINT_FIELD];
+  delete next[LEGACY_MANAGED_COMPANION_TOKEN_FIELD];
+  delete next[LEGACY_MANAGED_COMPANION_RETIRE_AT_FIELD];
   return next;
 }
 
@@ -435,6 +493,7 @@ export function createManagedCompanionTunnel({
   let intentRevision = 0;
   let child = null;
   let tokenFile = null;
+  let legacyTokenFile = null;
   let activeAttempt = null;
   let originTarget = null;
   let access = null;
@@ -464,6 +523,7 @@ export function createManagedCompanionTunnel({
   const removeTokenFile = (file = tokenFile) => {
     if (!file) return;
     if (tokenFile === file) tokenFile = null;
+    if (legacyTokenFile === file) legacyTokenFile = null;
     try {
       fileSystem.unlinkSync(file);
     } catch (error) {
@@ -514,6 +574,11 @@ export function createManagedCompanionTunnel({
     publish({ status: "starting", ready: false });
     let attemptHandle = null;
     let attemptTokenFile = null;
+    let attemptLegacyTokenFile = null;
+    const removeAttemptTokenFiles = () => {
+      removeTokenFile(attemptTokenFile);
+      removeTokenFile(attemptLegacyTokenFile);
+    };
     try {
       tokenFile = writePrivateToken(runtimeRoot, access.token, {
         fileSystem,
@@ -522,6 +587,20 @@ export function createManagedCompanionTunnel({
         currentUid,
       });
       attemptTokenFile = tokenFile;
+      if (access.legacy) {
+        // Optional: the primary route never waits on the retiring one.
+        try {
+          legacyTokenFile = writePrivateToken(runtimeRoot, access.legacy.token, {
+            fileSystem,
+            processId,
+            identifier,
+            currentUid,
+          });
+          attemptLegacyTokenFile = legacyTokenFile;
+        } catch {
+          legacyTokenFile = null;
+        }
+      }
       const spawned = spawnProcess(
         runtimeExecutable,
         [
@@ -531,6 +610,9 @@ export function createManagedCompanionTunnel({
           originTarget.socketPath,
           String(originTarget.pid),
           String(originPort),
+          // The retiring connector shares this guardian's gateway, so it can
+          // only ever reach the same exact sidecar generation.
+          ...(attemptLegacyTokenFile ? [attemptLegacyTokenFile] : []),
         ],
         {
           env: minimalGuardianEnvironment(environment),
@@ -569,7 +651,7 @@ export function createManagedCompanionTunnel({
         terminated = true;
         resolveExit();
         if (child === spawned) child = null;
-        removeTokenFile(attemptTokenFile);
+        removeAttemptTokenFiles();
         if (!expectedStop && desired && ownedGeneration === generation) {
           scheduleRetry("The secure connection stopped unexpectedly.", ownedGeneration);
         }
@@ -593,7 +675,7 @@ export function createManagedCompanionTunnel({
           cancellation,
         ]);
         if (verified && child === spawned && desired && ownedGeneration === generation) {
-          removeTokenFile(attemptTokenFile);
+          removeAttemptTokenFiles();
           retryAttempt = 0;
           publish({ status: "ready", ready: true });
           return state;
@@ -616,7 +698,7 @@ export function createManagedCompanionTunnel({
         child = null;
         await terminateChild(spawned, stopGraceMs);
       }
-      removeTokenFile(attemptTokenFile);
+      removeAttemptTokenFiles();
       if (desired && ownedGeneration === generation) {
         scheduleRetry("The secure connection could not be verified.", ownedGeneration);
       }
@@ -624,7 +706,7 @@ export function createManagedCompanionTunnel({
     } catch {
       const spawned = child;
       child = null;
-      removeTokenFile(attemptTokenFile);
+      removeAttemptTokenFiles();
       if (spawned) await terminateChild(spawned, stopGraceMs);
       if (desired && ownedGeneration === generation) {
         scheduleRetry("The secure connection could not start.", ownedGeneration);
@@ -651,6 +733,15 @@ export function createManagedCompanionTunnel({
           [MANAGED_COMPANION_ENDPOINT_FIELD]: rawAccess?.endpoint,
           [MANAGED_COMPANION_TOKEN_FIELD]: rawAccess?.token,
         });
+        const legacy = normalized
+          ? normalizeManagedCompanionAccess({
+              [MANAGED_COMPANION_ENDPOINT_FIELD]: rawAccess?.legacy?.endpoint,
+              [MANAGED_COMPANION_TOKEN_FIELD]: rawAccess?.legacy?.token,
+            })
+          : null;
+        if (legacy && legacy.endpoint !== normalized.endpoint && legacy.token !== normalized.token) {
+          normalized.legacy = legacy;
+        }
         const normalizedOriginTarget = validCompanionOriginTarget(rawAccess?.originTarget)
           ? Object.freeze({
               pid: rawAccess.originTarget.pid,
@@ -662,6 +753,7 @@ export function createManagedCompanionTunnel({
           normalized &&
           access?.endpoint === normalized.endpoint &&
           access?.token === normalized.token &&
+          (access?.legacy?.token ?? null) === (normalized.legacy?.token ?? null) &&
           originTarget?.pid === normalizedOriginTarget?.pid &&
           originTarget?.socketPath === normalizedOriginTarget?.socketPath &&
           child
@@ -679,6 +771,7 @@ export function createManagedCompanionTunnel({
         child = null;
         if (existing) await terminateChild(existing, stopGraceMs);
         removeTokenFile();
+        removeTokenFile(legacyTokenFile);
         if (!access) {
           return publish({
             status: "unconfigured",
@@ -704,6 +797,7 @@ export function createManagedCompanionTunnel({
       child = null;
       const existingTokenFile = tokenFile;
       removeTokenFile(existingTokenFile);
+      removeTokenFile(legacyTokenFile);
       const terminated = existing
         ? terminateChild(existing, stopGraceMs)
         : Promise.resolve();

@@ -103,7 +103,7 @@ export function CompanionSection({ profileEmail = "" }: { profileEmail?: string 
     <div className="flex flex-col gap-4">
       <div>
         <Card title={pairingCopy.title} subtitle={pairingCopy.subtitle}>
-          {(panelStatus || (pairedCount > 0 && c.hostedReady)) && (
+          {(panelStatus || (pairedCount > 0 && c.hostedReady && !c.moveRequired)) && (
             <div className="mb-4 flex items-center justify-between gap-3">
               {panelStatus && (
                 <div
@@ -115,7 +115,7 @@ export function CompanionSection({ profileEmail = "" }: { profileEmail?: string 
                   {panelStatus.label}
                 </div>
               )}
-              {pairedCount > 0 && c.hostedReady && (
+              {pairedCount > 0 && c.hostedReady && !c.moveRequired && (
                 <div className="flex items-center gap-1.5 text-[11.5px] text-ink-secondary">
                   <ShieldCheck size={13} className="text-accent" /> {t("remote.worksAway")}
                 </div>

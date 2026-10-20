@@ -53,8 +53,8 @@ const cleanLabel = (value, fallback) => {
 /** The domain whose subdomains are trusted as managed HTTPS companion
  * endpoints. BOS_COMPANION_HOST_SUFFIX wins; otherwise it is the parent domain
  * of the configured control plane (accounts.example.com -> example.com, which
- * issues c-<id>.example.com). Nothing configured means no hosted endpoint is
- * trusted; there is no upstream default. */
+ * issues c-<id>.example.com); by default accounts.bosbot.my -> bosbot.my. A
+ * control plane turned off means no hosted endpoint is trusted. */
 export function managedCompanionHostSuffix(environment = compatEnv) {
   const explicit = String(compatEnvironment(environment)?.BOS_COMPANION_HOST_SUFFIX ?? "")
     .trim()

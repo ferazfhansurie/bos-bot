@@ -14,6 +14,13 @@ export function decryptChromeCookie(row, key, databaseVersion) {
   if (databaseVersion >= 24) { const host=createHash('sha256').update(row.host_key).digest(); if(plain.length<32||!host.equals(plain.subarray(0,32)))throw new Error('Cookie origin did not match');plain=plain.subarray(32); }
   return plain.toString('utf8');
 }
+// Google's login is copied too, so import signs the person in. Chrome keeps
+// rotating __Secure-1PSIDTS and the copy in bos can't, so google may sign the
+// copy out after a while; importing again replaces the stale copy with chrome's
+// current one instead of skipping it like other existing cookies.
+const GOOGLE_ACCOUNT_HOST=/(^|\.)(google\.[a-z]{2,3}(\.[a-z]{2})?|youtube\.com|withgoogle\.com)$/;
+const GOOGLE_ACCOUNT_COOKIE=/SID|^ACCOUNT_CHOOSER$|^__Host-GAPS$/;
+export function googleAccountCookie(row){return GOOGLE_ACCOUNT_HOST.test(String(row.host_key||'').replace(/^\./,''))&&GOOGLE_ACCOUNT_COOKIE.test(String(row.name||''));}
 function cookieFile(directory) { return ['Network/Cookies','Cookies'].map(f=>path.join(directory,f)).find(f=>fs.existsSync(f)); }
 export async function cookiePreview(directory) {
   const file=cookieFile(directory);if(!file)return {cookies:0,cookiesError:'No local chrome cookies available.'};
@@ -31,15 +38,16 @@ export async function importChromeCookies(directory,ses,{getKey=async()=>{
   const {DatabaseSync}=await import('node:sqlite');const db=new DatabaseSync(file,{readOnly:true});let rows,version;
   try{version=Number(db.prepare("SELECT value FROM meta WHERE key='version'").get()?.value)||0;const columns=new Set(db.prepare('PRAGMA table_info(cookies)').all().map(c=>c.name));rows=db.prepare(`SELECT host_key,name,value,encrypted_value,path,is_secure,is_httponly,CAST(expires_utc AS REAL) AS expires_utc,samesite${columns.has('top_frame_site_key')?',top_frame_site_key':''}${columns.has('is_partitioned')?',is_partitioned':''} FROM cookies LIMIT 10000`).all();}finally{db.close();}
   let key;try{key=await getKey();}catch{throw new Error('Chrome keychain access was not granted. Sign in again in bos, or retry the import.');}
-  let imported=0,skipped=0;const existing=await ses.cookies.get({});const keys=new Set(existing.map(c=>`${c.domain}|${c.path}|${c.name}`));
+  let imported=0,skipped=0,google=0;const existing=await ses.cookies.get({});const keys=new Set(existing.map(c=>`${c.domain}|${c.path}|${c.name}`));
   try{for(const row of rows){
     if(row.top_frame_site_key || row.is_partitioned){skipped++;continue;}
-    if(keys.has(`${row.host_key}|${row.path}|${row.name}`)){skipped++;continue;}
+    const refresh=googleAccountCookie(row);
+    if(!refresh&&keys.has(`${row.host_key}|${row.path}|${row.name}`)){skipped++;continue;}
     const expiry=Number(row.expires_utc)/1000000-11644473600;if(row.expires_utc&&expiry<=Date.now()/1000){skipped++;continue;}
     try{
       const value=decryptChromeCookie(row,key,version),host=row.host_key.replace(/^\./,'');if(!host||/[\s/@]/.test(host)){skipped++;continue;}
       const cookie={url:`${row.is_secure?'https':'http'}://${host}${row.path||'/'}`,...(row.host_key.startsWith('.')?{domain:row.host_key}:{}),name:row.name,value,path:row.path||'/',secure:Boolean(row.is_secure),httpOnly:Boolean(row.is_httponly),sameSite:({0:'no_restriction',1:'lax',2:'strict'})[row.samesite]??'unspecified',...(row.expires_utc?{expirationDate:expiry}:{})};
-      await ses.cookies.set(cookie);keys.add(`${row.host_key}|${row.path}|${row.name}`);imported++;
+      await ses.cookies.set(cookie);keys.add(`${row.host_key}|${row.path}|${row.name}`);imported++;if(refresh)google++;
     }catch{skipped++;}
-  }await ses.cookies.flushStore();return {imported,skipped};}finally{key.fill(0);}
+  }await ses.cookies.flushStore();return {imported,skipped,google};}finally{key.fill(0);}
 }

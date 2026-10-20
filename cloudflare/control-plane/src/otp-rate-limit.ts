@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 import { json } from "./http";
+import { INSTALLATION_OWNED_EMAIL_DOMAIN } from "./installations";
 
 const OTP_SEND_PATH = "/api/auth/email-otp/send-verification-otp";
 const RECIPIENT_WINDOW_MS = 15 * 60 * 1_000;
@@ -44,6 +45,8 @@ export async function limitedOTPResponse(request: Request, env: Env): Promise<Re
 
   const email = await normalizedRecipient(request);
   if (!email) return null;
+  // Owners created for one computer can never receive a code or sign in.
+  if (email.endsWith(`@${INSTALLATION_OWNED_EMAIL_DOMAIN}`)) return json({ success: true });
 
   const now = Date.now();
   const windowCutoff = now - RECIPIENT_WINDOW_MS;

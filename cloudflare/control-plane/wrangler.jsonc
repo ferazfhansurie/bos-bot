@@ -1,40 +1,34 @@
 {
   "$schema": "../../node_modules/wrangler/config-schema.json",
-  "name": "openmausbot-control-plane",
+  "name": "bosbot-control-plane",
   "main": "src/index.ts",
-  "account_id": "0c92969a82eb9e173b013a7e7a02333d",
+  "account_id": "c61ebef98ce08261f656ff078b7af231",
   "compatibility_date": "2026-08-25",
   "compatibility_flags": ["nodejs_compat"],
   "workers_dev": false,
   "routes": [
     {
-      "pattern": "accounts.openmausbot.com",
+      "pattern": "accounts.bosbot.my",
       "custom_domain": true
     }
   ],
   "vars": {
-    "BETTER_AUTH_URL": "https://accounts.openmausbot.com",
-    "EMAIL_FROM": "noreply@openmausbot.com",
+    "BETTER_AUTH_URL": "https://accounts.bosbot.my",
+    "EMAIL_FROM": "noreply@bosbot.my",
     "ALLOWED_ORIGINS": "",
-    "CLOUDFLARE_ACCOUNT_ID": "0c92969a82eb9e173b013a7e7a02333d",
-    "CLOUDFLARE_ZONE_ID": "bae08399bb6f96eb7266c65ac0057eee",
-    "COMPANION_HOST_SUFFIX": "openmausbot.com"
+    "CLOUDFLARE_ACCOUNT_ID": "c61ebef98ce08261f656ff078b7af231",
+    "CLOUDFLARE_ZONE_ID": "cdf09f9f7fd20124e9cd7f967144d1e2",
+    "COMPANION_HOST_SUFFIX": "bosbot.my"
   },
   "secrets": {
-    "required": ["BETTER_AUTH_SECRET", "CLOUDFLARE_API_TOKEN"]
+    "required": ["BETTER_AUTH_SECRET", "CLOUDFLARE_API_TOKEN", "RESEND_API_KEY"]
   },
   "d1_databases": [
     {
       "binding": "DB",
-      "database_name": "openmausbot-control-plane",
-      "database_id": "8a7c34ed-5428-4ae2-8722-fef2fe9bf160",
+      "database_name": "bosbot-control-plane",
+      "database_id": "a5dbe0dd-67fd-484f-b8e7-661e5b833e2a",
       "migrations_dir": "migrations"
-    }
-  ],
-  "send_email": [
-    {
-      "name": "EMAIL",
-      "allowed_sender_addresses": ["noreply@openmausbot.com"]
     }
   ],
   "triggers": {

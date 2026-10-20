@@ -59,11 +59,15 @@ import {
 import {
   companionKeepAwakeWanted,
   createManagedCompanionTunnel,
+  hasExpiredLegacyManagedCompanionTunnel,
   hostedCompanionStatus,
+  LEGACY_MANAGED_COMPANION_RETIRE_AT_FIELD,
+  legacyManagedCompanionTunnelAccess,
   managedCompanionTunnelAccess,
   resolveCloudflaredBinary,
   resolveManagedCompanionGuardian,
   withManagedCompanionTunnelAccess,
+  withoutLegacyManagedCompanionTunnel,
   withoutManagedCompanionTunnelAccess,
 } from "./managed-companion-tunnel.mjs";
 import { createSecureCredentialState } from "./secure-credential-state.mjs";
@@ -88,6 +92,7 @@ import { readSecureCredentials } from "./secure-credentials.mjs";
 import { createControlPlaneClient } from "./control-plane-client.mjs";
 import {
   companionAccountCleanupPending,
+  companionAccountSummary,
   createCompanionAccountService,
   resolveCompanionControlPlaneURL,
 } from "./companion-account-service.mjs";
@@ -775,7 +780,9 @@ function syncCompanionHostedState(
   syncCompanionKeepAwake(companionKeepAwakeWanted({
     companionEnabled,
     keepAwake,
-    hostedConfigured: Boolean(managedCompanionTunnelAccess(secureCredentials)),
+    hostedConfigured: Boolean(
+      managedCompanionTunnelAccess(secureCredentials) ?? legacyManagedCompanionTunnelAccess(secureCredentials),
+    ),
     hostedStatus: hosted,
   }));
   if (companionEnabled) {
@@ -865,15 +872,57 @@ function reconcileCompanionAdvertisement(
   return work;
 }
 
+let legacyCompanionRetireTimer = null;
+
+/** The retiring route ends on time even in an app that stays open for weeks. */
+function scheduleLegacyCompanionRetirement() {
+  clearTimeout(legacyCompanionRetireTimer);
+  legacyCompanionRetireTimer = null;
+  const retireAt = secureCredentials?.[LEGACY_MANAGED_COMPANION_RETIRE_AT_FIELD];
+  if (!legacyManagedCompanionTunnelAccess(secureCredentials) || !Number.isSafeInteger(retireAt)) return;
+  const delay = Math.min(Math.max(retireAt - Date.now() + 1_000, 1_000), 2_147_000_000);
+  legacyCompanionRetireTimer = setTimeout(() => {
+    legacyCompanionRetireTimer = null;
+    void (async () => {
+      if (managedCompanionTunnelAccess(secureCredentials) || legacyManagedCompanionTunnelAccess(secureCredentials)) {
+        if (companionDesiredThisLaunch) await startManagedCompanionConnection({ waitForVerification: true });
+        else scheduleLegacyCompanionRetirement();
+        return;
+      }
+      await updateSecureCredentialDocument(withoutLegacyManagedCompanionTunnel);
+      await managedCompanionConnector?.stop();
+      if (companionDesiredThisLaunch) await reconcileCompanionAdvertisement(null);
+    })().catch((error) => slog(`retiring companion route failed: ${error?.message ?? error}`));
+  }, delay);
+  legacyCompanionRetireTimer.unref?.();
+}
+
 async function startManagedCompanionConnection({ waitForVerification = true } = {}) {
   if (companionAccountCleanupPending(secureCredentials)) {
     return publicManagedCompanionState();
   }
-  const access = managedCompanionTunnelAccess(secureCredentials);
+  if (hasExpiredLegacyManagedCompanionTunnel(secureCredentials)) {
+    await updateSecureCredentialDocument(withoutLegacyManagedCompanionTunnel).catch((error) => {
+      slog(`retired companion route cleanup failed: ${error?.message ?? error}`);
+    });
+  }
+  // After a move to a new control plane the previous connector keeps running
+  // beside the new one until it retires, so phones paired through the old
+  // address reach this computer and pick up the new one on their next
+  // connection. If the new address could not be provisioned yet, the old
+  // route stays the only one.
+  const primary = managedCompanionTunnelAccess(secureCredentials);
+  const legacy = legacyManagedCompanionTunnelAccess(secureCredentials);
+  const access = primary ?? legacy;
   if (!access) return publicManagedCompanionState();
   const target = companionOriginTarget();
   if (!target) return publicManagedCompanionState();
-  const operation = ensureManagedCompanionConnector().start({ ...access, originTarget: target });
+  const operation = ensureManagedCompanionConnector().start({
+    ...access,
+    legacy: primary ? legacy : null,
+    originTarget: target,
+  });
+  scheduleLegacyCompanionRetirement();
   if (!waitForVerification) {
     void operation.catch(() => {});
     return publicManagedCompanionState();
@@ -988,8 +1037,18 @@ function ensureCompanionAccountService() {
       // Bonjour, and Tailscale pairing remain completely independent.
     }
   }
+  const logSummary = () => {
+    try {
+      slog(`companion account: ${companionAccountSummary(
+        secureCredentialState?.read() ?? secureCredentials,
+        client ? new URL(baseURL).origin : "",
+      )} controlPlane=${client ? new URL(baseURL).hostname : "off"}`);
+    } catch {}
+  };
+  logSummary();
   companionAccountService = createCompanionAccountService({
     client,
+    controlPlaneOrigin: client ? new URL(baseURL).origin : "",
     readCredentials: () => secureCredentialState?.read() ?? secureCredentials,
     updateCredentials: updateSecureCredentialDocument,
     identity: {
@@ -1007,6 +1066,12 @@ function ensureCompanionAccountService() {
     stopManagedEndpoint: stopManagedCompanionEndpointLocally,
     managedConnectionState: publicManagedCompanionState,
     companionIsOn: () => companionDesiredThisLaunch,
+    // The phone route comes with no email code: this computer registers
+    // itself and any older route keeps serving paired phones until it retires.
+    // Not while the credential store is unreadable: nothing registered then
+    // could be saved, and an unsaved registration is a leaked tunnel.
+    silentRegistration: () => !credentialStoreUnavailable,
+    onAccountChanged: logSummary,
   });
   return companionAccountService;
 }

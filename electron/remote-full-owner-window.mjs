@@ -3,9 +3,9 @@ import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
 import { createControlPlaneClient } from "./control-plane-client.mjs";
 import { controlPlaneUnavailableReason, resolveCompanionControlPlaneURL } from "./companion-account-service.mjs";
-/** The owner authority is the configured control plane (BOS_CONTROL_PLANE_URL
- * or legacy OMB_CONTROL_PLANE_URL). No hosted default: unset disables remote
- * owner sign-in and nothing is fetched. */
+/** The owner authority is the control plane: accounts.bosbot.my unless
+ * BOS_CONTROL_PLANE_URL (or legacy OMB_CONTROL_PLANE_URL) says otherwise. Set
+ * empty, remote owner sign-in is off and nothing is fetched. */
 export function remoteOwnerAuthorityOrigin(environment = compatEnv) {
   return resolveCompanionControlPlaneURL({ environment });
 }

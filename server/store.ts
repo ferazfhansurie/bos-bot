@@ -1579,6 +1579,18 @@ export class Store {
     return this.bots.find((b) => b.id === id) ?? null;
   }
 
+  /** Move a bot to the top of the roster. False when it is unknown. */
+  moveBotFirst(id: string): boolean {
+    const index = this.bots.findIndex((b) => b.id === id);
+    if (index < 0) return false;
+    if (index === 0) return true;
+    const before = this.bots;
+    this.bots = [before[index], ...before.slice(0, index), ...before.slice(index + 1)];
+    try { this.saveBots(); } catch (error) { this.bots = before; throw error; }
+    this.emit({ type: "bot", botId: id });
+    return true;
+  }
+
   botByThread(threadId: string) {
     return this.bots.find((b) => b.threadId === threadId || b.tasks?.some((t) => t.threadId === threadId)) ?? null;
   }

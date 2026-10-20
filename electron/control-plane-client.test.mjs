@@ -251,6 +251,63 @@ describe("control-plane desktop client", () => {
     });
   });
 
+  it("registers this computer with no account bearer and validates the credential", async () => {
+    const clientInstanceId = "22222222-2222-4222-8222-222222222222";
+    const fetchImpl = vi.fn(async (url, init) => {
+      expect(url).toBe("https://accounts.bosbot.my/v1/installations/register");
+      expect(init.method).toBe("POST");
+      expect(init.headers.has("authorization")).toBe(false);
+      expect(JSON.parse(init.body)).toEqual({ clientInstanceId, name: "Mac", platform: "darwin", appVersion: "2.1.0" });
+      return jsonResponse({
+        installation: { id: INSTALL_ID, clientInstanceId, name: "Mac", platform: "darwin" },
+        credential: INSTALL,
+        credentialExpiresAt: 1_900_000_000_000,
+      }, { status: 201 });
+    });
+    const client = createControlPlaneClient({ baseURL: "https://accounts.bosbot.my", fetchImpl });
+    await expect(
+      client.registerInstallation({ clientInstanceId, name: "Mac", platform: "darwin", appVersion: "2.1.0" }),
+    ).resolves.toMatchObject({ installation: { id: INSTALL_ID, clientInstanceId }, credential: INSTALL, credentialExpiresAt: 1_900_000_000_000 });
+
+    // A server answering for a different computer, or with a malformed credential, is refused.
+    fetchImpl.mockImplementationOnce(async () => jsonResponse({
+      installation: { id: INSTALL_ID, clientInstanceId: "33333333-3333-4333-8333-333333333333" },
+      credential: INSTALL,
+    }, { status: 201 }));
+    await expect(client.registerInstallation({ clientInstanceId, name: "Mac", platform: "darwin" })).rejects.toMatchObject({ code: "invalid_response" });
+    fetchImpl.mockImplementationOnce(async () => jsonResponse({
+      installation: { id: INSTALL_ID, clientInstanceId },
+      credential: "nope",
+    }, { status: 201 }));
+    await expect(client.registerInstallation({ clientInstanceId, name: "Mac", platform: "darwin" })).rejects.toMatchObject({ code: "invalid_response" });
+    await expect(client.registerInstallation({ clientInstanceId: "-bad id", name: "Mac" })).rejects.toMatchObject({ code: "invalid_client_identity" });
+  });
+
+  it("inspects, rotates and revokes itself with the installation credential", async () => {
+    const clientInstanceId = "22222222-2222-4222-8222-222222222222";
+    const rotated = `omb_install_${"c".repeat(22)}.${"d".repeat(43)}`;
+    const calls = [];
+    const fetchImpl = vi.fn(async (url, init) => {
+      calls.push([init.method, url, init.headers.get("authorization")]);
+      if (init.method === "DELETE") return new Response(null, { status: 204 });
+      if (url.endsWith("/rotate")) return jsonResponse({ credential: rotated, credentialExpiresAt: 5 });
+      return jsonResponse({ installation: { id: INSTALL_ID, clientInstanceId }, credentialExpiresAt: 7 });
+    });
+    const client = createControlPlaneClient({ baseURL: "https://accounts.bosbot.my", fetchImpl });
+    await expect(client.inspectSelf(INSTALL)).resolves.toMatchObject({ installation: { id: INSTALL_ID }, credentialExpiresAt: 7 });
+    await expect(client.rotateSelfCredential(INSTALL)).resolves.toEqual({ credential: rotated, credentialExpiresAt: 5 });
+    await expect(client.revokeSelf(INSTALL)).resolves.toBeUndefined();
+    expect(calls).toEqual([
+      ["GET", "https://accounts.bosbot.my/v1/installations/self", `Bearer ${INSTALL}`],
+      ["POST", "https://accounts.bosbot.my/v1/installations/self/credentials/rotate", `Bearer ${INSTALL}`],
+      ["DELETE", "https://accounts.bosbot.my/v1/installations/self", `Bearer ${INSTALL}`],
+    ]);
+    for (const call of [client.inspectSelf, client.rotateSelfCredential, client.revokeSelf]) {
+      await expect(call(ACCOUNT)).rejects.toMatchObject({ code: "signed_out", status: 401 });
+    }
+    expect(fetchImpl).toHaveBeenCalledTimes(3);
+  });
+
   it("maps bounded server error codes and hides arbitrary response text", async () => {
     const client = createControlPlaneClient({
       baseURL: "https://accounts.openmausbot.com",

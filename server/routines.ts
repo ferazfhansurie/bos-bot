@@ -106,6 +106,8 @@ export interface Routine {
   lastSkippedAt?: number;
   /** Derived from retained terminal receipts, not another persisted authority. */
   failureStreak?: number;
+  /** A bot's own one-time check-back (set_next_wake); removed once its run settles. */
+  wake?: boolean;
   /** Conversation that created this routine in chat. Calendar/import-created
    * routines intentionally have no source, and older files migrate in place. */
   sourceThreadId?: string;
@@ -167,6 +169,11 @@ export interface RoutineRun {
   quiet?: boolean;
   /** Human-readable reason the detached execution is waiting. */
   attention?: string;
+  /** This failed attempt was transient and a fresh run replaced it, so it
+   * never surfaces in chat or as a failure push. */
+  retried?: boolean;
+  /** The run this one retries after a transient failure. One retry only. */
+  retryOf?: string;
   error?: string;
   cost?: number | null;
   denials?: string[];
@@ -438,6 +445,31 @@ function cloneRoutine(routine: Routine): Routine {
     attachments: cloneAttachments(routine.attachments),
   };
 }
+
+/** 23:00–08:00 is nobody's check-in time: a wake that lands there moves to 08:00. */
+function outsideQuietHours(at: number): number {
+  const date = new Date(at);
+  const hour = date.getHours();
+  if (hour >= 8 && hour < 23) return at;
+  const morning = new Date(date);
+  if (hour >= 23) morning.setDate(morning.getDate() + 1);
+  morning.setHours(8, 0, 0, 0);
+  return morning.getTime();
+}
+
+function wakePrompt(why: string, setFor: number): string {
+  return [
+    `You set this check-back yourself, for ${new Date(setFor).toISOString()}: "${why}".`,
+    "Look at what changed since then: this conversation, and any connected app the reason needs (whatsapp, email, calendar).",
+    "If the person already handled it, or there is nothing they would want to hear right now, reply with exactly NOTHING_TO_REPORT and nothing else.",
+    "Otherwise write the one or two lines you'd text them, in your normal voice: what you found and what you suggest. It lands in their chat as your message. No preamble, no mention of check-backs or routines.",
+    "If it needs another look later, you may call set_next_wake again.",
+  ].join("\n");
+}
+
+/** Failures worth one automatic retry: nothing about the routine itself was
+ * wrong. A restart is deliberately absent: interrupted work is never resumed. */
+const TRANSIENT_RUN_ERROR = /stop_sequence|timed? ?out|ETIMEDOUT|ECONNRESET|overloaded|rate.?limit|529|503|No response from API/i;
 
 function cloneRun(run: RoutineRun): RoutineRun {
   return {
@@ -767,6 +799,8 @@ export class RoutineManager {
   private timer: ReturnType<typeof setInterval> | null = null;
   private ticking = false;
 
+  private readonly wakeLog = new Map<string, number[]>();
+
   constructor(options: RoutineManagerOptions) {
     this.options = options;
     this.file = options.file ?? join(DATA_DIR, "routines.json");
@@ -1022,6 +1056,43 @@ export class RoutineManager {
     }, discardResults);
     this.emitRoutine(routine);
     return this.routineWithHealth(routine);
+  }
+
+  /** A bot's own "i'll check back at 4". One-time, reports to the chat it was
+   * set in, and is removed once its run settles. Caps: three pending and
+   * eight a day per bot; nothing fires between 23:00 and 08:00. */
+  createWake(input: { botId: string; threadId: string; at: number; why: string }): { routine: Routine; at: number } {
+    const now = this.now();
+    const why = input.why.trim().replace(/\s+/g, " ").slice(0, 300);
+    if (!why) throw new Error("Say why you're checking back.");
+    if (!Number.isFinite(input.at) || input.at <= now) throw new Error("Pick a time in the future.");
+    if (input.at > now + 14 * 24 * 60 * 60_000) throw new Error("Wakes reach at most 14 days ahead. Use a routine for anything later.");
+    const mine = this.routines.filter((routine) => routine.wake && routine.botId === input.botId);
+    if (mine.length >= 3) throw new Error(`You already have ${mine.length} check-backs waiting (${mine.map((routine) => routine.name).join("; ")}). Let one fire first.`);
+    const today = (this.wakeLog.get(input.botId) ?? []).filter((at) => at > now - 24 * 60 * 60_000);
+    if (today.length >= 8) throw new Error("That's 8 check-backs in the last day, the daily cap. Fold this into one you already set.");
+    const at = outsideQuietHours(input.at);
+    const clean = sanitizeInput({
+      name: `check back: ${why}`.slice(0, 80),
+      prompt: wakePrompt(why, input.at),
+      botId: input.botId,
+      schedule: { type: "once", at },
+      notificationPolicy: "all",
+      timeoutMinutes: 20,
+    }, now);
+    const routine: Routine = {
+      id: randomUUID(),
+      ...clean,
+      wake: true,
+      sourceThreadId: input.threadId,
+      nextRunAt: this.initialOccurrence(clean.schedule, now),
+      createdAt: now,
+      updatedAt: now,
+    };
+    this.commitMutation(() => { this.routines.unshift(routine); });
+    this.wakeLog.set(input.botId, [...today, now]);
+    this.emitRoutine(routine);
+    return { routine: this.routineWithHealth(routine), at };
   }
 
   update(
@@ -1695,9 +1766,30 @@ export class RoutineManager {
     run.attention = undefined;
     run.error = redactSecretsInText(message).slice(0, 500);
     run.finishedAt = this.now();
+    const retry = TRANSIENT_RUN_ERROR.test(message) ? this.queueRetry(run) : null;
+    if (retry) run.retried = true;
     this.save();
     this.emitRun(run);
+    if (retry) {
+      this.emitRun(retry);
+      queueMicrotask(() => void this.tick());
+      return;
+    }
     this.options.onRunFailed?.(cloneRun(run));
+  }
+
+  /** One fresh attempt for a run that died of something passing (a model
+   * stop, an overloaded or timed-out call). Never retries a retry, a webhook delivery,
+   * a room goal or a deleted routine. */
+  private queueRetry(run: RoutineRun): RoutineRun | null {
+    if (run.retryOf || run.target !== "bot" || run.triggerSource === "webhook") return null;
+    const routine = this.routines.find((candidate) => candidate.id === run.routineId);
+    if (!routine) return null;
+    const allocations: ResultsThreadAllocation[] = [];
+    const retry = this.newRun(routine, this.now(), run.manual, allocations, run.sourceThreadId);
+    retry.retryOf = run.id;
+    if (run.triggerSource) retry.triggerSource = run.triggerSource;
+    return retry;
   }
 
   private missQueuedRun(run: RoutineRun, message: string) {
@@ -1811,6 +1903,10 @@ export class RoutineManager {
   private emitRun(run: RoutineRun) {
     this.options.emit?.({ kind: "routine.run", run: cloneRun(run) });
     this.notifyRunChanged(run);
+    if (!run.retried && ["completed", "failed", "cancelled", "missed"].includes(run.status)) {
+      const wake = this.routines.find(candidate => candidate.id === run.routineId && candidate.wake);
+      if (wake) queueMicrotask(() => { this.remove(wake.id); });
+    }
     if (run.status === "completed" || run.status === "failed") {
       const routine = this.routines.find(candidate => candidate.id === run.routineId);
       if (routine) this.emitRoutine(routine);

@@ -648,6 +648,7 @@ describe("agents-proxy MCP surface", () => {
       "tool_result_read",
       "list_shared_computers",
       "shared_computer",
+      "set_next_wake",
       "ring_owner",
       "list_bots",
       "list_rooms",

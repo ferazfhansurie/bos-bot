@@ -47,7 +47,10 @@ would make operator cleanup impossible.
 | `GET`, `POST` | `/v1/installations` | account bearer |
 | `POST` | `/v1/installations/:id/credentials/rotate` | owning account bearer |
 | `DELETE` | `/v1/installations/:id` | owning account bearer |
+| `POST` | `/v1/installations/register` | none (rate-limited, capped) |
 | `GET` | `/v1/installations/self` | installation credential |
+| `POST` | `/v1/installations/self/credentials/rotate` | installation-owned credential |
+| `DELETE` | `/v1/installations/self` | installation-owned credential |
 | `GET`, `POST`, `DELETE` | `/v1/installations/self/endpoint` | installation credential |
 
 Installation registration requires a stable `clientInstanceId`, a display
@@ -66,6 +69,21 @@ signed-in desktop can rotate ahead of time. `/v1/installations/self` rejects
 expired credentials and records both credential use and installation
 `lastSeenAt`. Rotations are serialized with a one-minute cooldown, so concurrent
 requests cannot both return credentials while one invalidates the other.
+
+### Installation-owned registration
+
+`POST /v1/installations/register` takes the same body as account creation and
+needs no email. It creates a fresh owner for that one computer (an unverified
+`@installations.bosbot.invalid` address that OTP mail refuses), the
+installation and its credential, so a desktop can get a managed endpoint on
+its own. It is trust on first use: a repeat with the same client ID makes a new
+installation and never returns an existing one. From then on the credential is
+the only proof; it renews itself with `POST /v1/installations/self/credentials/rotate`
+and signs out with `DELETE /v1/installations/self`, which also schedules endpoint
+cleanup. Both refuse account-owned installations. Registration is limited to 5
+per caller IP and 100 overall per hour, and closes (503 `registration_closed`)
+at 500 active installation-owned installations, so nobody can farm tunnels on
+the account.
 
 ### Managed endpoint contract
 
@@ -142,11 +160,27 @@ pnpm --filter @bosbot/control-plane exec wrangler dev --config wrangler.jsonc
 
 Do not commit `.dev.vars`.
 
-## Production blockers
+## BOS Bot's deployment
 
-The checked-in Wrangler file is intentionally non-deployable production
-scaffolding. No remote resource was created or changed while preparing it.
-Before a production deployment, an operator must:
+Since 2026-10-19 this Worker runs as BOS Bot's own control plane at
+`https://accounts.bosbot.my` (D1 `bosbot-control-plane`, companion hosts
+`c-<id>.bosbot.my`, cleanup cron every 5 minutes). It is the desktop and
+`bosbot login` default. OTP mail goes out as `noreply@bosbot.my` through a
+Resend send-only key (`RESEND_API_KEY` secret) instead of the `send_email`
+binding, which needs Email Routing on the zone.
+
+A desktop signed in to the earlier upstream service moves over on its next
+sign-in: the old account is forgotten locally, without calls to either
+service, and its connector keeps running beside the new one for 14 days,
+so phones paired through the old address reconnect and pick up the new one
+without a re-scan. The old address is advertised only while it is the sole
+route (new sign-in failed or not done yet); once a new route exists, only the
+new one is advertised.
+
+## Production blockers (self-hosting your own)
+
+The steps below are what a fresh deployment of this Worker needs. Before a
+production deployment, an operator must:
 
 1. Choose and route an HTTPS hostname, then replace `BETTER_AUTH_URL`. The
    Worker has `workers_dev` disabled and no production route in this PR.

@@ -1,5 +1,5 @@
 // The connector guardian as a process: `node managed-companion-guardian-main.mjs
-// <cloudflared> <tokenFile> <socketPath> <pid> <originPort>`. Spawned by
+// <cloudflared> <tokenFile> <socketPath> <pid> <originPort> [legacyTokenFile]`. Spawned by
 // managed-companion-tunnel.mjs (desktop) and, bundled as
 // dist-server/tunnel-guardian.js, by `bosbot serve --tunnel`. Runs
 // unconditionally: nothing imports this file, and the library it wraps has

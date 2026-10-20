@@ -5,7 +5,7 @@ import { handleInternalPageRoute, handleOwnerPageRoute } from "./page-routes.ts"
 import { VideoStore } from "./videos.ts";
 import { handleInternalVideoRoute, handleOwnerVideoRoute } from "./video-routes.ts";
 import { validateOutputDraft } from "../shared/output-draft.ts";
-import { shouldSurfaceRoutineRun } from "../shared/routine-notifications.ts";
+import { ROUTINE_IMPORTANT_MARKER, shouldSurfaceRoutineRun } from "../shared/routine-notifications.ts";
 import { pendingRequestMessage, requestContinuationUrl } from "./request-continuation.ts";
 import { recordRetrievedMemory, answerMemorySources, correctAnswerMemory } from "./memory-sources.ts";
 import { OutboundReviews, outboundContentSchema } from "./outbound-reviews.ts";
@@ -38,7 +38,7 @@ import { sharedMentionTargets } from "../shared/shared-mentions.ts";
 // (upstream rule): the React app dispatches typed commands over HTTP and
 // folds one SSE event stream; every provider process runs here.
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
-import { appendFileSync, existsSync, readFileSync, rmSync, mkdirSync } from "node:fs";
+import { appendFileSync, existsSync, readFileSync, rmSync, mkdirSync, writeFileSync } from "node:fs";
 import { TelegramChannels } from "./telegram-channels.ts";
 import { writeFileAtomic } from "./atomic.ts";
 import { rm as removeDirectory } from "node:fs/promises";
@@ -4624,6 +4624,10 @@ const providerLabel = (provider: string): string => {
 
 /** Put a notification on the wire. Clients decide what to do with it — a
  * desktop notification now, a push to a paired phone later. */
+/** When the owner last sent a message themselves. A reply that lands while
+ * they are mid-conversation shows up in the app; it does not buzz the phone. */
+let ownerActiveAt = 0;
+const OWNER_ACTIVE_MS = 3 * 60_000;
 function notify(notification: Notification | null) {
   // nested rather than spread — the frame's own `kind` names the frame,
   // exactly like {kind:"message", message} and {kind:"bot", bot}
@@ -4635,6 +4639,7 @@ function notify(notification: Notification | null) {
     if (room) for (const personId of roomPushPeople(room, multiplayerActors.ownerId, id => canReadChannel(room, id), multiplayerActors.ownerId, notification.kind)) {
       void apnsPush.send(personId, notification.title, notification.body, { roomId: room.id, threadId: notification.threadId, senderId: `bot:${notification.botId}`, senderName: notification.title }).catch(() => {});
     }
+    if (notification.kind === "done" && Date.now() - ownerActiveAt < OWNER_ACTIVE_MS) return;
     void apnsPush.send(multiplayerActors.ownerId, notification.title, notification.body, ownerPushTarget(notification)).catch(error =>
       console.warn(`bot push failed: ${error instanceof Error ? error.message : "unknown failure"}`));
   }
@@ -8917,6 +8922,7 @@ async function startTurn(
           ...(opts?.origin ? { origin: opts.origin } : {}),
         });
   }
+  if (!opts?.automationSource && !opts?.unattended && !opts?.commsDepth && !opts?.peerAsk && !opts?.sender) ownerActiveAt = Date.now();
   // a person's message to a signed-out engine waits for the sign-in instead
   // of failing at the provider
   if (!opts?.cardContinuation && !opts?.compactOnly && commsDepth === 0 && opts?.automationSource === undefined && !opts?.unattended && !sharedContext && !opts?.runOn &&
@@ -9458,8 +9464,16 @@ async function startTurn(
       if (wants === "vm") {
         if (await attachLocalVm(true)) computerKind = "vm";
       } else if (wants === "local") {
-        integrations.localComputer = await mountHostComputer(resourceOwner, bot.id, mountsLocalComputer);
-        computerKind = "local";
+        try {
+          integrations.localComputer = await mountHostComputer(resourceOwner, bot.id, mountsLocalComputer);
+          computerKind = "local";
+        } catch (error) {
+          // Most routines (a brief, a disk check, a wake) never touch the
+          // screen. A driver that isn't ready must not fail them; the turn
+          // just runs without this computer, like a bot set to Off.
+          if (!opts?.automationSource || !/CUA Driver is not ready/i.test(error instanceof Error ? error.message : String(error))) throw error;
+          console.warn(`[routines] ${bot.name}: running without this computer — ${error instanceof Error ? error.message : String(error)}`);
+        }
       }
 
       // A VPS is a local-agent computer mount, never a remote agent runner.
@@ -10029,7 +10043,7 @@ function routineSourceOwner(run: Pick<RoutineRun, "botId" | "sourceThreadId" | "
 }
 
 function routineSourceThread(run: RoutineRun): string | null {
-  return routineSourceOwner(run)?.threadId ?? null;
+  return (routineSourceOwner(run) ?? routineFallbackOwner(run))?.threadId ?? null;
 }
 
 function routineRunCard(run: RoutineRun): NonNullable<Message["routineRun"]> {
@@ -10081,11 +10095,13 @@ function routineRunFallbackText(card: NonNullable<Message["routineRun"]>): strin
   return `Routine “${card.routineName}” ${state}`;
 }
 
-/** Upsert one durable lifecycle card per run. Replaying the same transition,
- * including restart recovery, patches the existing run id instead of adding
- * another chat message. */
+/** Routine v2 delivery. Progress (queued/running) never posts, and neither
+ * does a quiet run or a transient failure that was retried. A run with
+ * something to say lands as the bot's own message in the chat it reports to,
+ * reading like the bot texting you, with the run attached for the footer. A
+ * failure lands once a day per routine as one plain line with the fix. */
 function syncRoutineRunToSource(run: RoutineRun): string | null {
-  const source = routineSourceOwner(run);
+  const source = routineSourceOwner(run) ?? routineFallbackOwner(run);
   if (!source) {
     const execution = run.threadId ? store.taskByThread(run.botId, run.threadId) : null;
     if (execution?.routineRunId === run.id) {
@@ -10097,31 +10113,10 @@ function syncRoutineRunToSource(run: RoutineRun): string | null {
     return null;
   }
   const sourceThreadId = source.threadId;
-  const card = routineRunCard(run);
-  const text = routineRunFallbackText(card);
-  const existing = store.messagesFor(sourceThreadId).find(
-    (message) => message.kind === "routine.run" && message.routineRun?.runId === run.id,
-  );
-  const statusChanged = existing?.routineRun?.status !== run.status;
-  if (existing) {
-    store.patchMessage(sourceThreadId, existing.id, { text, routineRun: card });
-  } else {
-    const message: Omit<Message, "id" | "at"> = {
-      role: "bot",
-      kind: "routine.run",
-      text,
-      routineRun: card,
-    };
-    if (source.group) {
-      message.from = { botId: source.bot.id, name: source.bot.name, color: source.bot.color };
-    }
-    store.appendMessage(sourceThreadId, message);
-  }
 
-  // Mark only the fresh execution, after its first running card persisted
-  // and before dispatch adds any transcript. A user can later promote it by
-  // sending a normal follow-up; replaying/marking the old receipt seen must
-  // never hide that conversation again.
+  // Mark only the fresh execution, before dispatch adds any transcript. A
+  // user can later promote it by sending a normal follow-up; replaying or
+  // marking the old receipt seen must never hide that conversation again.
   if (run.target === "bot" && run.triggerSource !== "webhook" && run.threadId && run.threadId !== sourceThreadId) {
     const execution = store.taskByThread(run.botId, run.threadId);
     const freshExecution = execution && run.status === "running" && !execution.routineRunId &&
@@ -10131,13 +10126,124 @@ function syncRoutineRunToSource(run: RoutineRun): string | null {
     }
   }
 
-  // Merely queueing/running is ambient progress. Attention and terminal
-  // states become unread in the conversation where the user asked for them.
-  if (statusChanged && ["waiting", "completed", "failed", "missed"].includes(run.status) && shouldSurfaceRoutineRun(run)) {
+  const card = routineRunCard(run);
+  const existing = store.messagesFor(sourceThreadId).find(
+    (message) => message.routineRun?.runId === run.id,
+  );
+  if (run.target !== "bot") {
+    // A room goal keeps its one lifecycle card: the goal's own transcript is
+    // the result, and the card is how the room finds it.
+    const text = routineRunFallbackText(card);
+    if (existing) store.patchMessage(sourceThreadId, existing.id, { text, routineRun: card });
+    else {
+      const message: Omit<Message, "id" | "at"> = { role: "bot", kind: "routine.run", text, routineRun: card };
+      if (source.group) message.from = { botId: source.bot.id, name: source.bot.name, color: source.bot.color };
+      store.appendMessage(sourceThreadId, message);
+    }
+    if (existing?.routineRun?.status !== run.status && ["waiting", "completed", "failed", "missed"].includes(run.status) && shouldSurfaceRoutineRun(run)) {
+      if (source.group) store.patchGroup(source.group.id, { unread: true });
+      else store.patchTask(source.bot.id, sourceThreadId, { unread: true });
+    }
+    return sourceThreadId;
+  }
+  const delivery = routineRunDelivery(run, sourceThreadId);
+  if (!delivery) {
+    // A card from before v2 keeps updating in place until it settles.
+    if (existing?.kind === "routine.run") store.patchMessage(sourceThreadId, existing.id, { text: routineRunFallbackText(card), routineRun: card });
+    return sourceThreadId;
+  }
+  const statusChanged = existing?.routineRun?.status !== run.status;
+  if (existing) {
+    store.patchMessage(sourceThreadId, existing.id, { kind: "text", text: delivery.text, routineRun: card, ...(delivery.attachments ? { attachments: delivery.attachments } : {}) });
+  } else {
+    const message: Omit<Message, "id" | "at"> = { role: "bot", kind: "text", text: delivery.text, routineRun: card };
+    if (delivery.attachments) message.attachments = delivery.attachments;
+    if (source.group) message.from = { botId: source.bot.id, name: source.bot.name, color: source.bot.color };
+    store.appendMessage(sourceThreadId, message);
+  }
+  if (statusChanged) {
     if (source.group) store.patchGroup(source.group.id, { unread: true });
     else store.patchTask(source.bot.id, sourceThreadId, { unread: true });
   }
   return sourceThreadId;
+}
+
+/** A routine with no chat to report to talks in its bot's main chat, which is
+ * where a person expects "every morning, tell me…" to show up. */
+function routineFallbackOwner(run: Pick<RoutineRun, "botId" | "target" | "sourceThreadId" | "resultsThreadId">) {
+  // A destination that existed and was deleted keeps the older rule: the
+  // execution itself becomes the visible conversation.
+  if (run.target !== "bot" || run.resultsThreadId || run.sourceThreadId) return null;
+  const bot = store.bot(run.botId);
+  return bot && !bot.hidden && bot.threadId ? { bot, group: undefined, threadId: bot.threadId } : null;
+}
+
+/** What a run says in chat, or null when it should stay silent. */
+function routineRunDelivery(run: RoutineRun, sourceThreadId: string): { text: string; attachments?: Message["attachments"] } | null {
+  if (run.target !== "bot") return null;
+  if (run.retried || run.quiet || !shouldSurfaceRoutineRun(run)) return null;
+  if (run.status === "waiting") {
+    // Waiting on its own delegated work is progress, not a question.
+    if (!run.attention || run.attention === "Waiting for delegated work to finish") return null;
+    return { text: `"${redactSecretsInText(run.routineName)}" needs you: ${redactSecretsInText(run.attention)}` };
+  }
+  if (run.status === "completed") {
+    const output = stripRoutineMarkers(run.output ?? "");
+    const reply = run.threadId ? routineFinalReply(run.threadId) : null;
+    // Prefer the full reply over the run log's 2,000-character copy, but only
+    // when it is the same reply (the transcript can lag the run by a beat).
+    const full = reply ? stripRoutineMarkers(redactSecretsInText(reply.text)) : "";
+    const useFull = Boolean(full) && (!output || full.startsWith(output.slice(0, 200)));
+    const text = useFull ? full : output;
+    if (!text) return null;
+    return { text: redactSecretsInText(text), ...(useFull && reply?.attachments?.length ? { attachments: reply.attachments } : {}) };
+  }
+  if (run.status === "failed" || run.status === "missed") {
+    // One failure line per routine per day in this chat; later ones only
+    // update the run log, so a broken routine cannot flood the conversation.
+    const dayAgo = Date.now() - 24 * 60 * 60_000;
+    const already = store.messagesFor(sourceThreadId).some((message) =>
+      message.kind === "text" && message.routineRun?.routineId === run.routineId && message.routineRun.runId !== run.id &&
+      (message.routineRun.status === "failed" || message.routineRun.status === "missed") && (message.at ?? 0) >= dayAgo);
+    if (already) return null;
+    return { text: routineFailureLine(run) };
+  }
+  return null;
+}
+
+/** The execution's last full reply: the run log keeps only 2,000 characters. */
+function routineFinalReply(threadId: string): { text: string; attachments?: Message["attachments"] } | null {
+  const messages = store.messagesFor(threadId);
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index]!;
+    if (message.role === "bot" && message.kind === "text" && message.text?.trim()) {
+      return { text: message.text, ...(message.attachments?.length ? { attachments: message.attachments } : {}) };
+    }
+  }
+  return null;
+}
+
+function stripRoutineMarkers(text: string): string {
+  const trimmed = text.trim();
+  return trimmed.startsWith(ROUTINE_IMPORTANT_MARKER) ? trimmed.slice(ROUTINE_IMPORTANT_MARKER.length).trim() : trimmed;
+}
+
+/** A failure in plain words, with the fix when we know it. */
+function routineFailureLine(run: RoutineRun): string {
+  const name = redactSecretsInText(run.routineName);
+  const error = redactSecretsInText(run.error ?? "").trim();
+  const fix = /CUA Driver is not ready/i.test(error)
+    ? "the computer-use driver isn't ready. open settings → computer and allow the permissions, or restart BOS Bot."
+    : /no such room|room .*(missing|no longer)/i.test(error)
+      ? "the room it posts to is gone. tell me which room to use and i'll update it."
+      : /run limit/i.test(error)
+        ? "it hit its time limit. i can raise the limit or split the job."
+        : /assigned bot no longer exists/i.test(error)
+          ? "the bot it runs as was deleted. pick another bot for it."
+          : run.status === "missed"
+            ? "this computer was off or asleep when it was due."
+            : error ? `error: ${error.slice(0, 200)}` : "it stopped without saying why.";
+  return `couldn't run "${name}" this time. ${fix}`;
 }
 
 async function interruptRoutineGroupGoal(
@@ -10284,8 +10390,12 @@ routines = new RoutineManager({
     const bot = store.bot(run.botId);
     if (!bot) return;
     const detail = run.error ? `${run.routineName}: ${run.error}` : run.routineName;
-    const notificationBot = routineSourceOwner(run)?.bot ?? bot;
-    notify(buildNotification("routine-failed", notificationBot, routineSourceThread(run) ?? run.threadId ?? bot.threadId, detail));
+    const notificationBot = (routineSourceOwner(run) ?? routineFallbackOwner(run))?.bot ?? bot;
+    const reportThread = routineSourceThread(run);
+    // Push only when the failure actually spoke in chat; the once-a-day
+    // limit there is the same limit on the lock screen.
+    const spoke = reportThread && store.messagesFor(reportThread).some((message) => message.kind === "text" && message.routineRun?.runId === run.id);
+    if (spoke || (!reportThread && run.target !== "bot")) notify(buildNotification("routine-failed", notificationBot, reportThread ?? run.threadId ?? bot.threadId, routineFailureLine(run)));
     reportIncident({ kind: "routine-failed", bot, threadId: run.threadId ?? bot.threadId, detail });
   },
   onRunDeferred: (run) => {
@@ -10300,6 +10410,45 @@ routines = new RoutineManager({
     notify(buildNotification("routine-deferred", notificationBot, routineSourceThread(run) ?? bot.threadId, detail));
   },
 });
+// ── event wakes ──────────────────────────────────────────────────────────
+// A free pulse, no model: when a one-to-one WhatsApp message has waited on
+// the owner for 40+ minutes, the chief gets one check-back in its main chat.
+// The wake itself decides whether it is worth a message (NOTHING_TO_REPORT
+// otherwise), and the wake caps in RoutineManager bound how often this fires.
+const WAKE_EVENTS_FILE = join(DATA_DIR, "wake-events.json");
+const wakeEventsSeen = new Set<string>((() => {
+  try { return JSON.parse(readFileSync(WAKE_EVENTS_FILE, "utf8")) as string[]; } catch { return []; }
+})());
+function pulseEventWakes(now = Date.now()) {
+  if (process.env.OMB_EVENT_WAKES === "0" || !whatsapp.enabled || !routines) return;
+  const hour = new Date(now).getHours();
+  if (hour < 8 || hour >= 23 || now - ownerActiveAt < 20 * 60_000) return;
+  const chief = store.bots.find((bot) => bot.chiefOfStaff && !bot.hidden && !bot.remote && bot.threadId);
+  if (!chief) return;
+  let chats: ReturnType<typeof whatsapp.store.listChats>;
+  try { chats = whatsapp.store.listChats(40); } catch { return; }
+  const waiting = chats.filter((chat) => {
+    const waited = now - chat.lastTimestamp * 1000;
+    return chat.chatId.endsWith("@c.us") && !chat.lastFromMe && waited >= 40 * 60_000 && waited <= 4 * 60 * 60_000 &&
+      !wakeEventsSeen.has(`${chat.chatId}:${chat.lastTimestamp}`);
+  });
+  if (!waiting.length) return;
+  for (const chat of waiting) wakeEventsSeen.add(`${chat.chatId}:${chat.lastTimestamp}`);
+  try { writeFileSync(WAKE_EVENTS_FILE, JSON.stringify([...wakeEventsSeen].slice(-500))); } catch { /* best effort */ }
+  const names = waiting.slice(0, 4).map((chat) => (chat.chatName ?? "someone").slice(0, 40)).join(", ");
+  try {
+    routines.createWake({
+      botId: chief.id,
+      threadId: chief.threadId,
+      at: now + 60_000,
+      why: `whatsapp: ${waiting.length === 1 ? `${names} has` : `${names} have`} waited 40+ min for a reply. Read the chat${waiting.length === 1 ? "" : "s"} and say only if it matters`,
+    });
+  } catch (error) {
+    console.warn(`[wakes] whatsapp wake skipped: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+setInterval(() => { try { pulseEventWakes(); } catch (error) { console.warn("event wake pulse failed", error instanceof Error ? error.message : String(error)); } }, 5 * 60_000).unref();
+
 // The scheduler receipt and room transcript live in separate durable stores.
 // If the process exited between those two writes, prefer the correlated
 // RoutineRun's terminal truth; an uncorrelated manual goal is simply failed
@@ -14174,6 +14323,10 @@ function applyOnboardingChat(event: OnboardingChatEvent): OnboardingChatState | 
       const renamed = store.patchBotProfile(botId, { name });
       if (renamed) recordProfileChange(botId, "user", "api", before, profileSnapshot(renamed));
     },
+    lead: (threadId) => {
+      const bot = store.botByThread(threadId);
+      if (bot) store.moveBotFirst(bot.id);
+    },
     save: saveOnboardingChat,
   }, current, event);
   if (next !== current) broadcast({ kind: "config", ...configStatus() });
@@ -17224,6 +17377,20 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
             .slice(0, 100)
             .map((routine) => agentRoutine(routine, latestRuns.get(routine.id))),
         });
+      }
+      if (method === "POST" && path === "/api/internal/wakes") {
+        const body = await readInternalBody() as { at?: unknown; inMinutes?: unknown; why?: unknown } | null;
+        const from = internalSender;
+        const fromThreadId = internalCapability.threadId;
+        if (!connectorThread(from.id, fromThreadId)) return json(res, 403, { error: "source conversation does not belong to sender" });
+        const at = typeof body?.inMinutes === "number" ? Date.now() + body.inMinutes * 60_000
+          : typeof body?.at === "string" ? Date.parse(body.at) : NaN;
+        try {
+          const wake = routines!.createWake({ botId: from.id, threadId: fromThreadId, at, why: String(body?.why ?? "") });
+          return json(res, 200, { routineId: wake.routine.id, at: new Date(wake.at).toISOString(), moved: wake.at !== at, timeZone: routineTimeZone() });
+        } catch (error) {
+          return json(res, 400, { error: error instanceof Error ? error.message : String(error) });
+        }
       }
       if (method === "POST" && path === "/api/internal/routine-requests") {
         const parsed = routineRequestEnvelopeSchema.safeParse(await readInternalBody());

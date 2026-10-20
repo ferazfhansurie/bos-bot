@@ -115,6 +115,7 @@ function ownerLoss(ownerInput, signalSource) {
 export async function runManagedCompanionGuardian({
   cloudflaredBinary,
   tokenFile,
+  legacyTokenFile = null,
   target,
   originPort = MANAGED_COMPANION_ORIGIN_PORT,
   environment = process.env,
@@ -125,7 +126,11 @@ export async function runManagedCompanionGuardian({
   isTargetAlive = ({ pid }) => processIsAlive(pid),
   createGateway = createCompanionOriginGateway,
 } = {}) {
-  if (!path.isAbsolute(cloudflaredBinary ?? "") || !path.isAbsolute(tokenFile ?? "")) {
+  if (
+    !path.isAbsolute(cloudflaredBinary ?? "") ||
+    !path.isAbsolute(tokenFile ?? "") ||
+    (legacyTokenFile !== null && !path.isAbsolute(legacyTokenFile))
+  ) {
     throw new Error("The managed connector paths are invalid");
   }
   if (!validCompanionOriginTarget(target, platform)) {
@@ -142,9 +147,8 @@ export async function runManagedCompanionGuardian({
   });
   await gateway.start();
 
-  let connector;
-  try {
-    connector = spawnProcess(
+  const spawnConnector = (file) =>
+    spawnProcess(
       cloudflaredBinary,
       [
         "tunnel",
@@ -155,7 +159,7 @@ export async function runManagedCompanionGuardian({
         "json",
         "run",
         "--token-file",
-        tokenFile,
+        file,
       ],
       {
         env: minimalCloudflaredEnvironment(environment, platform),
@@ -164,10 +168,27 @@ export async function runManagedCompanionGuardian({
         stdio: ["ignore", "ignore", "ignore"],
       },
     );
+
+  let connector;
+  try {
+    connector = spawnConnector(tokenFile);
   } catch (error) {
     gateway.invalidate();
     await gateway.close();
     throw error;
+  }
+
+  // A previous control plane's connector, kept while paired phones move to
+  // the new address. It is best effort: its exit never ends this guardian or
+  // the primary route, and it is not restarted.
+  let legacyConnector = null;
+  if (legacyTokenFile) {
+    try {
+      legacyConnector = spawnConnector(legacyTokenFile);
+      legacyConnector.once("error", () => {});
+    } catch {
+      legacyConnector = null;
+    }
   }
 
   const connectorExit = new Promise((resolve) => {
@@ -181,21 +202,26 @@ export async function runManagedCompanionGuardian({
   const outcome = await Promise.race([connectorExit, ownerLoss(ownerInput, signalSource)]);
 
   gateway.invalidate();
-  if (outcome.kind === "owner") await terminateConnector(connector);
+  await Promise.all([
+    outcome.kind === "owner" ? terminateConnector(connector) : Promise.resolve(),
+    terminateConnector(legacyConnector),
+  ]);
   await gateway.close();
   return outcome.kind === "connector" ? outcome.code : 0;
 }
 
 export function guardianArguments(argv) {
-  if (argv.length !== 5) throw new Error("The managed companion guardian arguments are invalid");
-  const [cloudflaredBinary, tokenFile, socketPath, rawPid, rawPort] = argv;
+  if (argv.length !== 5 && argv.length !== 6) {
+    throw new Error("The managed companion guardian arguments are invalid");
+  }
+  const [cloudflaredBinary, tokenFile, socketPath, rawPid, rawPort, legacyTokenFile = null] = argv;
   const pid = Number(rawPid);
   const originPort = Number(rawPort);
   const target = { pid, socketPath };
   if (!validCompanionOriginTarget(target)) {
     throw new Error("The managed companion guardian target is invalid");
   }
-  return { cloudflaredBinary, tokenFile, target, originPort };
+  return { cloudflaredBinary, tokenFile, legacyTokenFile, target, originPort };
 }
 
 // Executed as a process through managed-companion-guardian-main.mjs. This file

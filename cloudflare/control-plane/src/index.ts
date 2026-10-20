@@ -17,8 +17,12 @@ import {
   createInstallation,
   installationSelf,
   listInstallations,
+  reapLapsedInstallationOwned,
+  registerInstallation,
   revokeInstallation,
+  revokeSelf,
   rotateInstallationCredential,
+  rotateSelfCredential,
 } from "./installations";
 
 const ROTATE_ROUTE = /^\/v1\/installations\/([^/]+)\/credentials\/rotate$/;
@@ -101,8 +105,25 @@ async function route(
   if (request.method === "POST" && url.pathname === "/v1/installations") {
     return createInstallation(request, env, auth);
   }
+  if (request.method === "POST" && url.pathname === "/v1/installations/register") {
+    return registerInstallation(request, env);
+  }
   if (request.method === "GET" && url.pathname === "/v1/installations/self") {
     return installationSelf(request, env);
+  }
+  if (request.method === "POST" && url.pathname === "/v1/installations/self/credentials/rotate") {
+    return rotateSelfCredential(request, env);
+  }
+  if (request.method === "DELETE" && url.pathname === "/v1/installations/self") {
+    const installationId = await revokeSelf(request, env);
+    ctx.waitUntil(cleanupEndpointForInstallation(env, config, installationId, cloudflareFetch, requestId).catch(() => {
+      console.error(JSON.stringify({
+        message: "revoked installation endpoint cleanup scheduling failed",
+        requestId,
+        errorCode: "endpoint_internal",
+      }));
+    }));
+    return new Response(null, { status: 204, headers: { "cache-control": "no-store" } });
   }
   if (url.pathname === "/v1/installations/self/endpoint") {
     if (request.method === "GET") return getManagedEndpoint(request, env);
@@ -180,6 +201,7 @@ export function createWorker(cloudflareFetch: CloudflareFetch = fetch, authFacto
       ctx.waitUntil((async () => {
         try {
           const config = configReader(env);
+          await reapLapsedInstallationOwned(env);
           await sweepManagedEndpointCleanup(env, config, cloudflareFetch, requestId);
         } catch {
           console.error(JSON.stringify({

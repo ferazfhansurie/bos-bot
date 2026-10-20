@@ -4,16 +4,26 @@ import { ControlPlaneError } from "./control-plane-client.mjs";
 import {
   COMPANION_ACCOUNT_CLEANUP_PENDING_FIELD,
   COMPANION_ACCOUNT_EMAIL_FIELD,
+  COMPANION_ACCOUNT_KIND_FIELD,
+  COMPANION_SILENT_OPT_OUT_FIELD,
   COMPANION_ACCOUNT_TOKEN_FIELD,
   COMPANION_ACCOUNT_USER_ID_FIELD,
   COMPANION_CLIENT_INSTANCE_FIELD,
+  COMPANION_CONTROL_PLANE_ORIGIN_FIELD,
   COMPANION_INSTALLATION_CREDENTIAL_FIELD,
+  COMPANION_INSTALLATION_EXPIRY_FIELD,
   COMPANION_INSTALLATION_ID_FIELD,
+  companionAccountControlPlane,
+  companionAccountSummary,
   createCompanionAccountService,
   controlPlaneUnavailableReason,
   resolveCompanionControlPlaneURL,
 } from "./companion-account-service.mjs";
 import {
+  LEGACY_MANAGED_COMPANION_ENDPOINT_FIELD,
+  LEGACY_MANAGED_COMPANION_GRACE_MS,
+  LEGACY_MANAGED_COMPANION_RETIRE_AT_FIELD,
+  LEGACY_MANAGED_COMPANION_TOKEN_FIELD,
   MANAGED_COMPANION_ENDPOINT_FIELD,
   MANAGED_COMPANION_ORIGIN_VERSION,
   MANAGED_COMPANION_ORIGIN_VERSION_FIELD,
@@ -105,9 +115,20 @@ function signedCredentials(overrides = {}) {
 }
 
 describe("Companion account service", () => {
-  it("has no hosted default and only uses an explicitly configured safe origin", () => {
-    expect(resolveCompanionControlPlaneURL({ isPackaged: true, environment: {} })).toBe("");
-    expect(controlPlaneUnavailableReason({})).toMatch(/not configured.*BOS_CONTROL_PLANE_URL/);
+  it("defaults to the BOS Bot control plane through the branding env proxy", async () => {
+    const { compatEnvironment } = await import("./branding-env.cjs");
+    const proxied = compatEnvironment({ HOME: "/tmp" });
+    expect(resolveCompanionControlPlaneURL({ environment: proxied })).toBe("https://accounts.bosbot.my");
+    expect(resolveCompanionControlPlaneURL({
+      environment: compatEnvironment({ OMB_CONTROL_PLANE_URL: "https://legacy.example.com" }),
+    })).toBe("https://legacy.example.com");
+    expect(resolveCompanionControlPlaneURL({ environment: compatEnvironment({ BOS_CONTROL_PLANE_URL: "" }) })).toBe("");
+  });
+
+  it("defaults to the BOS Bot control plane and only uses an explicitly configured safe origin", () => {
+    expect(resolveCompanionControlPlaneURL({ isPackaged: true, environment: {} })).toBe("https://accounts.bosbot.my");
+    expect(resolveCompanionControlPlaneURL({ isPackaged: true, environment: { BOS_CONTROL_PLANE_URL: "" } })).toBe("");
+    expect(controlPlaneUnavailableReason({ BOS_CONTROL_PLANE_URL: "" })).toMatch(/not configured.*BOS_CONTROL_PLANE_URL/);
     expect(controlPlaneUnavailableReason({ OMB_CONTROL_PLANE_URL: "ftp://x" })).toMatch(/OMB_CONTROL_PLANE_URL is set/);
     expect(resolveCompanionControlPlaneURL({
       isPackaged: true,
@@ -129,7 +150,72 @@ describe("Companion account service", () => {
       isPackaged: true,
       environment: { OMB_CONTROL_PLANE_URL: new String("https://accounts.openmausbot.com") },
     })).toBe("");
-    expect(resolveCompanionControlPlaneURL({ isPackaged: false, environment: {} })).toBe("");
+    expect(resolveCompanionControlPlaneURL({ isPackaged: false, environment: {} })).toBe("https://accounts.bosbot.my");
+  });
+
+  it("moves an upstream account to this control plane and keeps its route retiring", async () => {
+    const OWN = "https://accounts.bosbot.my";
+    const NEW_ENDPOINT = "https://c-fresh.bosbot.my";
+    const NEW_TOKEN = `eyJ${"e".repeat(100)}`;
+    const client = readyClient({
+      ensureEndpoint: vi.fn(async () => ({ endpoint: { url: NEW_ENDPOINT }, connectorToken: NEW_TOKEN })),
+    });
+    const stopManagedEndpoint = vi.fn(async () => {});
+    const { service, store } = serviceFixture({
+      initial: signedCredentials({ [COMPANION_ACCOUNT_USER_ID_FIELD]: "upstream-user" }),
+      client,
+      controlPlaneOrigin: OWN,
+      stopManagedEndpoint,
+      now: () => 1_000,
+    });
+    expect(companionAccountControlPlane(store.read())).toBe("upstream:openmausbot");
+
+    // The upstream bearer is never offered to this control plane, and the
+    // panel is told to ask for a sign-in instead of pairing via that route.
+    expect(await service.state()).toMatchObject({ status: "signed-out", moveRequired: true });
+    await service.restore();
+    expect(store.read()[MANAGED_COMPANION_TOKEN_FIELD]).toBe(CONNECTOR_TOKEN);
+
+    await service.requestCode("ada@example.com");
+    const state = await service.verifyCode("ada@example.com", "12345678");
+    expect(state).toMatchObject({ status: "ready", endpoint: NEW_ENDPOINT });
+    expect(state.moveRequired).toBeUndefined();
+    for (const call of [client.listInstallations, client.deleteEndpoint, client.revokeInstallation, client.signOut]) {
+      expect(call).not.toHaveBeenCalled();
+    }
+    expect(stopManagedEndpoint).not.toHaveBeenCalled();
+    expect(client.ensureInstallation).toHaveBeenCalledWith(expect.objectContaining({ currentCredential: "" }));
+    const persisted = store.read();
+    expect(persisted).toMatchObject({
+      [COMPANION_CONTROL_PLANE_ORIGIN_FIELD]: OWN,
+      [COMPANION_ACCOUNT_USER_ID_FIELD]: "user-1",
+      [MANAGED_COMPANION_ENDPOINT_FIELD]: NEW_ENDPOINT,
+      [MANAGED_COMPANION_TOKEN_FIELD]: NEW_TOKEN,
+      [LEGACY_MANAGED_COMPANION_ENDPOINT_FIELD]: ENDPOINT,
+      [LEGACY_MANAGED_COMPANION_TOKEN_FIELD]: CONNECTOR_TOKEN,
+    });
+    expect(persisted[LEGACY_MANAGED_COMPANION_RETIRE_AT_FIELD]).toBeGreaterThanOrEqual(LEGACY_MANAGED_COMPANION_GRACE_MS);
+  });
+
+  it("treats a route on openmausbot's domain as openmausbot's even when marked as ours", async () => {
+    const OWN = "https://accounts.bosbot.my";
+    const { service, store } = serviceFixture({
+      initial: signedCredentials({ [COMPANION_CONTROL_PLANE_ORIGIN_FIELD]: OWN }),
+      controlPlaneOrigin: OWN,
+    });
+    expect(companionAccountControlPlane(store.read())).toBe("upstream:openmausbot");
+    expect(await service.state()).toMatchObject({ status: "signed-out", moveRequired: true });
+    expect(companionAccountSummary(store.read(), OWN)).toContain("owner=openmausbot");
+    expect(companionAccountSummary(store.read(), OWN)).not.toMatch(/eyJ|ada@/);
+  });
+
+  it("treats an unmarked account on its own hosted domain as local", async () => {
+    const { client, service } = serviceFixture({
+      initial: signedCredentials({ [MANAGED_COMPANION_ENDPOINT_FIELD]: "https://c-opaque.bosbot.my" }),
+      controlPlaneOrigin: "https://accounts.bosbot.my",
+    });
+    expect(await service.state()).toMatchObject({ status: "ready", email: "ada@example.com" });
+    expect(client.health).toHaveBeenCalled();
   });
 
   it("does not coerce boxed credential fields into an account", async () => {
@@ -686,6 +772,416 @@ describe("Companion account service", () => {
 
     await expect(service.signOut()).resolves.toEqual({ available: true, status: "signed-out" });
     expect(store.read()).toEqual({ [COMPANION_CLIENT_INSTANCE_FIELD]: UUID });
+  });
+});
+
+describe("silent installation-owned registration", () => {
+  const OWN = "https://accounts.bosbot.my";
+  const NEW_ENDPOINT = "https://c-fresh.bosbot.my";
+  const OWN_ENDPOINT = "https://c-signed.bosbot.my";
+  const NEW_TOKEN = `eyJ${"e".repeat(100)}`;
+  const NEW_CREDENTIAL = `omb_install_${"f".repeat(22)}.${"g".repeat(43)}`;
+
+  function silentClient(overrides = {}) {
+    return readyClient({
+      registerInstallation: vi.fn(async ({ clientInstanceId }) => ({
+        installation: { id: INSTALLATION_ID, clientInstanceId, name: "Test Mac", platform: "darwin" },
+        credential: NEW_CREDENTIAL,
+        credentialExpiresAt: Date.now() + 90 * 24 * 60 * 60_000,
+      })),
+      inspectSelf: vi.fn(async () => ({
+        installation: { id: INSTALLATION_ID, clientInstanceId: UUID },
+        credentialExpiresAt: Date.now() + 90 * 24 * 60 * 60_000,
+      })),
+      rotateSelfCredential: vi.fn(async () => ({
+        credential: INSTALLATION_CREDENTIAL,
+        credentialExpiresAt: Date.now() + 90 * 24 * 60 * 60_000,
+      })),
+      revokeSelf: vi.fn(async () => {}),
+      ensureEndpoint: vi.fn(async () => ({ endpoint: { url: NEW_ENDPOINT }, connectorToken: NEW_TOKEN })),
+      ...overrides,
+    });
+  }
+
+  function silentFixture({ client = silentClient(), ...overrides } = {}) {
+    const timers = [];
+    const fixture = serviceFixture({
+      client,
+      controlPlaneOrigin: OWN,
+      silentRegistration: true,
+      sleep: vi.fn(async () => {}),
+      setTimer: vi.fn((callback, milliseconds) => {
+        const timer = { callback, milliseconds };
+        timers.push(timer);
+        return timer;
+      }),
+      clearTimer: vi.fn(),
+      ...overrides,
+    });
+    return { ...fixture, timers };
+  }
+
+  function installationOwned(overrides = {}) {
+    return {
+      [COMPANION_CLIENT_INSTANCE_FIELD]: UUID,
+      [COMPANION_ACCOUNT_KIND_FIELD]: "installation",
+      [COMPANION_CONTROL_PLANE_ORIGIN_FIELD]: OWN,
+      [COMPANION_INSTALLATION_ID_FIELD]: INSTALLATION_ID,
+      [COMPANION_INSTALLATION_CREDENTIAL_FIELD]: NEW_CREDENTIAL,
+      [COMPANION_INSTALLATION_EXPIRY_FIELD]: Date.now() + 90 * 24 * 60 * 60_000,
+      [MANAGED_COMPANION_ENDPOINT_FIELD]: NEW_ENDPOINT,
+      [MANAGED_COMPANION_TOKEN_FIELD]: NEW_TOKEN,
+      [MANAGED_COMPANION_ORIGIN_VERSION_FIELD]: MANAGED_COMPANION_ORIGIN_VERSION,
+      ...overrides,
+    };
+  }
+
+  it("registers on startup with no email and moves the openmausbot route to legacy", async () => {
+    const client = silentClient();
+    const onAccountChanged = vi.fn();
+    const stopManagedEndpoint = vi.fn(async () => {});
+    const { service, store } = silentFixture({
+      initial: signedCredentials({ [COMPANION_ACCOUNT_USER_ID_FIELD]: "upstream-user" }),
+      client,
+      onAccountChanged,
+      stopManagedEndpoint,
+    });
+
+    const state = await service.restore();
+    expect(state).toMatchObject({ status: "ready", endpoint: NEW_ENDPOINT });
+    expect(state.moveRequired).toBeUndefined();
+    expect(client.registerInstallation).toHaveBeenCalledWith({
+      clientInstanceId: UUID,
+      name: "Test Mac",
+      platform: "darwin",
+      appVersion: "1.2.3",
+    });
+    for (const call of [client.requestOTP, client.verifyOTP, client.ensureInstallation, client.signOut,
+      client.listInstallations, client.revokeInstallation, client.deleteEndpoint]) {
+      expect(call).not.toHaveBeenCalled();
+    }
+    // The upstream connector keeps running until the new one replaces it.
+    expect(stopManagedEndpoint).not.toHaveBeenCalled();
+    expect(client.ensureEndpoint).toHaveBeenCalledWith(NEW_CREDENTIAL);
+
+    const persisted = store.read();
+    expect(persisted).toMatchObject({
+      [COMPANION_ACCOUNT_KIND_FIELD]: "installation",
+      [COMPANION_CONTROL_PLANE_ORIGIN_FIELD]: OWN,
+      [COMPANION_INSTALLATION_ID_FIELD]: INSTALLATION_ID,
+      [COMPANION_INSTALLATION_CREDENTIAL_FIELD]: NEW_CREDENTIAL,
+      [MANAGED_COMPANION_ENDPOINT_FIELD]: NEW_ENDPOINT,
+      [MANAGED_COMPANION_TOKEN_FIELD]: NEW_TOKEN,
+      [LEGACY_MANAGED_COMPANION_ENDPOINT_FIELD]: ENDPOINT,
+      [LEGACY_MANAGED_COMPANION_TOKEN_FIELD]: CONNECTOR_TOKEN,
+    });
+    expect(persisted[LEGACY_MANAGED_COMPANION_RETIRE_AT_FIELD]).toBeGreaterThan(Date.now() + LEGACY_MANAGED_COMPANION_GRACE_MS - 60_000);
+    // The upstream account's bearer and identity are gone, never sent here.
+    expect(persisted[COMPANION_ACCOUNT_TOKEN_FIELD]).toBeUndefined();
+    expect(persisted[COMPANION_ACCOUNT_EMAIL_FIELD]).toBeUndefined();
+    expect(persisted[COMPANION_ACCOUNT_USER_ID_FIELD]).toBeUndefined();
+
+    // The startup log line proves the move.
+    expect(companionAccountSummary(persisted, OWN)).toBe(
+      "owner=this account=true primary=bosbot.my primaryUsable=true legacy=true cleanupPending=false",
+    );
+    expect(onAccountChanged).toHaveBeenCalled();
+    expect(JSON.stringify(state)).not.toContain(NEW_CREDENTIAL);
+    expect(JSON.stringify(state)).not.toContain(NEW_TOKEN);
+  });
+
+  it("starts registration when the connect screen asks for state", async () => {
+    const client = silentClient();
+    const { service } = silentFixture({ client, initial: {} });
+    expect(await service.state()).toMatchObject({ status: "connecting" });
+    await vi.waitFor(() => expect(client.ensureEndpoint).toHaveBeenCalled());
+    await vi.waitFor(async () => expect(await service.state()).toMatchObject({ status: "ready", endpoint: NEW_ENDPOINT }));
+    expect(client.registerInstallation).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the current route and backs off quietly when registration fails", async () => {
+    const client = silentClient({
+      registerInstallation: vi.fn(async () => {
+        throw new ControlPlaneError("rate_limited", 429);
+      }),
+    });
+    const { service, store, timers } = silentFixture({
+      client,
+      initial: signedCredentials({ [COMPANION_ACCOUNT_USER_ID_FIELD]: "upstream-user" }),
+    });
+    const state = await service.restore();
+    expect(state.status).toBe("error");
+    expect(store.read()[MANAGED_COMPANION_ENDPOINT_FIELD]).toBe(ENDPOINT);
+    expect(store.read()[MANAGED_COMPANION_TOKEN_FIELD]).toBe(CONNECTOR_TOKEN);
+    expect(timers).toHaveLength(1);
+    expect(timers[0].milliseconds).toBeGreaterThanOrEqual(60 * 60_000);
+
+    client.registerInstallation.mockImplementation(async ({ clientInstanceId }) => ({
+      installation: { id: INSTALLATION_ID, clientInstanceId },
+      credential: NEW_CREDENTIAL,
+      credentialExpiresAt: Date.now() + 90 * 24 * 60 * 60_000,
+    }));
+    timers[0].callback();
+    await vi.waitFor(() => expect(store.read()[MANAGED_COMPANION_ENDPOINT_FIELD]).toBe(NEW_ENDPOINT));
+    expect(store.read()[LEGACY_MANAGED_COMPANION_ENDPOINT_FIELD]).toBe(ENDPOINT);
+  });
+
+  it("revokes a registration it could not persist", async () => {
+    const client = silentClient();
+    const store = credentialStore({});
+    let failNext = true;
+    const { service } = silentFixture({
+      client,
+      initial: {},
+      readCredentials: store.read,
+      updateCredentials: vi.fn(async (derive) => {
+        const next = await derive(store.read());
+        if (next[COMPANION_ACCOUNT_KIND_FIELD] && failNext) {
+          failNext = false;
+          throw new Error("disk full");
+        }
+        return store.update(() => next);
+      }),
+    });
+    await service.restore();
+    expect(client.revokeSelf).toHaveBeenCalledWith(NEW_CREDENTIAL);
+    expect(client.ensureEndpoint).not.toHaveBeenCalled();
+  });
+
+  it("retries the startup probe instead of trusting one slow answer", async () => {
+    let calls = 0;
+    const client = silentClient({
+      health: vi.fn(async () => {
+        calls += 1;
+        if (calls < 3) throw new ControlPlaneError("network_unavailable");
+        return true;
+      }),
+    });
+    const sleep = vi.fn(async () => {});
+    const { service } = silentFixture({ client, initial: installationOwned(), sleep });
+    expect(await service.restore()).toMatchObject({ status: "ready", endpoint: NEW_ENDPOINT });
+    expect(client.health).toHaveBeenCalledTimes(3);
+    expect(sleep).toHaveBeenCalledTimes(2);
+  });
+
+  it("re-probes on retry with no account instead of replaying a cached failure", async () => {
+    let up = false;
+    const client = readyClient({
+      health: vi.fn(async () => {
+        if (!up) throw new ControlPlaneError("network_unavailable");
+        return true;
+      }),
+    });
+    // Headless: no silent registration, so retry only re-checks health.
+    const { service } = serviceFixture({ client, initial: {}, controlPlaneOrigin: OWN });
+    expect(await service.state()).toMatchObject({ status: "signed-out", available: false });
+    up = true;
+    expect(await service.retry()).toMatchObject({ status: "signed-out", available: true });
+    expect(client.health).toHaveBeenCalledTimes(2);
+  });
+
+  it("only remembers a failed probe briefly", async () => {
+    let clock = 0;
+    let up = false;
+    const client = readyClient({
+      health: vi.fn(async () => {
+        if (!up) throw new ControlPlaneError("network_unavailable");
+        return true;
+      }),
+    });
+    const { service } = serviceFixture({ client, initial: {}, now: () => clock });
+    expect((await service.state()).available).toBe(false);
+    up = true;
+    clock = 6_000;
+    expect((await service.state()).available).toBe(true);
+  });
+
+  it("re-registers when the server forgot this computer, keeping the retiring route", async () => {
+    const client = silentClient({
+      inspectSelf: vi.fn(async () => {
+        throw new ControlPlaneError("unauthorized", 401);
+      }),
+      registerInstallation: vi.fn(async ({ clientInstanceId }) => ({
+        installation: { id: DUPLICATE_INSTALLATION_ID, clientInstanceId },
+        credential: INSTALLATION_CREDENTIAL,
+        credentialExpiresAt: Date.now() + 90 * 24 * 60 * 60_000,
+      })),
+    });
+    const { service, store } = silentFixture({
+      client,
+      initial: installationOwned({
+        [LEGACY_MANAGED_COMPANION_ENDPOINT_FIELD]: ENDPOINT,
+        [LEGACY_MANAGED_COMPANION_TOKEN_FIELD]: CONNECTOR_TOKEN,
+        [LEGACY_MANAGED_COMPANION_RETIRE_AT_FIELD]: Date.now() + 1_000_000,
+      }),
+    });
+    expect(await service.retry()).toMatchObject({ status: "ready" });
+    expect(client.registerInstallation).toHaveBeenCalledTimes(1);
+    expect(store.read()).toMatchObject({
+      [COMPANION_INSTALLATION_ID_FIELD]: DUPLICATE_INSTALLATION_ID,
+      [COMPANION_INSTALLATION_CREDENTIAL_FIELD]: INSTALLATION_CREDENTIAL,
+      [LEGACY_MANAGED_COMPANION_ENDPOINT_FIELD]: ENDPOINT,
+    });
+  });
+
+  it("renews a credential that is close to expiry", async () => {
+    const client = silentClient({
+      inspectSelf: vi.fn(async () => ({
+        installation: { id: INSTALLATION_ID, clientInstanceId: UUID },
+        credentialExpiresAt: Date.now() + 24 * 60 * 60_000,
+      })),
+    });
+    const { service, store } = silentFixture({ client, initial: installationOwned() });
+    await service.restore();
+    expect(client.rotateSelfCredential).toHaveBeenCalledWith(NEW_CREDENTIAL);
+    expect(store.read()[COMPANION_INSTALLATION_CREDENTIAL_FIELD]).toBe(INSTALLATION_CREDENTIAL);
+  });
+
+  it("signs out with the credential alone and does not quietly register again", async () => {
+    const client = silentClient();
+    const { service, store } = silentFixture({ client, initial: installationOwned() });
+    expect(await service.signOut()).toMatchObject({ status: "signed-out" });
+    expect(client.deleteEndpoint).toHaveBeenCalledWith(NEW_CREDENTIAL);
+    expect(client.revokeSelf).toHaveBeenCalledWith(NEW_CREDENTIAL);
+    expect(client.signOut).not.toHaveBeenCalled();
+    expect(store.read()[COMPANION_SILENT_OPT_OUT_FIELD]).toBe(true);
+    expect(store.read()[COMPANION_INSTALLATION_CREDENTIAL_FIELD]).toBeUndefined();
+
+    await service.restore();
+    expect(await service.state()).toMatchObject({ status: "signed-out" });
+    expect(client.registerInstallation).not.toHaveBeenCalled();
+
+    // Asking to connect a device again is consent.
+    expect(await service.retry()).toMatchObject({ status: "ready" });
+    expect(client.registerInstallation).toHaveBeenCalledTimes(1);
+    expect(store.read()[COMPANION_SILENT_OPT_OUT_FIELD]).toBeUndefined();
+  });
+
+  it("waits for the connect screen when there is nothing to move and the companion is off", async () => {
+    const client = silentClient();
+    const { service } = silentFixture({ client, initial: {}, companionIsOn: () => false });
+    await service.restore();
+    expect(client.registerInstallation).not.toHaveBeenCalled();
+    await service.state();
+    await vi.waitFor(() => expect(client.registerInstallation).toHaveBeenCalledTimes(1));
+  });
+
+  it("registers on startup with no route to move when the companion is on", async () => {
+    const client = silentClient();
+    const { service } = silentFixture({ client, initial: {}, companionIsOn: () => true });
+    expect(await service.restore()).toMatchObject({ status: "ready", endpoint: NEW_ENDPOINT });
+  });
+
+  it("never registers while the app says it cannot keep what it registers", async () => {
+    const client = silentClient();
+    const { service } = silentFixture({ client, initial: {}, silentRegistration: () => false });
+    await service.restore();
+    expect(await service.state()).toMatchObject({ status: "signed-out" });
+    expect(client.registerInstallation).not.toHaveBeenCalled();
+  });
+
+  it("checks in daily so the credential never lapses", async () => {
+    const client = silentClient();
+    const { service, timers } = silentFixture({ client, initial: installationOwned() });
+    await service.restore();
+    expect(timers).toHaveLength(1);
+    expect(timers[0].milliseconds).toBe(24 * 60 * 60_000);
+    expect(client.inspectSelf).toHaveBeenCalledTimes(1);
+    timers[0].callback();
+    await vi.waitFor(() => expect(client.inspectSelf).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() => expect(timers).toHaveLength(2));
+  });
+
+  it("restarts the retiring route's grace when its replacement first exists", async () => {
+    const client = silentClient();
+    const { service, store } = silentFixture({
+      client,
+      initial: {
+        [COMPANION_CLIENT_INSTANCE_FIELD]: UUID,
+        [LEGACY_MANAGED_COMPANION_ENDPOINT_FIELD]: ENDPOINT,
+        [LEGACY_MANAGED_COMPANION_TOKEN_FIELD]: CONNECTOR_TOKEN,
+        [LEGACY_MANAGED_COMPANION_RETIRE_AT_FIELD]: Date.now() + 60_000,
+      },
+    });
+    expect(await service.restore()).toMatchObject({ status: "ready", endpoint: NEW_ENDPOINT });
+    expect(store.read()[LEGACY_MANAGED_COMPANION_RETIRE_AT_FIELD])
+      .toBeGreaterThan(Date.now() + LEGACY_MANAGED_COMPANION_GRACE_MS - 60_000);
+  });
+
+  it("replaces an email account whose session expired, keeping its route as the retiring one", async () => {
+    const client = silentClient({
+      ensureInstallation: vi.fn(async () => {
+        throw new ControlPlaneError("unauthorized", 401);
+      }),
+    });
+    const { service, store } = silentFixture({
+      client,
+      initial: signedCredentials({
+        [COMPANION_CONTROL_PLANE_ORIGIN_FIELD]: OWN,
+        [MANAGED_COMPANION_ENDPOINT_FIELD]: OWN_ENDPOINT,
+      }),
+    });
+    expect(await service.retry()).toMatchObject({ status: "ready", endpoint: NEW_ENDPOINT });
+    expect(client.ensureInstallation).toHaveBeenCalledWith(expect.objectContaining({ accountToken: ACCOUNT_TOKEN }));
+    expect(client.registerInstallation).toHaveBeenCalledTimes(1);
+    expect(client.deleteEndpoint).not.toHaveBeenCalled();
+    expect(store.read()).toMatchObject({
+      [COMPANION_ACCOUNT_KIND_FIELD]: "installation",
+      [LEGACY_MANAGED_COMPANION_ENDPOINT_FIELD]: OWN_ENDPOINT,
+    });
+    expect(store.read()[COMPANION_ACCOUNT_TOKEN_FIELD]).toBeUndefined();
+    expect(store.read()[COMPANION_ACCOUNT_EMAIL_FIELD]).toBeUndefined();
+  });
+
+  it("finishes signing out an email account whose session expired", async () => {
+    const client = silentClient({
+      listInstallations: vi.fn(async () => {
+        throw new ControlPlaneError("unauthorized", 401);
+      }),
+    });
+    const { service, store } = silentFixture({
+      client,
+      initial: signedCredentials({
+        [COMPANION_CONTROL_PLANE_ORIGIN_FIELD]: OWN,
+        [MANAGED_COMPANION_ENDPOINT_FIELD]: OWN_ENDPOINT,
+      }),
+    });
+    expect(await service.signOut()).toMatchObject({ status: "signed-out" });
+    expect(client.listInstallations).toHaveBeenCalledWith(ACCOUNT_TOKEN);
+    expect(client.deleteEndpoint).toHaveBeenCalledWith(INSTALLATION_CREDENTIAL);
+    expect(client.registerInstallation).not.toHaveBeenCalled();
+    expect(store.read()[COMPANION_ACCOUNT_TOKEN_FIELD]).toBeUndefined();
+    expect(store.read()[MANAGED_COMPANION_ENDPOINT_FIELD]).toBeUndefined();
+    expect(store.read()[COMPANION_SILENT_OPT_OUT_FIELD]).toBe(true);
+  });
+
+  it("records the opt-out before a sign-out reaches the network", async () => {
+    const client = silentClient({
+      revokeSelf: vi.fn(async () => {
+        throw new ControlPlaneError("network_unavailable");
+      }),
+    });
+    const { service, store, timers } = silentFixture({ client, initial: installationOwned() });
+    expect(await service.signOut()).toMatchObject({ status: "error" });
+    expect(store.read()[COMPANION_SILENT_OPT_OUT_FIELD]).toBe(true);
+    expect(store.read()[COMPANION_ACCOUNT_CLEANUP_PENDING_FIELD]).toBe(true);
+    await service.restore();
+    expect(client.registerInstallation).not.toHaveBeenCalled();
+    expect(timers.every((timer) => timer.milliseconds !== 24 * 60 * 60_000)).toBe(true);
+  });
+
+  it("leaves email accounts on this control plane alone", async () => {
+    const client = silentClient();
+    const { service } = silentFixture({
+      client,
+      initial: signedCredentials({
+        [COMPANION_CONTROL_PLANE_ORIGIN_FIELD]: OWN,
+        [MANAGED_COMPANION_ENDPOINT_FIELD]: NEW_ENDPOINT,
+      }),
+    });
+    expect(await service.restore()).toMatchObject({ status: "ready", email: "ada@example.com" });
+    expect(await service.state()).toMatchObject({ status: "ready" });
+    expect(client.registerInstallation).not.toHaveBeenCalled();
   });
 });
 // branding compatibility (electron/branding-compat.json): data-home: existing desktop and companion homes, backups and lease recovery must open the same data; deployed-services: existing worker databases, service health identities and hosted addresses must not become a different service; environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

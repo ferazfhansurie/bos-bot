@@ -83,7 +83,7 @@ is present. Three ways to make the server reachable from elsewhere:
   npx bosbot serve --tunnel
   ```
 
-  `login` reserves an address like `https://c-….openmausbot.com` for this
+  `login` reserves an address like `https://c-….bosbot.my` for this
   machine; `serve --tunnel` connects it through a Cloudflare tunnel (the same
   one the desktop app uses for its companion) and prints the pairing link at
   that address. The first run downloads `cloudflared` (pinned version and
@@ -485,8 +485,8 @@ in `config.json` under `signIn.admins` and `signIn.members` and can be changed
 through the settings API without a restart; the environment variables win
 when set, which is how a container or a service unit is bootstrapped.
 
-The code itself comes from `accounts.openmausbot.com`, the BOS Bot
-account service, so your server needs no email credentials. Your server asks
+The code itself comes from `accounts.bosbot.my`, the BOS Bot
+account service (point `BOS_CONTROL_PLANE_URL` at your own to change it), so your server needs no email credentials. Your server asks
 it to send the code, checks the answer, and then issues its own session
 cookie: the browser only ever talks to your server, and who is welcome is
 decided only by your allow-list. Wrong codes count against the same lockout

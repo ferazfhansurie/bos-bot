@@ -46,8 +46,10 @@ it("keeps results together while fresh executions, approvals, deletion and unrea
     expect(destination).toBeTruthy();
     expect(completed[1].resultsThreadId).toBe(destination);
     expect(completed[0].threadId).not.toBe(completed[1].threadId);
-    const cards = (await messages(destination)).filter((message) => message.kind === "routine.run");
+    // v2: each result is the bot's own text message, with the run attached.
+    const cards = (await messages(destination)).filter((message) => message.routineRun);
     expect(cards).toHaveLength(2);
+    for (const card of cards) expect(card).toMatchObject({ kind: "text", role: "bot", text: "hello from fake claude" });
     for (const run of completed) expect(cards.find((message) => message.routineRun.runId === run.id)?.routineRun)
       .toMatchObject({ status: "completed", scheduledFor: run.scheduledFor, executionThreadId: run.threadId, summary: "hello from fake claude" });
     const currentBot = async () => (await api("GET", "/api/bots")).bots.find((candidate: any) => candidate.id === bot.id);

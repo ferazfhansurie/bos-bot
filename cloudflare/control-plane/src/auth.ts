@@ -2,7 +2,7 @@ import { betterAuth } from "better-auth";
 import { bearer, emailOTP } from "better-auth/plugins";
 
 import type { ControlPlaneConfig } from "./config";
-import { sendOTPEmail } from "./email";
+import { resendSender, sendOTPEmail } from "./email";
 
 export function createAuth(
   env: Env,
@@ -60,11 +60,7 @@ export function createAuth(
         rateLimit: { window: 60, max: 5 },
         async sendVerificationOTP(input) {
           if (runtime.sendOTP) return runtime.sendOTP(input);
-          await sendOTPEmail({
-            async send(message) {
-              await env.EMAIL.send(message);
-            },
-          }, config.emailFrom, input, requestId);
+          await sendOTPEmail(resendSender(env.RESEND_API_KEY), config.emailFrom, input, requestId);
         },
       }),
       bearer({ requireSignature: true }),

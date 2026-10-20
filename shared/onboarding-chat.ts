@@ -53,7 +53,17 @@ export type OnboardingChatEvent =
   | { type: "engine-ready" }
   | { type: "connected"; app: OnboardingAppId }
   | { type: "skip" }
-  | { type: "first-task"; prompt: string };
+  | { type: "first-task"; prompt: string }
+  | ({ type: "prepared" } & OnboardingPrepared);
+
+/** What was researched about the person's business before they signed up
+ * (a prepared invite link). The greeting shows it back to them, with their
+ * team and the first job, so they can correct it before anything runs. */
+export interface OnboardingPrepared {
+  profile: { label: string; value: string }[];
+  team: { name: string; job: string }[];
+  firstJob?: { title: string; prompt: string };
+}
 
 /** The jobs the first message offers as taps. Each one is useful without any
  * connected app, so a tap works the moment an engine is signed in. */
@@ -112,6 +122,23 @@ export function onboardingScript(step: OnboardingChatStep, ctx: OnboardingScript
   }
 }
 
+/** The greeting for a prepared workspace: what bos already knows about the
+ * business, the team set up for it, and its first job as the first tap. */
+export function preparedGreeting(ctx: Pick<OnboardingScriptContext, "personName" | "botName">, prepared: OnboardingPrepared): OnboardingChatMessage {
+  const person = ctx.personName.trim().split(/\s+/)[0] ?? "";
+  const facts = prepared.profile.filter(item => item.value.trim()).map(item => `- ${item.label}: ${item.value.trim()}`).join("\n");
+  const team = prepared.team.map(bot => `${bot.name} (${bot.job.trim().replace(/\.$/, "")})`).join(", ");
+  const text = [
+    `Hi${person ? ` ${person}` : ""}, I'm ${ctx.botName}, your own AI teammate. Before you got here I read up on your business. Here's what I have:`,
+    facts,
+    "If anything's off, tell me and I'll fix it.",
+    team ? `Your team is set up and ready: ${team}.` : "",
+    prepared.firstJob ? `Your first job is below. Tap it and I'll start. Nothing goes out to anyone unless you say so.` : "Tap a job below, or tell me in your own words. Nothing goes out to anyone unless you say so.",
+  ].filter(Boolean).join("\n\n");
+  const items = [...(prepared.firstJob ? [{ id: "prepared", ...prepared.firstJob }] : []), ...FIRST_TASKS.map(task => ({ ...task }))];
+  return { step: "greet", text, card: { kind: "suggestions", items } };
+}
+
 export function initialOnboardingState(botId: string, threadId: string, botName: string, engineReady: boolean): OnboardingChatState {
   return { version: ONBOARDING_CHAT_VERSION, botId, threadId, step: "greet", botName, engineReady, connected: [], completedAt: "" };
 }
@@ -151,5 +178,8 @@ export function nextOnboardingState(state: OnboardingChatState, event: Onboardin
     // so setup stays open at the sign-in card until then
     case "first-task":
       return event.prompt.trim() && state.engineReady ? finish({ ...state, step: "done" }) : state;
+    // only rewrites the greeting; the steps stay where they are
+    case "prepared":
+      return state;
   }
 }

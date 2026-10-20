@@ -459,6 +459,15 @@ const TOOLS = [
     }, required: ["bot_ids", "message", "request_key"] },
   },
   {
+    name: "set_next_wake",
+    description: "Check back on your own later, without a routine. Use it when your reply leaves a natural follow-up: someone owes the person a reply, they said \"later\", an event is coming, or you promised to look again (\"i'll check at 4\"). At that time you wake in this conversation, look at what changed, and message the person only if it is worth it; otherwise nothing shows. Give either in_minutes or an RFC3339 at with offset. Caps: 3 waiting and 8 a day; 23:00–08:00 moves to 08:00. No approval needed.",
+    inputSchema: { type: "object", additionalProperties: false, properties: {
+      why: { type: "string", minLength: 1, maxLength: 300, description: "What to check and why, in one line (\"see if aidil replied about the acme invoice\")." },
+      in_minutes: { type: "integer", minimum: 5, maximum: 20160, description: "Minutes from now." },
+      at: { type: "string", description: "RFC3339 time with an explicit offset, e.g. 2026-10-21T16:00:00+08:00." },
+    }, required: ["why"] },
+  },
+  {
     name: "ring_owner",
     description: "Call the owner in the BOS mobile app from your current conversation. Use when the user asks you to call, or their attention is needed for a result or decision. One ring per bot every ten minutes; never retry a rate limit. A sent ring does not mean they accepted or heard it.",
     inputSchema: { type: "object", additionalProperties: false, properties: {
@@ -1330,6 +1339,25 @@ async function callTool(name: string, args: Json): Promise<{ text: string; isErr
     const page = r.body.page as Json;
     const head = `${page.id} · ${page.title || "Untitled"} · revision ${page.revision}`;
     return { text: name === "page_read" ? `${head}\n\n${page.text}` : `${name === "page_create" ? "Created" : "Saved"} ${head}. The owner sees it in the page panel.\n\n${page.text}` };
+  }
+  if (name === "set_next_wake") {
+    const parsed = z.object({
+      why: z.string().trim().min(1).max(300),
+      in_minutes: z.number().int().min(5).max(20_160).optional(),
+      at: z.string().trim().min(1).optional(),
+    }).strict().safeParse(args);
+    if (!parsed.success || (parsed.data.in_minutes === undefined) === (parsed.data.at === undefined)) {
+      return { text: "set_next_wake needs why plus exactly one of in_minutes (5–20160) or at (RFC3339 with offset).", isError: true };
+    }
+    if (parsed.data.at !== undefined && !/(Z|[+-]\d{2}:\d{2})$/.test(parsed.data.at)) {
+      return { text: "Give at with an explicit offset, e.g. 2026-10-21T16:00:00+08:00.", isError: true };
+    }
+    const response = await apiResponse("/api/internal/wakes", {
+      method: "POST",
+      body: JSON.stringify({ why: parsed.data.why, ...(parsed.data.in_minutes !== undefined ? { inMinutes: parsed.data.in_minutes } : { at: parsed.data.at }) }),
+    });
+    if (!response.ok) return { text: String(response.body.error ?? `HTTP ${response.status}`), isError: true };
+    return { text: `Wake set for ${String(response.body.at)}${response.body.moved ? " (moved out of quiet hours)" : ""}. You'll wake in this conversation then and speak only if it's worth it. It shows in Routines until it fires.` };
   }
   if (name === "ring_owner") {
     const parsed = z.object({ reason: z.string().trim().min(1).max(500) }).strict().safeParse(args);

@@ -34,6 +34,30 @@ export function buildOTPEmail(from: string, input: OTPEmailInput) {
   };
 }
 
+/** Sends through Resend. bosbot.my is a verified Resend sending domain, so the
+ * control plane needs no Cloudflare Email Routing setup. A non-2xx answer
+ * throws; sendOTPEmail swallows it so auth responses stay enumeration-safe. */
+export function resendSender(apiKey: string, fetchImpl: typeof fetch = fetch): TransactionalEmailSender {
+  return {
+    async send(message) {
+      if (!apiKey) throw new Error("email not configured");
+      const response = await fetchImpl("https://api.resend.com/emails", {
+        method: "POST",
+        headers: { authorization: `Bearer ${apiKey}`, "content-type": "application/json" },
+        body: JSON.stringify({
+          from: `${message.from.name} <${message.from.email}>`,
+          to: [message.to],
+          subject: message.subject,
+          html: message.html,
+          text: message.text,
+        }),
+        signal: AbortSignal.timeout(15_000),
+      });
+      if (!response.ok) throw new Error(`resend ${response.status}`);
+    },
+  };
+}
+
 export async function sendOTPEmail(
   sender: TransactionalEmailSender,
   from: string,
@@ -42,9 +66,10 @@ export async function sendOTPEmail(
 ): Promise<void> {
   try {
     await sender.send(buildOTPEmail(from, input));
-  } catch {
+  } catch (error) {
+    const status = /^resend (\d{3})$/.exec(error instanceof Error ? error.message : "")?.[1] ?? null;
     // Authentication responses stay enumeration-safe. Do not log the address,
     // code, provider error, message object, or any other credential material.
-    console.error(JSON.stringify({ message: "transactional email send failed", requestId }));
+    console.error(JSON.stringify({ message: "transactional email send failed", requestId, status }));
   }
 }

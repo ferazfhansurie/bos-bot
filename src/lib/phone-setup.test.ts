@@ -178,6 +178,41 @@ describe("phone setup flow", () => {
     ).toBe("account-required");
   });
 
+  it("asks for a sign-in while the only hosted route belongs to the old control plane", () => {
+    const companion = {
+      enabled: true,
+      endpoints: [{ kind: "hosted" as const, url: "https://c-old.openmausbot.com", priority: 0 }],
+    };
+    // The advertised address alone is enough, even if the account state is
+    // missing or the control plane could not be reached.
+    expect(phonePairingGate(account("signed-out"), companion, false)).toBe("account-required");
+    expect(phonePairingGate(null, companion, false)).toBe("account-required");
+    expect(
+      phonePairingGate({ available: false, status: "signed-out" }, companion, false),
+    ).toBe("account-required");
+    expect(
+      phonePairingGate({ available: true, status: "signed-out", moveRequired: true }, companion, false),
+    ).toBe("account-required");
+    const own = {
+      enabled: true,
+      endpoints: [{ kind: "hosted" as const, url: "https://c-new.bosbot.my", priority: 0 }],
+    };
+    expect(phonePairingGate(account("signed-out"), own, false)).toBe("open");
+    expect(
+      phonePairingGate({ available: true, status: "signed-out", moveRequired: true }, own, false),
+    ).toBe("account-required");
+    expect(
+      phonePairingGate({ available: true, status: "signed-out", moveRequired: true }, companion, true),
+    ).toBe("open");
+    // While this computer quietly gets its own address, wait for it instead of
+    // pairing a phone to the retiring route.
+    expect(phonePairingGate(account("connecting"), companion, false)).toBe("wait");
+    expect(phonePairingGate(account("ready"), companion, false)).toBe("wait");
+    expect(phonePairingGate(account("ready"), own, false)).toBe("open");
+    const both = { enabled: true, endpoints: [...own.endpoints, ...companion.endpoints] };
+    expect(phonePairingGate(account("ready"), both, false)).toBe("open");
+  });
+
   it("opens local pairing only after the explicit Wi-Fi fallback", () => {
     expect(
       phonePairingGate(

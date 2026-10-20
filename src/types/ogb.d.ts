@@ -390,6 +390,8 @@ export interface CompanionAccountState {
   email?: string;
   endpoint?: string;
   message?: string;
+  /** Signed out here while phones still use another control plane's route. */
+  moveRequired?: boolean;
 }
 
 export type AndroidUsbDevice = {

@@ -74,18 +74,37 @@ it("walks a fresh workspace from start to first task, posting each scripted line
   } finally { await fixture.close(); }
 }, 40000);
 
+it("a prepared greeting puts bos back above the teammates hired after it", async () => {
+  const fixture = await launchVerificationServer({ ...process.env, FAKE_CLAUDE_REPLIES: "[]", FAKE_CLAUDE_TOOL_CALLS: "[]" });
+  const api = client(fixture);
+  try {
+    const started = await api("POST", "/api/onboarding/chat", { event: { type: "start" } });
+    expect(started.status).toBe(200);
+    const { botId } = started.body.state as OnboardingChatState;
+    expect((await api("POST", "/api/bots", { name: "Nadia", title: "Finds new corporate catering leads." })).status).toBe(201);
+    expect((await api("GET", "/api/bots?messages=0")).body.bots[0].name).toBe("Nadia");
+    const prepared = { type: "prepared", profile: [{ label: "Business", value: "Kedai Kopi Test" }], team: [{ name: "Nadia", job: "Finds new corporate catering leads." }] };
+    expect((await api("POST", "/api/onboarding/chat", { event: prepared })).status).toBe(200);
+    const bots = (await api("GET", "/api/bots?messages=0")).body.bots;
+    expect(bots[0].id).toBe(botId);
+    expect(bots.map((bot: { name: string }) => bot.name)).toContain("Nadia");
+  } finally { await fixture.close(); }
+});
+
 describe("applyOnboardingChatEvent", () => {
   function memoryHost(personName = "Ada") {
     const rows: { id: string; onboarding?: OnboardingChatMessage }[] = [];
     const saved: OnboardingChatState[] = [];
+    const led: string[] = [];
     const host: OnboardingChatHost = {
       personName,
+      lead: (threadId) => { led.push(threadId); },
       messages: () => rows,
       append: (_thread, line) => { rows.push({ id: `m${rows.length}`, onboarding: line }); },
       patch: (_thread, id, line) => { const row = rows.find((r) => r.id === id); if (row) row.onboarding = line; },
       save: (state) => { saved.push(state); },
     };
-    return { host, rows, saved };
+    return { host, rows, saved, led };
   }
 
   it("posts the engine card only when no engine is ready, and never twice", () => {
@@ -120,10 +139,69 @@ describe("applyOnboardingChatEvent", () => {
     expect(saved).toHaveLength(1);
   });
 
+  const prepared = {
+    type: "prepared" as const,
+    profile: [{ label: "Business", value: "Kedai Kopi Test, a cafe in Bangsar" }, { label: "Price", value: "" }],
+    team: [{ name: "Nadia", job: "Finds new corporate catering leads." }],
+    firstJob: { title: "Find 10 catering leads", prompt: "Find 10 offices near Bangsar that order catering." },
+  };
+
+  it("rewrites the greeting with the prepared business, team and first job, without moving the steps", () => {
+    const { host, rows, saved } = memoryHost();
+    let state = applyOnboardingChatEvent(host, initialOnboardingState("b1", "t1", "BOS", false), { type: "start" });
+    const count = rows.length;
+    const savedCount = saved.length;
+    expect(applyOnboardingChatEvent(host, state, prepared)).toBe(state);
+    expect(rows).toHaveLength(count);
+    expect(saved).toHaveLength(savedCount);
+    const greet = rows[0].onboarding!;
+    expect(greet.step).toBe("greet");
+    expect(greet.text).toContain("Hi Ada");
+    expect(greet.text).toContain("- Business: Kedai Kopi Test, a cafe in Bangsar");
+    expect(greet.text).not.toContain("Price");
+    expect(greet.text).toContain("Nadia (Finds new corporate catering leads)");
+    expect(greet.card?.kind === "suggestions" && greet.card.items[0]).toEqual({ id: "prepared", ...prepared.firstJob });
+    // a retry rewrites the same line, never a second greeting
+    state = applyOnboardingChatEvent(host, state, prepared);
+    expect(rows).toHaveLength(count);
+  });
+
+  it("puts bos first in the roster when the greeting is prepared, never once the person has written", () => {
+    const { host, rows, led } = memoryHost();
+    const state = applyOnboardingChatEvent(host, initialOnboardingState("b1", "t1", "BOS", false), { type: "start" });
+    expect(led).toEqual([]);
+    applyOnboardingChatEvent(host, state, prepared);
+    expect(led).toEqual(["t1"]);
+    (rows as { id: string; role?: string }[]).push({ id: "u1", role: "user" });
+    applyOnboardingChatEvent(host, state, prepared);
+    expect(led).toEqual(["t1"]);
+  });
+
+  it("posts the prepared greeting before start, and start does not greet twice", () => {
+    const { host, rows } = memoryHost();
+    let state = applyOnboardingChatEvent(host, initialOnboardingState("b1", "t1", "BOS", false), prepared);
+    expect(rows.map((r) => r.onboarding?.step)).toEqual(["greet"]);
+    state = applyOnboardingChatEvent(host, state, { type: "start" });
+    expect(rows.map((r) => r.onboarding?.step)).toEqual(["greet", "engine"]);
+    expect(rows[0].onboarding?.text).toContain("read up on your business");
+  });
+
+  it("leaves the greeting alone once the person has written", () => {
+    const { host, rows } = memoryHost();
+    const state = applyOnboardingChatEvent(host, initialOnboardingState("b1", "t1", "BOS", false), { type: "start" });
+    (rows as { id: string; role?: string }[]).push({ id: "u1", role: "user" });
+    const before = rows[0].onboarding;
+    applyOnboardingChatEvent(host, state, prepared);
+    expect(rows[0].onboarding).toBe(before);
+  });
+
   it("refuses unknown and malformed events", () => {
     expect(parseOnboardingChatEvent({ type: "dance" })).toMatchObject({ ok: false, error: expect.stringContaining("dance") });
     expect(parseOnboardingChatEvent({ type: "connected", app: "slack" }).ok).toBe(false);
     expect(parseOnboardingChatEvent({ type: "start", extra: 1 }).ok).toBe(false);
     expect(parseOnboardingChatEvent({ type: "first-task", prompt: "hi" })).toEqual({ ok: true, event: { type: "first-task", prompt: "hi" } });
+    expect(parseOnboardingChatEvent(prepared).ok).toBe(true);
+    expect(parseOnboardingChatEvent({ ...prepared, team: [{ name: "", job: "x" }] }).ok).toBe(false);
+    expect(parseOnboardingChatEvent({ ...prepared, extra: 1 }).ok).toBe(false);
   });
 });

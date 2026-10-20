@@ -2800,3 +2800,69 @@ describe("routine continuity", () => {
     })).toThrow(/continuity/i);
   });
 });
+
+describe("routine v2 retry and wakes", () => {
+  const fail = (h: ReturnType<typeof harness>, threadId: string, stopReason: string) => h.manager.handleRuntimeEvent({
+    eventId: `fail-${threadId}`, provider: "fake", threadId, createdAt: new Date().toISOString(), type: "turn.completed", ok: false, stopReason,
+  });
+
+  it("retries a transient failure once and never retries the retry", async () => {
+    const h = harness();
+    const routine = h.manager.create({ name: "Brief", prompt: "Write it", botId: "maus-retry",
+      schedule: { type: "once", at: new Date(2026, 7, 17, 8, 1).getTime() } });
+    h.setNow(routine.nextRunAt!);
+    await h.manager.tick();
+    fail(h, "thread-1", "stop_sequence");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const runs = h.manager.listRuns();
+    const first = runs.find((run) => run.threadId === "thread-1")!;
+    const retry = runs.find((run) => run.retryOf === first.id)!;
+    expect(first).toMatchObject({ status: "failed", retried: true });
+    expect(retry).toBeDefined();
+    expect(h.failed).toHaveLength(0);
+    expect(h.started).toHaveLength(2);
+
+    fail(h, retry.threadId!, "stop_sequence");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(h.manager.listRuns().filter((run) => run.retryOf)).toHaveLength(1);
+    expect(h.failed).toHaveLength(1);
+  });
+
+  it("does not retry a real failure", async () => {
+    const h = harness();
+    const routine = h.manager.create({ name: "Brief", prompt: "Write it", botId: "maus-real",
+      schedule: { type: "once", at: new Date(2026, 7, 17, 8, 1).getTime() } });
+    h.setNow(routine.nextRunAt!);
+    await h.manager.tick();
+    fail(h, "thread-1", "provider crashed");
+    expect(h.manager.listRuns().some((run) => run.retryOf)).toBe(false);
+    expect(h.failed).toHaveLength(1);
+  });
+
+  it("caps wakes, moves quiet-hour wakes to 08:00 and removes a wake after it runs", async () => {
+    const h = harness(new Date(2026, 7, 17, 10, 0, 0).getTime());
+    const late = h.manager.createWake({ botId: "maus-w", threadId: "main", at: new Date(2026, 7, 17, 23, 30).getTime(), why: "late one" });
+    expect(late.at).toBe(new Date(2026, 7, 18, 8, 0).getTime());
+    expect(late.routine).toMatchObject({ wake: true, sourceThreadId: "main" });
+    h.manager.createWake({ botId: "maus-w", threadId: "main", at: new Date(2026, 7, 17, 11, 0).getTime(), why: "two" });
+    h.manager.createWake({ botId: "maus-w", threadId: "main", at: new Date(2026, 7, 17, 12, 0).getTime(), why: "three" });
+    expect(() => h.manager.createWake({ botId: "maus-w", threadId: "main", at: new Date(2026, 7, 17, 13, 0).getTime(), why: "four" })).toThrow(/already have 3/);
+    expect(() => h.manager.createWake({ botId: "maus-x", threadId: "main", at: new Date(2026, 7, 17, 9, 0).getTime(), why: "past" })).toThrow(/future/);
+
+    h.setNow(new Date(2026, 7, 17, 11, 0).getTime());
+    await h.manager.tick();
+    const run = h.manager.listRuns().find((candidate) => candidate.routineName === "check back: two")!;
+    h.manager.handleRuntimeEvent({ eventId: "wake-done", provider: "fake", threadId: run.threadId!, createdAt: new Date().toISOString(), type: "turn.completed", ok: true });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(h.manager.listRoutines().filter((routine) => routine.wake)).toHaveLength(2);
+  });
+
+  it("stops at eight wakes a day per bot", () => {
+    const h = harness(new Date(2026, 7, 17, 10, 0, 0).getTime());
+    for (let i = 0; i < 8; i++) {
+      const { routine } = h.manager.createWake({ botId: "maus-d", threadId: "main", at: new Date(2026, 7, 17, 12, i).getTime(), why: `n${i}` });
+      h.manager.remove(routine.id);
+    }
+    expect(() => h.manager.createWake({ botId: "maus-d", threadId: "main", at: new Date(2026, 7, 17, 13, 0).getTime(), why: "ninth" })).toThrow(/daily cap/);
+  });
+});

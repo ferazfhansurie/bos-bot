@@ -159,6 +159,34 @@ export async function preparePhonePairingRoute<State extends { enabled: boolean;
   return state;
 }
 
+const UPSTREAM_HOSTED_SUFFIX = ".openmausbot.com";
+
+const onUpstreamHost = (url: string): boolean => {
+  try {
+    return new URL(url).hostname.endsWith(UPSTREAM_HOSTED_SUFFIX);
+  } catch {
+    return false;
+  }
+};
+
+const onlyUpstreamHosted = (companion: PhoneSetupCompanionSnapshot | null): boolean => {
+  const hosted = companion?.endpoints?.filter((endpoint) => endpoint.kind === "hosted") ?? [];
+  return hosted.length > 0 && hosted.every((endpoint) => onUpstreamHost(endpoint.url));
+};
+
+/** The hosted route on offer belongs to the old control plane, so new phones
+ * pair only after this computer gets its own address (the desktop does that by
+ * itself, no sign-in). Judged from the advertised address as well as the
+ * account flag: the panel must never hand out an openmausbot QR. */
+export const companionMoveRequired = (
+  account: CompanionAccountState | null,
+  companion: PhoneSetupCompanionSnapshot | null,
+): boolean => {
+  if (account?.status === "ready" || account?.status === "connecting") return false;
+  if (account?.available && account.moveRequired) return true;
+  return onlyUpstreamHosted(companion);
+};
+
 /** Automatic setup is hosted-HTTPS only. Tailscale and plain local pairing
  * remain explicit user choices, so a tailnet route cannot silently replace
  * hosted access while the account connection is still being prepared. */
@@ -166,6 +194,12 @@ export const companionPairingMode = (
   account: CompanionAccountState | null,
   companion: PhoneSetupCompanionSnapshot | null,
 ): CompanionPairingMode => {
+  // The new address is on its way (or its connector is still replacing the
+  // old one): wait for it rather than pair a phone to the retiring route.
+  if ((account?.status === "ready" || account?.status === "connecting") && onlyUpstreamHosted(companion)) {
+    return "hosted-connecting";
+  }
+  if (companionMoveRequired(account, companion)) return "local-only";
   if (companion?.endpoints?.some((endpoint) => endpoint.kind === "hosted")) {
     return "hosted-ready";
   }

@@ -1,6 +1,6 @@
 import { compatEnv, compatEnvironment } from "../electron/branding-env.cjs";
 // Rung three of the hosting ladder: `bosbot serve --tunnel` gives a
-// server a public HTTPS address (https://c-<id>.openmausbot.com) with no
+// server a public HTTPS address (https://c-<id>.bosbot.my) with no
 // domain, no proxy and no open port, through the same control plane and
 // Cloudflare tunnel the desktop app already uses. Headless, so:
 //
@@ -45,7 +45,10 @@ import {
 import { ControlPlaneError, createControlPlaneClient } from "../electron/control-plane-client.mjs";
 import {
   createManagedCompanionTunnel,
+  hasExpiredLegacyManagedCompanionTunnel,
+  legacyManagedCompanionTunnelAccess,
   managedCompanionTunnelAccess,
+  withoutLegacyManagedCompanionTunnel,
   resolveCloudflaredBinary,
   type ManagedTunnelAccess,
   type ManagedTunnelState,
@@ -129,8 +132,19 @@ export function describeTunnelAccount(document: CredentialDocument): TunnelAccou
   };
 }
 
-export function tunnelAccess(document: CredentialDocument): ManagedTunnelAccess | null {
-  return managedCompanionTunnelAccess(document);
+/** After a move to a new control plane, the previous address keeps serving
+ * beside the new one until it retires (or alone, until the new one exists). */
+export function tunnelAccess(document: CredentialDocument, now = Date.now()): ManagedTunnelAccess | null {
+  const primary = managedCompanionTunnelAccess(document);
+  const legacy = legacyManagedCompanionTunnelAccess(document, now);
+  if (!primary) return legacy;
+  return legacy ? { ...primary, legacy } : primary;
+}
+
+/** Forget a retiring connector whose grace period has passed. */
+export async function pruneRetiredTunnelAccess(credentials: TunnelCredentials, now = Date.now()): Promise<void> {
+  if (!hasExpiredLegacyManagedCompanionTunnel(credentials.read(), now)) return;
+  await credentials.update((document) => withoutLegacyManagedCompanionTunnel(document)).catch(() => {});
 }
 
 /** The control plane's platform vocabulary. */
@@ -141,14 +155,14 @@ export function platformName(platform: NodeJS.Platform = process.platform): "dar
 export interface TunnelAccount {
   service: CompanionAccountService;
   credentials: TunnelCredentials;
-  /** "" when no control plane is configured (BOS_CONTROL_PLANE_URL /
-   * OMB_CONTROL_PLANE_URL unset) or it is set to something unusable. */
+  /** "" when BOS_CONTROL_PLANE_URL (or OMB_CONTROL_PLANE_URL) is set empty
+   * or to something unusable. */
   controlPlane: string;
 }
 
-/** The control plane comes only from BOS_CONTROL_PLANE_URL (or legacy
- * OMB_CONTROL_PLANE_URL); there is no hosted default, so `login` and
- * `serve --tunnel` are off until an operator configures one. */
+/** The control plane is BOS Bot's own (accounts.bosbot.my) unless
+ * BOS_CONTROL_PLANE_URL (or legacy OMB_CONTROL_PLANE_URL) points elsewhere;
+ * set it empty to turn `login` and `serve --tunnel` off. */
 export function createTunnelAccount(options: {
   dataDir: string;
   version: string;
@@ -162,6 +176,7 @@ export function createTunnelAccount(options: {
   const client = controlPlane ? createControlPlaneClient({ baseURL: controlPlane, fetchImpl: options.fetchImpl }) : null;
   const service = createCompanionAccountService({
     client,
+    controlPlaneOrigin: client ? new URL(controlPlane).origin : "",
     readCredentials: () => credentials.read(),
     updateCredentials: (derive, afterPersist) => credentials.update(derive, afterPersist),
     identity: { name: options.machineName ?? hostname(), platform: platformName(), appVersion: options.version },
@@ -290,7 +305,12 @@ export function startTunnel(options: {
       options.onState?.(state);
     },
   });
-  const started = tunnel.start({ endpoint: options.access.endpoint, token: options.access.token, originTarget: options.originTarget });
+  const started = tunnel.start({
+    endpoint: options.access.endpoint,
+    token: options.access.token,
+    legacy: options.access.legacy ?? null,
+    originTarget: options.originTarget,
+  });
   return {
     address: options.access.endpoint,
     state: () => current,

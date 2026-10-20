@@ -8,13 +8,18 @@ import {
   companionKeepAwakeWanted,
   createManagedCompanionTunnel,
   fetchWithPublicDnsFallback,
+  hasExpiredLegacyManagedCompanionTunnel,
   hostedCompanionStatus,
+  LEGACY_MANAGED_COMPANION_GRACE_MS,
+  legacyManagedCompanionTunnelAccess,
   MANAGED_COMPANION_ORIGIN_VERSION,
   MANAGED_COMPANION_ORIGIN_VERSION_FIELD,
   managedCompanionTunnelAccess,
   normalizeManagedCompanionEndpoint,
   resolveCloudflaredBinary,
+  withLegacyManagedCompanionTunnel,
   withManagedCompanionTunnelAccess,
+  withoutLegacyManagedCompanionTunnel,
   withoutManagedCompanionTunnelAccess,
 } from "./managed-companion-tunnel.mjs";
 
@@ -194,6 +199,69 @@ describe("cloudflared binary resolution", () => {
         exists: () => true,
       }),
     ).toBeNull();
+  });
+});
+
+describe("retiring connector after a control-plane move", () => {
+  const LEGACY_TOKEN = `eyJ${"b".repeat(120)}=`;
+  const NEW_ENDPOINT = "https://c-fresh.bosbot.my";
+  const current = withManagedCompanionTunnelAccess({ other: 1 }, {
+    endpoint: { url: ENDPOINT },
+    connectorToken: LEGACY_TOKEN,
+  });
+
+  it("moves the current route aside for a grace period, then retires it", () => {
+    const moved = withLegacyManagedCompanionTunnel(current, { now: 1_000 });
+    expect(managedCompanionTunnelAccess(moved)).toBeNull();
+    expect(moved.other).toBe(1);
+    expect(legacyManagedCompanionTunnelAccess(moved, 1_000)).toEqual({ endpoint: ENDPOINT, token: LEGACY_TOKEN });
+    const both = withManagedCompanionTunnelAccess(moved, { endpoint: { url: NEW_ENDPOINT }, connectorToken: TOKEN });
+    expect(managedCompanionTunnelAccess(both)).toEqual({ endpoint: NEW_ENDPOINT, token: TOKEN });
+    expect(legacyManagedCompanionTunnelAccess(both, 1_000)).not.toBeNull();
+    const retired = 1_000 + LEGACY_MANAGED_COMPANION_GRACE_MS;
+    expect(legacyManagedCompanionTunnelAccess(both, retired)).toBeNull();
+    expect(hasExpiredLegacyManagedCompanionTunnel(both, 1_000)).toBe(false);
+    expect(hasExpiredLegacyManagedCompanionTunnel(both, retired)).toBe(true);
+    expect(managedCompanionTunnelAccess(withoutLegacyManagedCompanionTunnel(both))).toEqual({ endpoint: NEW_ENDPOINT, token: TOKEN });
+    expect(legacyManagedCompanionTunnelAccess(withoutManagedCompanionTunnelAccess(both), 1_000)).toBeNull();
+  });
+
+  it("keeps an earlier retiring route when there is nothing current to move", () => {
+    const moved = withLegacyManagedCompanionTunnel(current, { now: 1_000 });
+    const again = withLegacyManagedCompanionTunnel(moved, { now: 5_000 });
+    expect(legacyManagedCompanionTunnelAccess(again, 1_000)).toEqual({ endpoint: ENDPOINT, token: LEGACY_TOKEN });
+  });
+
+  it("hands the guardian a second private token file and removes both", async () => {
+    const runtimeRoot = path.join(temporaryDirectory(), "runtime");
+    const child = fakeChild();
+    let tokens;
+    const spawnProcess = vi.fn((_binary, args) => {
+      expect(args).toHaveLength(7);
+      tokens = [fs.readFileSync(args[2], "utf8"), fs.readFileSync(args[6], "utf8")];
+      expect(JSON.stringify(args)).not.toContain(LEGACY_TOKEN);
+      return child;
+    });
+    const manager = createManagedCompanionTunnel({
+      binaryPath: BINARY,
+      guardianEntry: GUARDIAN,
+      runtimeExecutable: RUNTIME,
+      runtimeRoot,
+      environment: { PATH: "/usr/bin" },
+      spawnProcess,
+      fetchImpl: vi.fn(async () => healthyResponse()),
+    });
+    await expect(
+      manager.start({
+        endpoint: NEW_ENDPOINT,
+        token: TOKEN,
+        legacy: { endpoint: ENDPOINT, token: LEGACY_TOKEN },
+        originTarget: ORIGIN_TARGET,
+      }),
+    ).resolves.toMatchObject({ status: "ready", endpoint: NEW_ENDPOINT });
+    expect(tokens).toEqual([TOKEN, LEGACY_TOKEN]);
+    expect(fs.readdirSync(runtimeRoot)).toEqual([]);
+    await manager.stop();
   });
 });
 

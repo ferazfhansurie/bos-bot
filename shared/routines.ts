@@ -91,6 +91,8 @@ export interface Routine {
   lastSkippedAt?: number;
   failureStreak?: number;
   attachments?: RoutineContextAttachment[];
+  /** A bot's own one-time check-back (set_next_wake); removed once its run settles. */
+  wake?: boolean;
   sourceThreadId?: string;
   resultsThreadId?: string;
   nextRunAt: number | null;
@@ -132,6 +134,10 @@ export interface RoutineRun {
   attention?: string;
   cost?: number | null;
   denials?: string[];
+  /** A transient failure that was queued to run once more; it posts nothing. */
+  retried?: boolean;
+  /** The failed run this one retries. */
+  retryOf?: string;
   createdAt: number;
   seenAt?: number;
 }

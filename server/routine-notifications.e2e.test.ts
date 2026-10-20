@@ -33,11 +33,12 @@ it("enforces saved notification choices on real runs, report cards, unread and S
       const currentBot = (await api("GET", "/api/bots")).bots.find((candidate: any) => candidate.id === bot.id);
       expect(Boolean(currentBot.tasks.find((task: any) => task.threadId === done.resultsThreadId)?.unread)).toBe(surfaced);
       const messages = (await api("GET", `/api/threads/${done.resultsThreadId}/messages?limit=100`)).messages;
-      const card = messages.find((message: any) => message.routineRun?.runId === run.id)?.routineRun;
-      expect(card.status).toBe("completed");
+      // v2: a surfaced run speaks as a text message; anything else posts nothing.
+      const delivered = messages.find((message: any) => message.routineRun?.runId === run.id);
+      if (surfaced) expect(delivered).toMatchObject({ kind: "text", text: done.output, routineRun: { status: "completed" } });
+      else expect(delivered).toBeUndefined();
       if (index < 3) expect(done.output).toBe("ordinary check");
       if (index === 3) { expect(done.output).toBe("build is broken"); expect(done.important).toBe(true); expect(JSON.stringify(JSON.parse(readFileSync(fixture.fixtureDumpPath, "utf8")).prompt)).toContain("IMPORTANT_UPDATE:"); }
-      if (!surfaced && index < 3) expect(card.summary).toBeUndefined();
       await expect.poll(() => frames.slice(before).some(frame => frame.kind === "routine.run" && frame.run?.id === run.id && frame.run.status === "completed")).toBe(true);
       const notifications = frames.slice(before).filter(frame => frame.kind === "notify" && frame.notification?.threadId === done.resultsThreadId && frame.notification.kind === "done");
       expect(notifications.length).toBe(surfaced ? 1 : 0);

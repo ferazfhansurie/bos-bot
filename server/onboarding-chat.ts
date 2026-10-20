@@ -8,6 +8,7 @@ import {
   ONBOARDING_APPS,
   nextOnboardingState,
   onboardingScript,
+  preparedGreeting,
   type OnboardingAppId,
   type OnboardingChatEvent,
   type OnboardingChatMessage,
@@ -40,6 +41,12 @@ const onboardingChatEventSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("connected"), app: z.enum(APP_IDS) }).strict(),
   z.object({ type: z.literal("skip") }).strict(),
   z.object({ type: z.literal("first-task"), prompt: z.string().max(20_000) }).strict(),
+  z.object({
+    type: z.literal("prepared"),
+    profile: z.array(z.object({ label: z.string().trim().min(1).max(40), value: z.string().max(600) }).strict()).max(12),
+    team: z.array(z.object({ name: z.string().trim().min(1).max(40), job: z.string().trim().min(1).max(240) }).strict()).max(8),
+    firstJob: z.object({ title: z.string().trim().min(1).max(80), prompt: z.string().trim().min(1).max(4000) }).strict().optional(),
+  }).strict(),
 ]);
 
 /** Validate a request body's `event`. Unknown types and stray fields are refused. */
@@ -49,13 +56,13 @@ export function parseOnboardingChatEvent(value: unknown): { ok: true; event: Onb
   const type = value && typeof value === "object" ? (value as { type?: unknown }).type : undefined;
   return {
     ok: false,
-    error: typeof type === "string" && !["start", "name", "engine-ready", "connected", "skip", "first-task"].includes(type)
+    error: typeof type === "string" && !["start", "name", "engine-ready", "connected", "skip", "first-task", "prepared"].includes(type)
       ? `unknown onboarding event "${type.slice(0, 40)}"`
-      : "event must be one of start, name, engine-ready, connected, skip or first-task, with its fields",
+      : "event must be one of start, name, engine-ready, connected, skip, first-task or prepared, with its fields",
   };
 }
 
-type OnboardingLine = Pick<WireMessage, "id"> & { onboarding?: OnboardingChatMessage };
+type OnboardingLine = Pick<WireMessage, "id"> & Partial<Pick<WireMessage, "role">> & { onboarding?: OnboardingChatMessage };
 
 export interface OnboardingChatHost {
   /** The person's name from the profile; the greeting uses the first word. */
@@ -70,6 +77,9 @@ export interface OnboardingChatHost {
   seedGreeting?(threadId: string): string | null;
   /** Called once the person names the bot. */
   rename?(botId: string, name: string): void;
+  /** Put this conversation's bot first in the roster, so an app opening
+   * fresh lands on it rather than on a teammate hired after it. */
+  lead?(threadId: string): void;
   save(state: OnboardingChatState): void;
 }
 
@@ -78,6 +88,20 @@ export interface OnboardingChatHost {
  * are posted before the record is saved, so a crash in between leaves a
  * replay that finds the lines already there and posts nothing twice. */
 export function applyOnboardingChatEvent(host: OnboardingChatHost, before: OnboardingChatState, event: OnboardingChatEvent, now: () => Date = () => new Date()): OnboardingChatState {
+  if (event.type === "prepared") {
+    // the greeting becomes what was researched about the business; never
+    // once the person has joined the conversation
+    const rows = host.messages(before.threadId);
+    if (rows.some((row) => row.role === "user")) return before;
+    const line = preparedGreeting({ personName: host.personName, botName: before.botName }, event);
+    const greet = rows.find((row) => row.onboarding?.step === "greet")?.id ?? host.seedGreeting?.(before.threadId);
+    if (greet) host.patch(before.threadId, greet, line);
+    else host.append(before.threadId, line);
+    // the researched team was hired after bos, and a fresh app opens on
+    // the first bot; the greeting is what it should open on
+    host.lead?.(before.threadId);
+    return before;
+  }
   let state = nextOnboardingState(before, event, now);
   const { threadId } = state;
   const posted = new Set(host.messages(threadId).flatMap((message) => message.onboarding ? [message.onboarding.step] : []));

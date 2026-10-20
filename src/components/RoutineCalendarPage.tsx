@@ -46,7 +46,7 @@ import { RoutineLogs } from "@/components/routines/RoutineLogs";
 import { ResultsDestination } from "@/components/routines/ResultsDestination";
 import { CronScheduleFields, CronSchedulePreview } from "@/components/routines/CronScheduleFields";
 import { cronChoiceFor, cronDraftFor, cronEditorValue, isCronChoice, type CronChoice } from "@/components/routines/cron-editor";
-import { routineRunLabel } from "@/lib/routine-display";
+import { latestRoutineRun, routineRunLabel } from "@/lib/routine-display";
 import { t } from "@/lib/i18n";
 import { useDesktopCapabilities } from "@/components/DesktopCapabilities";
 import { WebhooksPanel } from "@/components/WebhooksPanel";
@@ -1835,6 +1835,7 @@ export function RoutinesPage({ onBack, onOpenRoom }: { onBack: () => void; onOpe
         </div>}
       </header>
       <RoutineWakeBar />
+      <NeedsAttention routines={filteredRoutines} runs={state.routineRuns} onOpen={openLogs} />
 
       {section === "webhooks" ? <WebhooksPanel bots={visibleBots} createRequest={webhookCreateRequest} onCreateHandled={handleWebhookCreateHandled} /> : section === "logs" ? (
         <div className="min-h-0 flex-1 overflow-y-auto"><RoutineLogs runs={filteredRuns} bots={state.bots} loading={state.routinesLoadState === "loading" && filteredRuns.length === 0} error={state.routinesLoadState === "error"} routineId={routineFilter} onClearRoutine={() => setRoutineFilter(undefined)} onOpen={openRun} /></div>
@@ -1902,3 +1903,32 @@ function RoutineWakeBar() {
   );
 }
 // branding compatibility (electron/branding-compat.json): peer-http: HTTP authentication headers, discovery and domain verification still interoperate with 1.9.1
+
+/** Routines whose latest run broke or is waiting on the person, on top of the
+ * page so nobody has to dig through Runs to find them. A failure that is being
+ * retried is not listed: its newer run is the latest. */
+function NeedsAttention({ routines, runs, onOpen }: { routines: Routine[]; runs: RoutineRun[]; onOpen: (routine: Routine) => void }) {
+  const broken = routines.flatMap((routine) => {
+    if (!routine.enabled) return [];
+    const latest = latestRoutineRun(routine.id, runs);
+    if (!latest) return [];
+    const failed = ["failed", "missed"].includes(latest.status);
+    const asking = latest.status === "waiting" && Boolean(latest.attention) && latest.attention !== "Waiting for delegated work to finish";
+    return failed || asking ? [{ routine, run: latest, failed }] : [];
+  });
+  if (broken.length === 0) return null;
+  return (
+    <section aria-label="Needs attention" className="mx-4 mt-3 space-y-1.5 rounded-xl border border-danger/30 bg-danger/5 p-3 sm:mx-6">
+      <h2 className="flex items-center gap-1.5 text-[12px] font-semibold text-danger"><CircleAlert size={13} />Needs attention</h2>
+      {broken.map(({ routine, run, failed }) => (
+        <button key={routine.id} type="button" onClick={() => onOpen(routine)} className="flex w-full items-start gap-2 rounded-lg px-2 py-1.5 text-left hover:bg-raised">
+          <span className={cn("mt-1.5 size-1.5 shrink-0 rounded-full", failed ? "bg-danger" : "bg-warning")} />
+          <span className="min-w-0 text-[12px]">
+            <span className="font-medium text-ink">{routine.name}</span>
+            <span className="block truncate text-ink-secondary">{failed ? (run.error || routineRunLabel(run)) : run.attention}</span>
+          </span>
+        </button>
+      ))}
+    </section>
+  );
+}

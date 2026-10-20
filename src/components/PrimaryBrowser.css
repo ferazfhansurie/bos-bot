@@ -87,3 +87,21 @@
 .browser-profile-pick:hover { background:var(--color-raised); }
 /* The workspace pane, closed in this thread while it holds the browser. */
 .workspace-dock-parked { position:absolute; top:0; right:0; bottom:0; opacity:.001; pointer-events:none; z-index:0; }
+/* bookmarks: chrome-style bar under the toolbar and a star in the address bar */
+.browser-star { display:flex; flex-shrink:0; align-items:center; justify-content:center; width:24px; height:24px; margin-right:4px; border-radius:6px; color:var(--color-ink-secondary); }
+.browser-star:hover { color:var(--color-ink); background:color-mix(in srgb,var(--color-ink) 9%,transparent); }
+.browser-star.is-on { color:var(--color-accent); }
+.browser-bookmarks-bar { display:flex; align-items:center; gap:2px; height:32px; flex-shrink:0; padding:0 8px; border-bottom:1px solid var(--color-hairline); font-size:12px; color:var(--color-ink-secondary); }
+.browser-bookmarks-bar.is-empty { gap:10px; padding:0 14px; }
+.browser-bookmarks-bar.is-empty > span { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.browser-bookmarks-bar.is-empty > button { flex-shrink:0; color:var(--color-accent); }
+.browser-bookmarks-bar.is-empty > button:hover { text-decoration:underline; }
+.browser-bookmarks-row { display:flex; flex:1; min-width:0; gap:2px; overflow:hidden; }
+.browser-bookmark { display:flex; flex-shrink:0; align-items:center; gap:7px; height:26px; max-width:168px; padding:0 8px; border-radius:999px; color:inherit; white-space:nowrap; }
+.browser-bookmark > span { min-width:0; overflow:hidden; text-overflow:ellipsis; }
+.browser-bookmark:hover, .browser-bookmark[aria-expanded="true"] { color:var(--color-ink); background:color-mix(in srgb,var(--color-ink) 8%,transparent); }
+.browser-bookmark:focus-visible { outline:2px solid color-mix(in srgb,var(--color-accent) 65%,transparent); outline-offset:-2px; }
+.browser-bookmark-more { padding:0 6px; }
+.browser-bookmarks-divider { flex-shrink:0; width:1px; height:16px; margin:0 4px; background:var(--color-hairline); }
+.browser-bookmark-favicon { flex-shrink:0; border-radius:3px; object-fit:contain; }
+.browser-bookmark-letter { display:inline-flex; flex-shrink:0; align-items:center; justify-content:center; border-radius:4px; font-size:10px; font-weight:600; line-height:1; text-transform:uppercase; }

@@ -55,10 +55,12 @@ afterEach(async () => {
 });
 
 describe("desktop companion endpoint", () => {
-  it("trusts no hosted endpoint without a configured control plane or suffix", () => {
-    expect(managedCompanionHostSuffix({})).toBe("");
+  it("trusts only the control plane's hosted domain, bosbot.my by default", () => {
+    expect(managedCompanionHostSuffix({})).toBe("bosbot.my");
+    expect(normalizeDesktopCompanionEndpoint("https://c-opaque.bosbot.my", {})).toBe("https://c-opaque.bosbot.my");
     expect(normalizeDesktopCompanionEndpoint("https://c-opaque.openmausbot.com", {})).toBe("");
-    expect(normalizeDesktopCompanionEndpoint("https://c-opaque.bos.example", {})).toBe("");
+    expect(managedCompanionHostSuffix({ BOS_CONTROL_PLANE_URL: "" })).toBe("");
+    expect(normalizeDesktopCompanionEndpoint("https://c-opaque.bos.example", { BOS_CONTROL_PLANE_URL: "" })).toBe("");
     expect(normalizeDesktopCompanionEndpoint("host.example-tailnet.ts.net", {})).toBe(
       "http://host.example-tailnet.ts.net:8810",
     );

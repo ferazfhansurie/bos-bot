@@ -86,6 +86,47 @@ describe("managed Companion guardian", () => {
     expect(child.kill).toHaveBeenCalledOnce();
   });
 
+  it("runs a retiring connector beside the primary and stops both on owner EOF", async () => {
+    const events = [];
+    const input = owner();
+    const primary = connector(events);
+    const legacy = connector(events);
+    const spawned = [];
+    const gateway = {
+      start: vi.fn(async () => events.push("gateway-start")),
+      invalidate: vi.fn(() => events.push("gateway-invalidate")),
+      close: vi.fn(async () => events.push("gateway-close")),
+    };
+    const spawnProcess = vi.fn((_binary, args) => {
+      spawned.push(args);
+      return spawned.length === 1 ? primary : legacy;
+    });
+    const running = runManagedCompanionGuardian({
+      cloudflaredBinary: "/trusted/cloudflared",
+      tokenFile: "/private/token",
+      legacyTokenFile: "/private/legacy-token",
+      target: TARGET,
+      ownerInput: input,
+      signalSource: new EventEmitter(),
+      createGateway: () => gateway,
+      spawnProcess,
+    });
+    await vi.waitFor(() => expect(spawnProcess).toHaveBeenCalledTimes(2));
+    expect(spawned[0]).toContain("/private/token");
+    expect(spawned[1]).toContain("/private/legacy-token");
+
+    // The retiring route failing never takes the primary down with it.
+    legacy.exitCode = 1;
+    legacy.emit("exit", 1, null);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(gateway.invalidate).not.toHaveBeenCalled();
+
+    input.emit("end");
+    await expect(running).resolves.toBe(0);
+    expect(primary.kill).toHaveBeenCalledOnce();
+    expect(events.at(-1)).toBe("gateway-close");
+  });
+
   it("invalidates and closes the gateway when cloudflared exits unexpectedly", async () => {
     const events = [];
     const input = owner();

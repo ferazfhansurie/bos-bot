@@ -175,7 +175,7 @@ export function createPrimaryBrowserController({ root, encryption, registry, ses
         const categories=input.categories;if(!Array.isArray(categories))throw new Error('Choose data to import');
         let cookies;
         if(categories.includes('cookies')){
-          if(!await confirm(`Import saved chrome logins into ${store.profiles().profiles.find(p=>p.id===id).name}?`, 'This grants this profile access to accounts signed into the selected chrome profile. macOS may ask for Chrome Safe Storage access. Existing bos cookies stay unchanged. Some sites will require signing in again. Library undo does not remove imported logins; use Clear website data to sign out.', ['Cancel','Import logins']))return null;
+          if(!await confirm(`Import saved chrome logins into ${store.profiles().profiles.find(p=>p.id===id).name}?`, 'This grants this profile access to accounts signed into the selected chrome profile. macOS may ask for Chrome Safe Storage access. Existing bos cookies stay unchanged, except google logins, which are replaced with the current ones from chrome. Google may sign a copied login out after a while: import again to refresh it. Some other sites will require signing in again. Library undo does not remove imported logins; use Clear website data to sign out.', ['Cancel','Import logins']))return null;
           cookies=await importChromeCookies(path.join(chromeDirectory??chromeRoot(),preview.sourceId),sessionFromPartition(partition(id)));
         }
         const libraryCategories=categories.filter(c=>c!=='cookies');const result=libraryCategories.length?store.import(id, preview.data, libraryCategories):{bookmarks:0,history:0,tabs:0}; previews.delete(input.token); return {...result,...(cookies?{cookies}: {})};
