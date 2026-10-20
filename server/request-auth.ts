@@ -295,7 +295,9 @@ export const CLIENT_ALLOW: ReadonlyArray<{ methods: readonly string[]; path: Reg
   { methods: ["POST"], path: /^\/api\/tts\/prepare$/ },
   { methods: ["POST"], path: /^\/api\/tts\/speak$/ },
   { methods: ["POST"], path: /^\/api\/voice\/call$/ },
-  // routines: a scheduled message; the input carries no cwd or permission field
+  // routines: the owner's own paired device only. server/index.ts refuses
+  // every other client actor (welcome guests, password and team members),
+  // since a routine runs a bot with its full permissions.
   { methods: ["GET"], path: /^\/api\/routines$/ },
   { methods: ["POST"], path: /^\/api\/routines$/ },
   { methods: ["PATCH", "DELETE"], path: /^\/api\/routines\/[\w-]+$/ },

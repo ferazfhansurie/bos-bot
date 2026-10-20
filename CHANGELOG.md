@@ -12,6 +12,5 @@ This records public source changes. Installer and app-store availability are sep
 
 ## 1.9.8 source
 
-See [the 1.9.8 source notes](docs/releases/1.9.8.md). This heading does not announce
-new public binaries. Refer to [GitHub releases](https://github.com/ferazfhansurie/bos-bot/releases)
+This heading does not announce new public binaries. Refer to [GitHub releases](https://github.com/ferazfhansurie/bos-bot/releases)
 for published artifacts.

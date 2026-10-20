@@ -8,7 +8,8 @@
   "vars": {
     "COMPOSIO_API_BASE": "https://backend.composio.dev/api/v3.1",
     "COMPOSIO_TOOLKIT_BASE": "https://backend.composio.dev/api/v3",
-    "REGISTRATION_MODE": "open"
+    "REGISTRATION_MODE": "open",
+    "DAILY_REGISTRATION_CAP": "500"
   },
   "secrets": { "required": ["COMPOSIO_API_KEY"] },
   "d1_databases": [

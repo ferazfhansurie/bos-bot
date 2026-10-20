@@ -49,12 +49,19 @@ export function readIssuerConfig(env: NodeJS.ProcessEnv): IssuerConfig {
   const delivery = (env.ISSUER_OTP_DELIVERY ?? 'log') as 'log' | 'smtp';
   if (!['log', 'smtp'].includes(delivery)) throw new Error('ISSUER_OTP_DELIVERY must be log or smtp');
   if (delivery === 'smtp' && (!env.ISSUER_SMTP_URL || !env.ISSUER_EMAIL_FROM)) throw new Error('smtp delivery needs ISSUER_SMTP_URL and ISSUER_EMAIL_FROM');
+  const allowedEmails = new Set(list(env.ISSUER_ALLOWED_EMAILS));
+  const allowedDomains = new Set(list(env.ISSUER_ALLOWED_EMAIL_DOMAINS));
+  // An empty allowlist admits every address. That is fine while codes only
+  // reach the operator's log, but with real mail anyone could sign up.
+  if (delivery === 'smtp' && !allowedEmails.size && !allowedDomains.size) {
+    throw new Error('smtp delivery needs ISSUER_ALLOWED_EMAILS or ISSUER_ALLOWED_EMAIL_DOMAINS, or anyone could sign in');
+  }
   const port = Number(env.ISSUER_PORT ?? '8787');
   return {
     publicURL, databaseURL, secret, delivery,
     allowedOrigins: list(env.ISSUER_ALLOWED_ORIGINS).map(v => exactOrigin(v, 'ISSUER_ALLOWED_ORIGINS', false)),
-    allowedEmails: new Set(list(env.ISSUER_ALLOWED_EMAILS)),
-    allowedDomains: new Set(list(env.ISSUER_ALLOWED_EMAIL_DOMAINS)),
+    allowedEmails,
+    allowedDomains,
     smtpURL: env.ISSUER_SMTP_URL || undefined, emailFrom: env.ISSUER_EMAIL_FROM || undefined,
     port, host: env.ISSUER_HOST ?? '0.0.0.0',
   };

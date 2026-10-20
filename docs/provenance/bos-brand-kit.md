@@ -1,7 +1,7 @@
 # bos brand-kit provenance and mapping
 
 - supplied by: Firaz F. Hansurie for the BOS product
-- source directory: `/Users/firazfhansurie/aios-firaz/outputs/2026-09-20-bos-brand-kit`
+- source directory: Firaz's private brand-kit folder (not in this repository)
 - generated: 2026-09-20
 - status: first-party BOS project artwork; not derived from BOS Bot source or assets
 

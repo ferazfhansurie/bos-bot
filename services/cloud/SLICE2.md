@@ -10,7 +10,6 @@ control-plane Wrangler 4.125.0. Install service dependencies separately with
 `npm ci --prefix services/cloud --ignore-scripts --no-audit --no-fund`.
 
 ```sh
-export PATH=/Users/firazfhansurie/.nvm/versions/node/v24.21.0/bin:$PATH
 node --experimental-strip-types services/cloud/local.ts
 # Independent races only:
 node --experimental-strip-types services/cloud/local.ts --acceptance-hooks

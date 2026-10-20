@@ -35,10 +35,14 @@ const env = (over: Record<string, string> = {}) => ({ ISSUER_PUBLIC_URL: 'https:
 
 test('config refuses the hosted issuer, plain http and short secrets; allowlist', () => {
   assert.equal(readIssuerConfig(env()).delivery, 'log');
-  assert.throws(() => readIssuerConfig(env({ ISSUER_PUBLIC_URL: 'https://accounts.openmausbot.com' })), /hosted/);
+  assert.throws(() => readIssuerConfig(env({ ISSUER_PUBLIC_URL: 'https://accounts.bosbot.com' })), /hosted/);
   assert.throws(() => readIssuerConfig(env({ ISSUER_PUBLIC_URL: 'http://bos.example.test' })), /https/);
   assert.throws(() => readIssuerConfig(env({ BETTER_AUTH_SECRET: 'short' })), /32/);
   assert.throws(() => readIssuerConfig(env({ ISSUER_OTP_DELIVERY: 'smtp' })), /SMTP/);
+  const smtp = { ISSUER_OTP_DELIVERY: 'smtp', ISSUER_SMTP_URL: 'smtp://mail.example.test', ISSUER_EMAIL_FROM: 'bos@example.test' };
+  assert.throws(() => readIssuerConfig(env(smtp)), /ALLOWED/);
+  assert.equal(readIssuerConfig(env({ ...smtp, ISSUER_ALLOWED_EMAIL_DOMAINS: 'partner.example' })).delivery, 'smtp');
+  assert.equal(readIssuerConfig(env({ ...smtp, ISSUER_ALLOWED_EMAILS: 'a@x.example' })).delivery, 'smtp');
   const c = readIssuerConfig(env({ ISSUER_ALLOWED_EMAIL_DOMAINS: 'partner.example', ISSUER_ALLOWED_EMAILS: 'firaz@else.example' }));
   assert.ok(emailAllowed(c, 'a@partner.example'));
   assert.ok(emailAllowed(c, 'FIRAZ@else.example'));

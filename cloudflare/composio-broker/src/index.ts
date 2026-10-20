@@ -250,15 +250,34 @@ async function authenticate(request: Request, env: Env) {
   return row && row.disabled_at === null ? row : null;
 }
 
+const DAY_MS = 24 * 60 * 60_000;
+const DEFAULT_DAILY_REGISTRATION_CAP = 500;
+
+export function dailyRegistrationCap(env: { DAILY_REGISTRATION_CAP?: string }) {
+  const value = Number(env.DAILY_REGISTRATION_CAP);
+  return Number.isInteger(value) && value > 0 ? value : DEFAULT_DAILY_REGISTRATION_CAP;
+}
+
 async function register(request: Request, env: Env) {
   if (env.REGISTRATION_MODE !== "open") return json({ error: "registration is temporarily closed" }, 503);
-  const fingerprint = `${request.headers.get("cf-connecting-ip") ?? "unknown"}|${request.headers.get("user-agent") ?? "unknown"}`;
-  if (!(await env.REGISTRATION_LIMITER.limit({ key: await sha256(fingerprint.slice(0, 512)) })).success) {
+  // Key on the client address alone. The user agent is the caller's to set,
+  // so a key that included it let one address register without limit.
+  const address = request.headers.get("cf-connecting-ip") ?? "unknown";
+  if (!(await env.REGISTRATION_LIMITER.limit({ key: await sha256(address.slice(0, 64)) })).success) {
     return json({ error: "too many registration attempts" }, 429);
+  }
+  const now = Date.now();
+  // A ceiling across every address bounds what a spread of addresses can
+  // mint in a day; new installs stay open below it.
+  const cap = dailyRegistrationCap(env as { DAILY_REGISTRATION_CAP?: string });
+  const recent = await env.DB.prepare("SELECT COUNT(*) AS n FROM installations WHERE created_at > ?")
+    .bind(now - DAY_MS).first<{ n: number }>();
+  if (Number(recent?.n ?? 0) >= cap) {
+    console.log(JSON.stringify({ message: "daily registration cap reached", cap }));
+    return json({ error: "registration is busy, try again later" }, 503);
   }
   const installationId = crypto.randomUUID();
   const token = randomToken();
-  const now = Date.now();
   await env.DB.prepare(
     "INSERT INTO installations (id, token_hash, composio_user_id, created_at, last_seen_at) VALUES (?, ?, ?, ?, ?)",
   ).bind(installationId, await sha256(token), `omb_${installationId.replaceAll("-", "")}`, now, now).run();

@@ -15456,6 +15456,13 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
     if (restrictedGuest && !channelIngress && !joinedChannelRead && !joinedChannelFile && (/^\/api\/(?:bots\/|threads\/|groups(?:\/|$)|search$|team-map$|inbox|digest|lead-actions)/.test(path))) {
       req.resume(); return json(res, 403, { error: "client guests access invited rooms only" });
     }
+    // Routines run any bot with its full permissions and read back every
+    // run's output, so they belong to the owner: loopback, an admin session,
+    // or the owner's own paired device. Welcome guests, password members and
+    // team members hold client scope too and are refused here.
+    if (/^\/api\/routine(?:s|-runs)(?:\/|$)/.test(path) && !auth.scopes.includes("admin") && requestActor !== multiplayerActors.ownerId) {
+      req.resume(); return json(res, 403, { error: "routines are owner-only" });
+    }
     const peerOwns = (botId: string, threadId: unknown): boolean =>
       !peerSessionId || (typeof threadId === "string" && peerThreads.owns(peerSessionId, botId, threadId));
     if (HOSTED_WORKSPACE && auth.kind === "session") {

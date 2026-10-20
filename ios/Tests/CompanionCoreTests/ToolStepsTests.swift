@@ -40,7 +40,7 @@ final class ToolStepsTests: XCTestCase {
 
     // MARK: - Plain words
 
-    /// What firaz saw on 1.9.3 (76): "Ran cd /Users/firazfhansurie/aios-firaz/
+    /// What firaz saw on 1.9.3 (76): "Ran cd /Users/<name>/<project>/
     /// workspaces/..." on every row. A shell step reads as what it was for.
     func testAShellStepReadsAsWhatItWasFor() {
         let cases: [(String, String)] = [
@@ -68,7 +68,7 @@ final class ToolStepsTests: XCTestCase {
     }
 
     func testTheRawCommandIsNotTheLabelButStaysForTheExpandedRow() {
-        let raw = "cd /Users/firazfhansurie/aios-firaz/workspaces/repo && pnpm vitest run"
+        let raw = "cd /Users/f/aios-firaz/workspaces/repo && pnpm vitest run"
         let step = toolStep(from: activity("a", name: "Bash", summary: raw, input: #"{"command":"\#(raw)","description":"x"}"#))
         XCTAssertEqual(step.label, "Ran tests")
         XCTAssertEqual(step.summary, raw)

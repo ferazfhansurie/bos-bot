@@ -1,5 +1,5 @@
 /** Choreography adapted from Firaz's supplied full-body study:
- * /Users/firazfhansurie/.codex/worktrees/bos-mascot-polish/src/full-body-mascot-preview.ts
+ * full-body-mascot-preview.ts (a private mascot-polish worktree).
  * Keyframes and outline→circle approach retained. The retained CursorAvatar
  * engine supplies the frame loop, expressive face, clipping and interruption.
  * The desktop live turn reads turnGesture; iOS mirrors it in

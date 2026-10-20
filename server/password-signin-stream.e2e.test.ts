@@ -58,6 +58,9 @@ it("delivers staff replies live while suppressing owner-private conversation eve
     const messages = (await api("GET", `/api/threads/${shared.threadId}/messages`, undefined, cookie)).body.messages;
     expect(messages.find((message: any) => message.role === "user").sender).toEqual({ id: actor, name: "Staff" });
     expect(actor).toContain(`:person:password-${created.body.login.id}`);
+    // A member's client scope does not reach routines: they run any bot with its full permissions.
+    expect((await api("GET", "/api/routines", undefined, cookie)).status).toBe(403);
+    expect((await api("POST", "/api/routines", { name: "x", prompt: "x", botId: privateBot.id, schedule: { type: "interval", everyMinutes: 60 } }, cookie)).status).toBe(403);
     expect((await send(privateBot)).status).toBe(202);
     await expect.poll(async () => (await api("GET", `/api/threads/${privateBot.threadId}/messages`)).body.messages.some((message: any) => message.role === "bot" && message.text === "hello from fake claude"), { timeout: 15000 }).toBe(true);
     expect(JSON.stringify(frames)).not.toContain(privateBot.threadId);
@@ -74,6 +77,7 @@ it("delivers staff replies live while suppressing owner-private conversation eve
     const promoted = await api("POST", "/api/auth/password", { username: "staff", password: created.body.password });
     expect(promoted.body.session.scopes).toEqual(["admin", "client"]);
     expect((await api("GET", "/api/multiplayer/me", undefined, promoted.cookie)).body.actorId).toBe(actor);
+    expect((await api("GET", "/api/routines", undefined, promoted.cookie)).status).toBe(200);
     expect((await api("PATCH", `/api/bots/${shared.id}`, { visibility: "shared" })).status).toBe(200);
     expect((await send(shared, promoted.cookie)).status).toBe(202);
     await expect.poll(async () => (await api("GET", `/api/threads/${shared.threadId}/messages`)).body.messages.filter((message: any) => message.role === "user" && message.sender?.id === actor).length, { timeout: 15000 }).toBe(2);

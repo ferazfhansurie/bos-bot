@@ -21,7 +21,8 @@ BIND_ADDRESS on loopback so only cloudflared can reach Caddy.
 Set an email/domain allowlist. Log OTP delivery is a pilot aid requiring the
 operator to relay each code privately; it is not self-service email delivery.
 For colleagues, set ISSUER_OTP_DELIVERY=smtp with a designated SMTP URL/from
-address, then verify actual delivery before claiming invites work. Keep SMTP
+address, then verify actual delivery before claiming invites work. The issuer
+refuses to start with smtp delivery and an empty allowlist. Keep SMTP
 credentials and OTP logs private. Uploads remain quarantined until a scanner is
 configured; this profile does not claim ready attachments.
 

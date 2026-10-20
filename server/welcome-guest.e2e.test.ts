@@ -64,6 +64,16 @@ it("welcomes a stranger into one room with one granted bot and nothing else", as
       expect((await api(method, path, body, guest)).status, `${method} ${path}`).toBeGreaterThanOrEqual(403);
     }
 
+    // Routines run a bot with its full permissions and return every run's
+    // output: owner only. The owner's own paired client device keeps them.
+    const routine = (await api("POST", "/api/routines", { name: "Owner routine", prompt: "Report.", botId: other.id, enabled: false, schedule: { type: "interval", everyMinutes: 60, anchorAt: Date.now() + 3_600_000 } })).body.routine;
+    expect(routine?.id).toBeTruthy();
+    expect((await api("GET", "/api/routines", undefined, client)).status).toBe(200);
+    for (const [method, path, body] of [["GET", "/api/routines", undefined], ["POST", "/api/routines", { name: "x", prompt: "x", botId: other.id, schedule: { type: "interval", everyMinutes: 60 } }], ["PATCH", `/api/routines/${routine.id}`, { enabled: true }], ["DELETE", `/api/routines/${routine.id}`, undefined], ["POST", `/api/routines/${routine.id}/run`, undefined], ["POST", "/api/routine-runs/any-run/cancel", undefined], ["POST", "/api/routine-runs/any-run/seen", undefined]] as const) {
+      expect((await api(method, path, body, guest)).status, `${method} ${path}`).toBe(403);
+    }
+    expect((await api("GET", "/api/routines")).body.routines.map((r: any) => r.id)).toEqual([routine.id]);
+
     const sent = await api("POST", `/api/groups/${opened.body.roomId}/messages`, { text: "hi, just installed", sendId: "welcome-first-1234567890" }, guest);
     expect(sent.status, JSON.stringify(sent.body)).toBe(201);
     expect(sent.body.message.sender).toEqual({ id: guestMe.actorId, name: "Ana" });

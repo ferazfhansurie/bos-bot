@@ -2,7 +2,7 @@
 // No live URL, credential discovery/copying, native tools or model mocks.
 import { spawn, spawnSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync, realpathSync, existsSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { freePortBlock } from '../../server/testing/ports.ts';
@@ -11,7 +11,7 @@ import { removeTempDir, waitForExit } from '../../server/testing/cleanup.ts';
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const args = process.argv.slice(2);
 const option = (name: string) => args[args.indexOf(name) + 1];
-const cli = resolve(args.includes('--cli') ? option('--cli') : '/Users/firazfhansurie/.local/bin/claude');
+const cli = resolve(args.includes('--cli') ? option('--cli') : join(homedir(), '.local/bin/claude'));
 const mode = args.includes('--case') ? option('--case') : 'normal';
 if (!['normal', 'human', 'stop'].includes(mode)) throw new Error('case must be normal, human or stop');
 if (args.includes('--prepare-auth')) {

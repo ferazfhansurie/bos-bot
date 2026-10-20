@@ -16,18 +16,15 @@ real D1 consistency/session revocation and recovery remain the separate G01 gate
 
 ## launch, migrate, stop
 
-From the worktree containing this commit (api's source is
-`/Users/firazfhansurie/.bos-bot/workspaces/6ca32513-1716-40e6-b006-59a6130e3570/cloud-slice-1`):
+From the repository root, with Node 24 on PATH:
 
 ```sh
-export PATH=/Users/firazfhansurie/.nvm/versions/node/v24.21.0/bin:$PATH
 npm ci --prefix services/cloud --ignore-scripts --no-audit --no-fund
 node --experimental-strip-types services/cloud/fixture.ts
 ```
 
-The repository's ordinary shared `node_modules` must resolve zod. For lean Mac
-worktrees, reuse `/Users/firazfhansurie/Repo/firaz/bos-bot/node_modules`, as the
-builders' worktrees already do. Service dependencies install separately (~10 MiB).
+The repository's ordinary shared `node_modules` must resolve zod. Lean worktrees
+can symlink the main checkout's `node_modules`. Service dependencies install separately (~10 MiB).
 
 The launcher invokes `/opt/homebrew/bin/initdb` and `/opt/homebrew/bin/postgres`,
 binds a fresh cluster to `127.0.0.1` on a free port, creates a random
