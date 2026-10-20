@@ -9,7 +9,7 @@
 ![Agents](https://img.shields.io/badge/agents-Claude%20·%20Codex%20·%20Grok-d97757)
 ![License](https://img.shields.io/badge/license-Apache%202.0-38d591)
 
-<a href="https://bos.aihlete.com/download">
+<a href="https://bosbot.my/download">
   <img src="https://img.shields.io/badge/Download%20BOS-Mac%20%C2%B7%20Windows%20%C2%B7%20Ubuntu-1084fe?style=for-the-badge&labelColor=070707" alt="Download BOS for Mac, Windows or Ubuntu" height="40">
 </a>
 
@@ -18,6 +18,8 @@
 <img src="docs/screenshots/hero.png" alt="A BOS room: tag @ink or @pixel and only that bot wakes up and answers" width="900">
 
 </div>
+
+**BOS Bot** · website: https://bosbot.my · try it in the browser: https://app.bosbot.my
 
 ---
 
@@ -228,14 +230,14 @@ See [MCP server setup and tool reference](docs/mcp-server.md).
 
 ## Quick start
 
-**Released builds ([download BOS](https://bos.aihlete.com/download)):** the harness server is embedded, so no separate server setup is required.
+**Released builds ([download BOS](https://bosbot.my/download)):** the harness server is embedded, so no separate server setup is required.
 
 | | Download | Install |
 |---|---|---|
-| **macOS** (Apple silicon) | [BOS-Bot.dmg](https://bos.aihlete.com/download) | Drag it to Applications, open it. Signed & notarized. |
-| **macOS** (Intel) | [BOS-Bot-intel.dmg](https://bos.aihlete.com/download) | Same app, built for Intel Macs. Signed & notarized. |
-| **Windows** (x64) | [BOS-Bot-setup.exe](https://bos.aihlete.com/download) | Run it — one-click, per-user, no admin rights. The installer isn't code-signed yet, so SmartScreen shows "unknown publisher": **More info → Run anyway**. |
-| **Ubuntu 24.04** (x64) | [BOS-Bot-x64.deb](https://bos.aihlete.com/download) · [BOS-Bot.AppImage](https://bos.aihlete.com/download) | Install the `.deb` with APT (recommended), or make the AppImage executable and run it. Beta; GNOME is the supported desktop. |
+| **macOS** (Apple silicon) | [BOS-Bot.dmg](https://bosbot.my/download) | Drag it to Applications, open it. Signed & notarized. |
+| **macOS** (Intel) | [BOS-Bot-intel.dmg](https://bosbot.my/download) | Same app, built for Intel Macs. Signed & notarized. |
+| **Windows** (x64) | [BOS-Bot-setup.exe](https://bosbot.my/download) | Run it — one-click, per-user, no admin rights. The installer isn't code-signed yet, so SmartScreen shows "unknown publisher": **More info → Run anyway**. |
+| **Ubuntu 24.04** (x64) | [BOS-Bot-x64.deb](https://bosbot.my/download) · [BOS-Bot.AppImage](https://bosbot.my/download) | Install the `.deb` with APT (recommended), or make the AppImage executable and run it. Beta; GNOME is the supported desktop. |
 
 See the [Ubuntu Desktop guide](docs/linux-desktop.md) for installation, capabilities, and troubleshooting.
 Any desktop build can also pair as a client to another Windows, macOS, or Ubuntu host over Tailscale; see [desktop-to-desktop companion mode](docs/desktop-companion.md).
@@ -345,7 +347,7 @@ Users can add their own MCP tool servers with zero code via [`docs/custom-mcp-se
 
 ## Support
 
-Questions, bugs and feedback: <https://bos.aihlete.com/support>.
+Questions, bugs and feedback: <https://bosbot.my/support>.
 
 ## Run from a terminal or on a server
 
