@@ -3,11 +3,19 @@ on:
   workflow_dispatch:
     inputs:
       source_sha:
-        description: Exact public commit used for both desktop builds
+        description: Exact public commit used for the windows build (full 40-char sha)
         required: true
         type: string
       windows_run:
         description: Successful Package Windows Live run id
+        required: true
+        type: string
+      android_sha256:
+        description: sha256 of BOS-Bot-<version>-android.apk served by bos.aihlete.com/download
+        required: true
+        type: string
+      notes:
+        description: Release notes
         required: true
         type: string
 permissions:
@@ -16,7 +24,7 @@ permissions:
 jobs:
   publish:
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -30,47 +38,65 @@ jobs:
         run: |
           test "$GITHUB_REPOSITORY" = ferazfhansurie/bos-bot
           test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
-          test "$(node -p 'require("./package.json").version')" = 1.9.8
+          VERSION="$(node -p 'require("./package.json").version')"
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
           gh api "repos/$GITHUB_REPOSITORY/actions/runs/$WINDOWS_RUN" > /tmp/run.json
-          node -e 'const r=require("/tmp/run.json"); if(r.conclusion!=="success"||r.path!==".github/workflows/package-win-live.yml") process.exit(1)'
+          node -e 'const r=require("/tmp/run.json"); if(r.conclusion!=="success"||r.path!==".github/workflows/package-win-live.yml"||r.head_sha!==process.env.SOURCE_SHA) process.exit(1)'
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
           github-token: ${{ github.token }}
           run-id: ${{ inputs.windows_run }}
           name: windows-release
-          path: assets
-      - name: Retrieve notarized mac artifacts and verification receipt
+          path: built
+      - name: Retrieve the exact files the live feed serves
         run: |
+          mkdir -p assets
+          get() { curl --fail --location --retry 3 --silent --show-error "https://bos.aihlete.com/$1" --output "assets/$2"; }
           for arch in arm64 x64; do
             for kind in zip dmg; do
-              name="BOS-Bot-1.9.8-$arch.$kind"
-              curl --fail --location --retry 3 "https://bos.aihlete.com/updates/$name" --output "assets/$name"
-              curl --fail --location --retry 3 "https://bos.aihlete.com/updates/$name.blockmap" --output "assets/$name.blockmap"
+              name="BOS-Bot-$VERSION-$arch.$kind"
+              get "updates/$name" "$name"
+              get "updates/$name.blockmap" "$name.blockmap"
             done
           done
-          curl --fail --location https://bos.aihlete.com/updates/latest-mac.yml --output assets/latest-mac.yml
-          curl --fail --location https://bos.aihlete.com/updates/release-contract-mac.json --output assets/release-contract-mac.json
-      - name: Verify both contracts and all updater bytes
+          get updates/latest-mac.yml latest-mac.yml
+          get "updates/BOS-Bot-$VERSION-setup.exe" "BOS-Bot-$VERSION-setup.exe"
+          get "updates/BOS-Bot-$VERSION-setup.exe.blockmap" "BOS-Bot-$VERSION-setup.exe.blockmap"
+          get updates/latest.yml latest.yml
+          get updates/release-contract-win.json release-contract-win.json
+          get "download/BOS-Bot-$VERSION-android.apk" "BOS-Bot-$VERSION-android.apk"
+          # the live windows bytes must be the ones this public commit built
+          cmp "built/BOS-Bot-$VERSION-setup.exe" "assets/BOS-Bot-$VERSION-setup.exe"
+          cmp built/latest.yml assets/latest.yml
+      - name: Verify contract and all updater bytes
         env:
           SOURCE_SHA: ${{ inputs.source_sha }}
+          ANDROID_SHA256: ${{ inputs.android_sha256 }}
         run: |
           node --input-type=module - <<'JS'
           import {readFileSync,statSync} from 'node:fs'; import{createHash}from'node:crypto';import assert from'node:assert/strict';
-          for(const platform of ['mac','win']){const c=JSON.parse(readFileSync(`assets/release-contract-${platform}.json`));assert.equal(c.sha,process.env.SOURCE_SHA);assert.equal(c.version,'1.9.8');assert.equal(c.channel,'live');}
-          for(const feed of ['latest-mac.yml','latest.yml']) {const y=readFileSync(`assets/${feed}`,'utf8');assert.match(y,/^version: 1\.9\.8$/m);const entries=[...y.matchAll(/-\s+url:\s+(\S+)[\s\S]*?sha512:\s+(\S+)\n\s+size:\s+(\d+)/g)];assert.equal(entries.length,feed==='latest.yml'?1:4);for(const[,name,hash,size]of entries){assert.match(name,/^BOS-Bot-1\.9\.8-[a-z0-9-]+\.(?:zip|dmg|exe)$/);const p=`assets/${name}`;assert.equal(createHash('sha512').update(readFileSync(p)).digest('base64'),hash);assert.equal(statSync(p).size,Number(size));}}
+          const v=process.env.VERSION, ve=v.replace(/\./g,'\\.');
+          const c=JSON.parse(readFileSync('assets/release-contract-win.json'));assert.equal(c.sha,process.env.SOURCE_SHA);assert.equal(c.version,v);assert.equal(c.channel,'live');
+          for(const feed of ['latest-mac.yml','latest.yml']) {const y=readFileSync(`assets/${feed}`,'utf8');assert.match(y,new RegExp(`^version: ${ve}$`,'m'));const entries=[...y.matchAll(/-\s+url:\s+(\S+)[\s\S]*?sha512:\s+(\S+)\n\s+size:\s+(\d+)/g)];assert.equal(entries.length,feed==='latest.yml'?1:4);for(const[,name,hash,size]of entries){assert.match(name,new RegExp(`^BOS-Bot-${ve}-[a-z0-9-]+\\.(?:zip|dmg|exe)$`));const p=`assets/${name}`;assert.equal(createHash('sha512').update(readFileSync(p)).digest('base64'),hash);assert.equal(statSync(p).size,Number(size));console.log('ok',name);}}
+          assert.equal(createHash('sha256').update(readFileSync(`assets/BOS-Bot-${v}-android.apk`)).digest('hex'),process.env.ANDROID_SHA256);
           JS
-          cp assets/BOS-Bot-1.9.8-arm64.dmg assets/BOS-Bot.dmg
-          cp assets/BOS-Bot-1.9.8-x64.dmg assets/BOS-Bot-intel.dmg
+          cp "assets/BOS-Bot-$VERSION-arm64.dmg" assets/BOS-Bot.dmg
+          cp "assets/BOS-Bot-$VERSION-x64.dmg" assets/BOS-Bot-intel.dmg
+          cp "assets/BOS-Bot-$VERSION-setup.exe" assets/BOS-Bot-setup.exe
+          ls -l assets
       - name: Publish canonical desktop release
         env:
           GH_TOKEN: ${{ github.token }}
           SOURCE_SHA: ${{ inputs.source_sha }}
+          NOTES: ${{ inputs.notes }}
         run: |
-          if gh release view v1.9.8 --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            test "$(gh release view v1.9.8 --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft)" = true
+          TAG="v$VERSION"
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            test "$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft)" = true
           else
-            gh release create v1.9.8 --repo "$GITHUB_REPOSITORY" --target "$SOURCE_SHA" --draft --title 'BOS Bot 1.9.8' --notes 'mac builds are Developer ID signed and notarized. windows remains an unsigned preview. live desktop installs can update in settings → updates. older staging installs require the live installer once. android is available from bos.aihlete.com.'
+            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --target "$SOURCE_SHA" --draft --title "BOS Bot $VERSION" --notes "$NOTES"
           fi
-          test "$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/v1.9.8" --jq .object.sha)" = "$SOURCE_SHA"
-          gh release upload v1.9.8 assets/* --repo "$GITHUB_REPOSITORY" --clobber
-          gh release edit v1.9.8 --repo "$GITHUB_REPOSITORY" --draft=false --latest
+          test "$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$TAG" --jq .object.sha)" = "$SOURCE_SHA"
+          gh release upload "$TAG" assets/* --repo "$GITHUB_REPOSITORY" --clobber
+          gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --draft=false --latest
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name'
