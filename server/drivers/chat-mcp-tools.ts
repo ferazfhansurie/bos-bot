@@ -4,7 +4,7 @@ import { compatEnv } from "../../electron/branding-env.cjs";
 import { Ajv, type ValidateFunction } from "ajv";
 import { Ajv2020 } from "ajv/dist/2020.js";
 import formats from "ajv-formats";
-import type { SendTurnInput } from "../contracts.ts";
+import { MEMBER_ENV, MEMBER_META, type SendTurnInput, type TurnMember } from "../contracts.ts";
 import { killCliTree, spawnCli } from "../procs.ts";
 import { isReadOnlyAgentTool } from "../agent-tool-policy.ts";
 
@@ -22,6 +22,8 @@ export interface ChatToolSession {
   execute(name: string, args: Record<string, unknown>, signal: AbortSignal): Promise<ChatToolResult>;
   /** True only for a reviewed read-only tool of the built-in agents server. */
   readOnly(name: string): boolean;
+  /** True for a tool that drives the person's own Mac ("This computer"). */
+  hostControl(name: string): boolean;
   close(): Promise<void>;
 }
 
@@ -55,8 +57,10 @@ class ChatMcpClient {
 
   constructor(server: Server) {
     try {
+      // The harness's own environment never speaks for a member.
+      const { [MEMBER_ENV]: _inherited, ...inherited } = compatEnv;
       this.child = spawnCli(server.command, server.args, {
-        stdio: ["pipe", "pipe", "pipe"], env: { ...compatEnv, ...server.env },
+        stdio: ["pipe", "pipe", "pipe"], env: { ...inherited, ...server.env },
       });
     } catch { throw new Error("MCP server could not start; check its command and installation"); }
     this.child.stdout.setEncoding("utf8");
@@ -226,14 +230,23 @@ function boundedText(value: string): string {
   return `${bytes.subarray(0, end).toString()}\n[MCP result truncated at 50KB; request less output.]`;
 }
 
-export async function mountChatTools(integrations: SendTurnInput["integrations"], signal: AbortSignal): Promise<ChatToolSession> {
+export async function mountChatTools(integrations: SendTurnInput["integrations"], signal: AbortSignal, member?: TurnMember): Promise<ChatToolSession> {
   const servers: Array<[string, Server]> = [];
   if (integrations?.agents) servers.push(["agents", integrations.agents]);
   if (integrations?.composio) servers.push(["composio", integrations.composio]);
+  const local = integrations?.localComputer;
+  const localServer: Server | undefined = local && { command: local.command, args: local.args, env: local.env };
+  if (localServer) servers.push(["computer", localServer]);
   // this client starts its servers and talks over stdio; a remote (url)
   // entry is skipped here and reaches Claude and Codex bots
+  const autoApproved = new Map<Server, Set<string>>();
   for (const [name, server] of Object.entries(integrations?.custom ?? {})) {
-    if ("command" in server) servers.push([name, server]);
+    if (!("command" in server)) continue;
+    // The member comes from the session that sent this turn, never from config.
+    const { [MEMBER_ENV]: _claimed, ...configured } = server.env;
+    const descriptor: Server = { command: server.command, args: server.args, env: { ...configured, ...(member ? { [MEMBER_ENV]: JSON.stringify(member) } : {}) } };
+    if (server.autoApprove?.length) autoApproved.set(descriptor, new Set(server.autoApprove));
+    servers.push([name, descriptor]);
   }
   if (servers.length > 32) throw new Error("MCP server count exceeds the 32-server limit");
   const clients: ChatMcpClient[] = [];
@@ -251,7 +264,7 @@ export async function mountChatTools(integrations: SendTurnInput["integrations"]
   const cancel = () => { void close().catch(() => {}); };
   signal.addEventListener("abort", cancel, { once: true });
   const definitions: ChatToolDefinition[] = [];
-  const registered = new Map<string, { client: ChatMcpClient; name: string; schema: ValidateFunction; readOnly: boolean }>();
+  const registered = new Map<string, { client: ChatMcpClient; name: string; schema: ValidateFunction; readOnly: boolean; hostControl: boolean; computer: boolean }>();
   try {
     if (signal.aborted) throw aborted();
     // Start independent servers concurrently; consume results in config order
@@ -261,7 +274,7 @@ export async function mountChatTools(integrations: SendTurnInput["integrations"]
         if (signal.aborted || closed) throw aborted();
         const client = new ChatMcpClient(descriptor);
         clients.push(client);
-        try { return { name, client, tools: await client.tools(signal), builtinAgents: descriptor === integrations?.agents }; }
+        try { return { name, client, tools: await client.tools(signal), builtinAgents: descriptor === integrations?.agents, computer: descriptor === localServer, autoApprove: autoApproved.get(descriptor) }; }
         catch (error) {
           if (!(error instanceof McpStartupTimeout) || attempt >= STARTUP_ATTEMPTS) throw error;
           await client.close().catch(() => {});
@@ -270,7 +283,7 @@ export async function mountChatTools(integrations: SendTurnInput["integrations"]
     }));
     for (const mount of mounts) {
       if (mount.status === "rejected") throw mount.reason;
-      const { name: server, client, tools, builtinAgents } = mount.value;
+      const { name: server, client, tools, builtinAgents, computer, autoApprove } = mount.value;
       const originalNames = new Set<string>();
       for (const tool of tools) {
         if (!object(tool) || typeof tool.name !== "string" || !tool.name.trim() || originalNames.has(tool.name)) throw new Error("MCP server advertised an invalid or duplicate tool name");
@@ -283,8 +296,12 @@ export async function mountChatTools(integrations: SendTurnInput["integrations"]
         let name = base;
         for (let index = 2; registered.has(name); index += 1) { const suffix = `_${index}`; name = base.slice(0, 64 - suffix.length) + suffix; }
         // Only BOS's own agents server is trusted; a third-party server's
-        // names or annotations never skip the person's approval.
-        registered.set(name, { client, name: tool.name, schema, readOnly: builtinAgents && isReadOnlyAgentTool(tool.name) });
+        // names or annotations never skip the person's approval, only the
+        // owner's autoApprove list in config.json does.
+        registered.set(name, {
+          client, name: tool.name, schema, readOnly: (builtinAgents && isReadOnlyAgentTool(tool.name)) || autoApprove?.has(tool.name) === true,
+          hostControl: computer && local?.scope === "local-computer", computer,
+        });
         definitions.push({ type: "function", function: { name, description: typeof tool.description === "string" ? tool.description : "Configured MCP tool", parameters: tool.inputSchema } });
         if (Buffer.byteLength(JSON.stringify(definitions)) > CATALOG_BYTES) throw new Error("MCP tool catalog exceeds the 1MB limit");
       }
@@ -300,21 +317,27 @@ export async function mountChatTools(integrations: SendTurnInput["integrations"]
   return {
     definitions, validate, close,
     readOnly: (name) => registered.get(name)?.readOnly === true,
+    hostControl: (name) => registered.get(name)?.hostControl === true,
     async execute(name, args, callSignal) {
       validate(name, args);
       if (callSignal.aborted) { await close(); throw aborted(); }
       const tool = registered.get(name)!;
       try {
-        const result = await tool.client.call("tools/call", { name: tool.name, arguments: args }, AbortSignal.any([signal, callSignal]), CALL_MS);
+        const result = await tool.client.call("tools/call", { name: tool.name, arguments: args, ...(member ? { _meta: { [MEMBER_META]: member } } : {}) }, AbortSignal.any([signal, callSignal]), CALL_MS);
         if (signal.aborted || callSignal.aborted) throw aborted();
         if (!object(result) || !Array.isArray(result.content) || (result.isError !== undefined && typeof result.isError !== "boolean")) throw new Error("MCP tool returned an invalid result; execution outcome may be uncertain");
         const parts: string[] = [];
         let unsupported = 0;
+        let screenshots = 0;
         for (const item of result.content) {
           if (!object(item) || typeof item.type !== "string" || (item.type === "text" && typeof item.text !== "string")) throw new Error("MCP tool returned invalid content; execution outcome may be uncertain");
           if (item.type === "text") parts.push(item.text as string);
+          // a computer's screenshot is evidence, not an uncertain effect;
+          // this text-only runtime drops it and keeps the call's outcome
+          else if (item.type === "image" && tool.computer) screenshots += 1;
           else unsupported += 1;
         }
+        if (screenshots) parts.push(`[${screenshots} screenshot(s) omitted: this engine reads text only; use the accessibility tree to see the screen.]`);
         if (result.structuredContent !== undefined) parts.push(JSON.stringify(result.structuredContent));
         if (unsupported) parts.unshift(`[${unsupported} unsupported MCP content item(s) omitted. The operation may have taken effect, but its full result cannot be represented; inspect its state before retrying.]`);
         return { text: boundedText(parts.join("\n") || "(empty result)"), ok: result.isError !== true && unsupported === 0 };

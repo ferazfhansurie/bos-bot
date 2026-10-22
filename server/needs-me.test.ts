@@ -86,6 +86,15 @@ describe("inbox clear and inline answers", () => {
     expect(item).toMatchObject({ requestId: "req_3" });
     expect(item).not.toHaveProperty("options");
     expect(item).not.toHaveProperty("approval");
+    expect(item).not.toHaveProperty("freeText");
+  });
+
+  it("only a plain live question with no choices takes typed words", () => {
+    const plain = card(now, { requestId: "req_4" });
+    expect(inboxItemFor(thread({ waiting: true, messages: [plain] }))).toMatchObject({ requestId: "req_4", freeText: true });
+    expect(inboxItemFor(thread({ waiting: true, groupId: "grp_1", messages: [plain] }))).not.toHaveProperty("freeText");
+    const skill = card(now, { requestId: "req_5", skillRequest: {} as never });
+    expect(inboxItemFor(thread({ waiting: true, messages: [skill] }))).not.toHaveProperty("freeText");
   });
 
   it("a waiting row does not offer an older plain card's options", () => {

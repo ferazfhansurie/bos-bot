@@ -1,0 +1,41 @@
+/* The phone's copy of the chat's rich blocks. Same components, tokens set to
+   the phone chat's own surfaces (GPT.card on systemBackground, primary ink),
+   so a block reads like the rest of the reply. The page is transparent: the
+   native transcript shows through. */
+@import "tailwindcss" source(none);
+@source "../../components/RichChart.tsx";
+@source "../../components/RichStats.tsx";
+@source "./main.tsx";
+
+@theme {
+  --color-panel: #fbfbfb;
+  --color-hairline: #e6e6e6;
+  --color-ink: #0d0d0d;
+  --color-ink-secondary: rgb(13 13 13 / 62%);
+  --color-ink-tertiary: rgb(13 13 13 / 45%);
+  --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", Roboto, system-ui, sans-serif;
+}
+
+html[data-theme="dark"] {
+  --color-panel: #0b0b0b;
+  --color-hairline: #1a1a1a;
+  --color-ink: #ffffff;
+  --color-ink-secondary: rgb(255 255 255 / 62%);
+  --color-ink-tertiary: rgb(255 255 255 / 45%);
+  color-scheme: dark;
+}
+
+html, body { margin: 0; padding: 0; background: transparent; }
+body {
+  font-family: var(--font-sans);
+  font-size: 14px;
+  color: var(--color-ink);
+  -webkit-text-size-adjust: 100%;
+  -webkit-tap-highlight-color: transparent;
+  overflow: hidden;
+}
+/* native spacing sits between blocks; the block itself has no outer margin */
+#root > * > * { margin-top: 0 !important; margin-bottom: 0 !important; }
+/* RichChart draws its axes in a 610-wide viewBox; at phone width that
+   scales its 10px labels to about 5px. Size them for the phone instead. */
+#root svg[viewBox="0 0 610 250"] text { font-size: 17px; }

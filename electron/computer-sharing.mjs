@@ -75,7 +75,7 @@ export async function validateSharedFolders(folders) {
 
 /** Outbound HTTPS only; no local listening port and no host credentials in
  * the renderer. Pairing cookies and a connector secret remain in Electron. */
-export function createComputerSharing({ file, fetch: fetchImpl, environments, cuaConnection, hostControl, protectedPaths = [], enabled = async () => false, validateFolders = validateSharedFolders, executeOperation = executeSharedOperation, retryPolicy }) {
+export function createComputerSharing({ file, fetch: fetchImpl, environments, cuaConnection, hostControl, browserHost, protectedPaths = [], enabled = async () => false, validateFolders = validateSharedFolders, executeOperation = executeSharedOperation, retryPolicy }) {
   // The grant store's own directory plus whatever the desktop shell names —
   // the server data directory holds provider API keys and sessions.json. This
   // module never imports electron, so those roots arrive from the caller.
@@ -130,7 +130,7 @@ export function createComputerSharing({ file, fetch: fetchImpl, environments, cu
     const [auth, descriptor] = await Promise.all([request(env, "/api/auth/session"), request(env, "/.well-known/openmausbot/environment")]);
     if (auth.kind !== "session" || !uuid(auth.id) || !uuid(descriptor.environmentId)) throw new Error("Complete workspace pairing or sign-in first");
     if (descriptor.capabilities?.sharedComputers !== true) throw new Error("Update this server to enable computer sharing");
-    return { sessionId: auth.id, environmentId: descriptor.environmentId };
+    return { sessionId: auth.id, environmentId: descriptor.environmentId, ...(descriptor.capabilities?.sharedBrowser === true ? { browser: true } : {}) };
   };
   const identity = async env => {
     await requireEnabled();
@@ -138,10 +138,15 @@ export function createComputerSharing({ file, fetch: fetchImpl, environments, cu
     await requireEnabled();
     return info;
   };
+  // Remote browser calls arrive as data; only well-formed ones reach the window.
+  const browserOperation = operation => ["browser_rpc", "browser_release"].includes(operation?.action) &&
+    ["thread_id", "generation"].every(field => typeof operation[field] === "string" && operation[field].length > 0 && operation[field].length <= 200) &&
+    (operation.action === "browser_release" || (typeof operation.bot_id === "string" && operation.bot_id.length > 0 && operation.bot_id.length <= 200 && ["tools/list", "tools/call"].includes(operation.method)));
   const matches = (grant, info) => grant?.sessionId === info.sessionId && grant?.environmentId === info.environmentId;
   const stop = id => {
     const live = running.get(id);
     if (live) { live.abort.abort(); live.cua?.close(); running.delete(id); }
+    try { browserHost?.releaseWorkspace(id); } catch { /* window already gone */ }
     status.set(id, { connected: false });
   };
   const run = (env, grant) => {
@@ -151,17 +156,32 @@ export function createComputerSharing({ file, fetch: fetchImpl, environments, cu
     running.set(env.id, live);
     const signal = live.abort.signal;
     const call = (action, body = {}) => request(env, `/api/shared-computers/${grant.id}/${action}`, body, signal, grant.secret);
+    // Browser calls run beside the poll loop: each conversation is serialized
+    // inside the browser itself, and a slow page must not stall other turns.
+    const runBrowser = async job => {
+      let result;
+      try {
+        await requireEnabled();
+        if (grant.browser !== true || !browserHost) throw new Error("Browser sharing is not enabled for this workspace");
+        if (!browserOperation(job.operation)) throw new Error("Invalid browser request");
+        result = await browserHost.run(env, job.operation);
+      } catch (error) { result = sharedComputerError(error); }
+      await call("result", { jobId: job.id, result }).catch(() => {});
+    };
     void (async () => {
       let failures = 0;
       while (!signal.aborted) {
         try {
-          if (!matches(grant, await identity(env))) throw new Error("Workspace sign-in changed. Review computer access again in Settings.");
+          const info = await identity(env);
+          if (!matches(grant, info)) throw new Error("Workspace sign-in changed. Review computer access again in Settings.");
           await validateFolders(grant.folders);
           const effectiveGrant = { ...grant, protectedPaths: protectedRoots };
           await requireEnabled();
           await request(env, "/api/shared-computers/connect", {
             id: grant.id, name: os.hostname().slice(0, 120), environmentId: grant.environmentId,
             folders: grant.folders.map(({ id, name, write }) => ({ id, name, write })), terminal: grant.terminal, computer: grant.computer,
+            // Older servers reject unknown fields; send it only when advertised.
+            ...(grant.browser === true && info.browser === true && browserHost ? { browser: true } : {}),
             ...(grant.allowedBotIds ? { allowedBotIds: grant.allowedBotIds } : {}),
           }, signal, grant.secret);
           if (signal.aborted) break;
@@ -172,6 +192,7 @@ export function createComputerSharing({ file, fetch: fetchImpl, environments, cu
             await requireEnabled();
             if (!job) { failures = 0; continue; }
             if (!uuid(job.id) || typeof job.operation !== "object" || job.operation?.computer_id !== grant.id) throw new Error("Invalid computer request");
+            if (["browser_rpc", "browser_release"].includes(job.operation.action)) { void runBrowser(job); failures = 0; continue; }
             if (executing) { await call("result", { jobId: job.id, result: sharedComputerError(new Error("This computer is busy with another workspace")) }); continue; }
             executing = true;
             const jobAbort = new AbortController();
@@ -226,7 +247,7 @@ export function createComputerSharing({ file, fetch: fetchImpl, environments, cu
   };
   const state = id => {
     const grant = records[id];
-    return { enabled: grant?.enabled === true, folders: Array.isArray(grant?.folders) ? grant.folders : [], terminal: grant?.terminal === true, computer: grant?.computer === true, ...status.get(id) };
+    return { enabled: grant?.enabled === true, folders: Array.isArray(grant?.folders) ? grant.folders : [], terminal: grant?.terminal === true, computer: grant?.computer === true, browser: grant?.browser === true, ...status.get(id) };
   };
   const disconnect = (env, grant) => {
     stop(env.id);
@@ -240,14 +261,14 @@ export function createComputerSharing({ file, fetch: fetchImpl, environments, cu
       disconnect(env, records[env.id]);
       return info;
     },
-    decline(env, info) { disconnect(env, records[env.id]); store({ ...records, [env.id]: { ...info, enabled: false, folders: [], terminal: false, computer: false } }); },
+    decline(env, info) { disconnect(env, records[env.id]); store({ ...records, [env.id]: { sessionId: info.sessionId, environmentId: info.environmentId, enabled: false, folders: [], terminal: false, computer: false, browser: false } }); },
     async save(env, input, info, { activate = true } = {}) {
       const fresh = await identity(env);
       if (!matches(info, fresh)) throw new Error("Workspace sign-in changed. Review computer access again.");
       const folders = await validateFolders(input.folders);
       await requireEnabled();
-      const grant = { ...fresh, id: randomUUID(), secret: randomBytes(32).toString("hex"), enabled: true, folders, terminal: input.terminal === true, computer: input.computer === true, ...(input.allowedBotIds ? { allowedBotIds: input.allowedBotIds } : {}) };
-      if (!folders.length && !grant.terminal && !grant.computer) throw new Error("Choose at least one folder or capability to share");
+      const grant = { sessionId: fresh.sessionId, environmentId: fresh.environmentId, id: randomUUID(), secret: randomBytes(32).toString("hex"), enabled: true, folders, terminal: input.terminal === true, computer: input.computer === true, browser: input.browser === true, ...(input.allowedBotIds ? { allowedBotIds: input.allowedBotIds } : {}) };
+      if (!folders.length && !grant.terminal && !grant.computer && !grant.browser) throw new Error("Choose at least one folder or capability to share");
       disconnect(env, records[env.id]);
       store({ ...records, [env.id]: grant }); if (activate) run(env, grant); return state(env.id);
     },

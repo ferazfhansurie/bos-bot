@@ -194,10 +194,12 @@ class MainActivity : ComponentActivity() {
         setContent {
             val pendingTarget by notificationNavigation.pending.collectAsState()
             CompositionLocalProvider(LocalCompanion provides environment) {
-                CompanionRoot(
-                    pendingNotification = pendingTarget,
-                    onPendingTargetConsumed = notificationNavigation::consume,
-                )
+                com.openmausbot.companion.updates.AndroidUpdateHost(app.updates, app.session, ::installUpdate) {
+                    CompanionRoot(
+                        pendingNotification = pendingTarget,
+                        onPendingTargetConsumed = notificationNavigation::consume,
+                    )
+                }
             }
         }
     }
@@ -220,9 +222,34 @@ class MainActivity : ComponentActivity() {
         // Permissions can change while the app is in the background — a grant
         // made in Settings should take effect on return, not on next launch.
         app.permissions.refresh()
+        app.updates.onOpen()
+        if (pendingUpdateInstall != null && packageManager.canRequestPackageInstalls()) {
+            val file = pendingUpdateInstall!!
+            pendingUpdateInstall = null
+            installUpdate(file)
+        }
         camera.refresh()
         mic.refresh()
         notifications.refresh()
+    }
+
+    private var pendingUpdateInstall: java.io.File? = null
+
+    private fun installUpdate(file: java.io.File) {
+        // Only the verified cache file from our controller can enter the installer.
+        if (app.updates.state.value.readyFor(app.session.phoneUpdateRequired.value) != file || !file.isFile) return
+        try {
+            check(packageManager.getPackageArchiveInfo(file.absolutePath, 0)?.packageName == packageName)
+            if (!packageManager.canRequestPackageInstalls()) {
+                pendingUpdateInstall = file
+                startActivity(Intent(android.provider.Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                    android.net.Uri.parse("package:$packageName")))
+                return
+            }
+            startActivity(com.openmausbot.companion.updates.updatePackageIntent(this, file))
+        } catch (_: Exception) {
+            android.widget.Toast.makeText(this, "Couldn't open the installer. Try again from the update screen.", android.widget.Toast.LENGTH_LONG).show()
+        }
     }
 
     override fun onDestroy() {

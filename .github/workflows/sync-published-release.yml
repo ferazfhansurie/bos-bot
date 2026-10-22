@@ -31,6 +31,9 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: Download and verify the canonical release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -139,6 +142,10 @@ jobs:
           console.log(`ok: downloaded ${remote.length} canonical assets with matching digests`);
           EOF
 
+      - name: Require matching mac and Windows release versions
+        env:
+          TAG: ${{ inputs.tag || github.event.release.tag_name }}
+        run: node scripts/release-publish-guard.mjs assets "${TAG#v}"
       - name: Create or update the legacy updater mirror
         env:
           GH_TOKEN: ${{ secrets.RELEASES_PAT }}

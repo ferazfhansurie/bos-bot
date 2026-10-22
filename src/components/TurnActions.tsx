@@ -1,9 +1,14 @@
-import { useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import { Check, Copy, Share, ThumbsDown, ThumbsUp } from "lucide-react";
 import { BotAvatar } from "./Avatar";
 import { activeLocale } from "@/lib/i18n";
 import { cn } from "@/lib/cn";
-import type { Bot } from "@/state/store";
+import { api, type Bot } from "@/state/store";
+import { analyticsEnabled } from "@/lib/analytics";
+import { confirmUsefulResult } from "@/lib/product-feedback";
+import { useAppConfig } from "@/lib/app-config";
+import { ProductFeedback } from "./ProductFeedback";
 
 /** One ghost icon button in a turn's action row: tertiary glyph, 18px,
  * ghost-hover square on hover (chatgpt's `color: ghost, size: icon`). */
@@ -47,13 +52,43 @@ export function TurnCopyButton({ text, label = "Copy response" }: { text: string
 /** Good / bad response. Backed by the message's reactions, so one is on at a
  * time: picking the other turns the first off. */
 export function FeedbackButtons({ active, onReact }: { active: { good: boolean; bad: boolean }; onReact: (emoji: string) => void }) {
+  const config = useAppConfig();
+  const [rating, setRating] = useState<"up" | "down" | null>(null);
+  const dialog = useRef<HTMLElement>(null);
+  const opener = useRef<HTMLElement | null>(null);
+  useEffect(() => {
+    if (!rating) return;
+    const previous = opener.current;
+    return () => previous?.focus();
+  }, [rating]);
   const pick = (emoji: string) => {
     const other = emoji === GOOD ? active.bad && BAD : active.good && GOOD;
     if (other) onReact(other);
     onReact(emoji);
+    // A thumbs-up is the person confirming a useful result; the server only
+    // records first_job_done when a turn really finished successfully.
+    if (emoji === GOOD && !active.good && analyticsEnabled()) void confirmUsefulResult(true, api).catch(() => {});
+    if (config.flags.feedback && !(emoji === GOOD ? active.good : active.bad)) {
+      opener.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+      setRating(emoji === GOOD ? "up" : "down");
+    }
   };
   return (
     <>
+      {rating && config.flags.feedback && createPortal(<div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-6" onMouseDown={event => { if (event.target === event.currentTarget) setRating(null); }} onKeyDown={event => {
+        if (event.key === "Escape") { event.stopPropagation(); setRating(null); }
+        if (event.key !== "Tab") return;
+        const controls = dialog.current?.querySelectorAll<HTMLElement>("input:enabled, button:enabled");
+        const first = controls?.[0], last = controls?.[controls.length - 1];
+        if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
+        else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
+      }}>
+        <section ref={dialog} role="dialog" aria-modal="true" aria-label="Share response rating" className="w-full max-w-sm rounded-2xl border border-hairline/50 bg-panel p-5 shadow-2xl">
+          <h2 className="font-semibold text-ink">Share this rating with Firaz?</h2>
+          <ProductFeedback key={rating} rating={rating} />
+          <button autoFocus type="button" className="ui-button mt-4" onClick={() => setRating(null)}>Close</button>
+        </section>
+      </div>, document.body)}
       {!active.bad && (
         <button
           type="button"

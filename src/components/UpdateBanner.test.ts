@@ -53,6 +53,36 @@ describe("UpdateBanner", () => {
     expect(html).toContain("Dismiss");
   });
 
+  it("blocks below the floor only while a qualifying update is on its way", () => {
+    for (const status of ["available", "downloading", "preparing", "downloaded", "installing"] as const) {
+      expect(render({ status, required: true, minimumVersion: "2.1.3", version: "2.1.3" })).toContain("<dialog");
+    }
+    expect(render({ status: "checking", required: true, minimumVersion: "2.1.3", automaticUpdates: true })).toBe("");
+    expect(render({ status: "installing", required: true, message: "Restart is taking longer than expected." })).not.toContain("<dialog");
+    expect(render({ status: "downloaded", required: true, installMode: "handoff", version: "2.1.3" })).not.toContain("<dialog");
+  });
+
+  it("a floor with nothing qualifying on the feed is a dismissible card, not a lockout", () => {
+    const html = render({ status: "idle", required: true, minimumVersion: "9.9.9", automaticUpdates: true });
+    expect(html).not.toContain("<dialog");
+    expect(html).toContain("Update required");
+    expect(html).toContain("9.9.9 or newer");
+    expect(html).toContain("Try again");
+    expect(html).toContain("Later");
+    expect(html).toContain("https://bosbot.my/get");
+  });
+
+  it.each([
+    { status: "error", required: true, message: "ENOTFOUND updates.example" },
+    { status: "error", required: true, retryable: false, message: "No published update meets the required version. Download the latest installer." },
+    { status: "error", required: true, retryable: false, quitHeld: true, message: "Update prepare refused; installation remains held" },
+  ] as UpdaterState[])("a required update that fails or is held stays dismissible: $message", (state) => {
+    const html = render(state);
+    expect(html).not.toContain("<dialog");
+    expect(html).toMatch(/Dismiss|Later/);
+    expect(html).toContain("https://bosbot.my/get");
+  });
+
   it("preserves system package hand-off without promising restart", () => {
     const html = render({ status: "downloaded", version: "0.2.0", installMode: "handoff" });
     expect(html).toContain("Copy the install command and open a terminal.");

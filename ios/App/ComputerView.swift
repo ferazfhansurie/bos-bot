@@ -11,6 +11,7 @@ struct ComputerView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.scenePhase) private var scenePhase
     @State private var showingBrowser = false
+    @State private var showingComputerPicker = false
     @State private var image: UIImage?
     @State private var previewError: String?
     @State private var connected = false
@@ -45,6 +46,15 @@ struct ComputerView: View {
         .toolbar {
             ToolbarItem(placement: .topBarLeading) {
                 if bot.remote == nil { Button { showingBrowser = true } label: { Image(systemName: "globe") }.accessibilityLabel("Open live browser") }
+            }
+            ToolbarItem(placement: .topBarTrailing) {
+                if !bot.isRemote {
+                    Button { showingComputerPicker = true } label: {
+                        Image(systemName: "arrow.triangle.swap")
+                    }
+                    .accessibilityLabel("Switch computer")
+                    .accessibilityIdentifier("switch-thread-computer")
+                }
             }
             ToolbarItem(placement: .topBarTrailing) {
                 // Busy is the difference between "the picture is a moment old"
@@ -89,7 +99,7 @@ struct ComputerView: View {
                 }
                 .padding(.horizontal, 18)
                 .padding(.vertical, 12)
-                .background(.ultraThinMaterial)
+                .glassSheet(cornerRadius: 18)
             }
         }
         .alert("Open live cloud desktop?", isPresented: $confirmingDesktop) {
@@ -109,6 +119,19 @@ struct ComputerView: View {
                     .ignoresSafeArea()
             }
         }
+        .sheet(isPresented: $showingComputerPicker, onDismiss: { attempt += 1 }) {
+            NavigationStack {
+                Form { BotComputerSettings(bot: bot) }
+                    .navigationTitle("Switch computer")
+                    .navigationBarTitleDisplayMode(.inline)
+                    .toolbar {
+                        ToolbarItem(placement: .confirmationAction) {
+                            Button("Done") { showingComputerPicker = false }
+                        }
+                    }
+            }
+            .presentationDetents([.medium, .large])
+        }
         .navigationDestination(isPresented: $showingBrowser) { BrowserLiveView(bot: bot) }
         .safeAreaInset(edge: .bottom) {
             if let previewError {
@@ -116,7 +139,7 @@ struct ComputerView: View {
                     Text(previewError).font(.caption).foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)
                     Button("Reconnect computer") { attempt += 1 }.buttonStyle(.bordered)
-                }.padding(12).frame(maxWidth: .infinity).background(.ultraThinMaterial)
+                }.padding(12).frame(maxWidth: .infinity).glassSheet(cornerRadius: 18)
             }
         }
         .task(id: "\(session.browserClient?.instanceID.uuidString ?? "none"):\(session.connection?.id ?? "none"):\(session.credentialEntryResetGeneration):\(bot.id):\(bot.threadId):\(scenePhase == .active):\(attempt)") {

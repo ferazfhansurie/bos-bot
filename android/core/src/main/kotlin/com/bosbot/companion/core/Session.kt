@@ -50,6 +50,7 @@ class Session(
     private val deviceNameProvider: () -> String,
     private val notificationSink: NotificationSink = NoOpNotificationSink,
     private val httpClient: OkHttpClient = OkHttpClient(),
+    private val phoneVersion: String? = null,
     private val clientFactory: (Connection, String?) -> CompanionClient = { connection, token ->
         CompanionClient(connection, token, httpClient)
     },
@@ -61,6 +62,7 @@ class Session(
                 deviceName = deviceName,
                 pairRequestId = pairRequestId,
                 client = httpClient,
+                phoneVersion = phoneVersion,
             )
         },
     /** Test seam: override the SSE Flow without subclassing [CompanionClient]. */
@@ -87,6 +89,7 @@ class Session(
     private val activityFn: suspend (CompanionClient) -> List<ActivityFeedEntry> = { client ->
         client.activityFeed()
     },
+    private val onPairSuccess: () -> Unit = {},
 ) {
     sealed interface Status {
         data object Unpaired : Status
@@ -101,6 +104,9 @@ class Session(
         data object Ready : RestoreState
         data object Unpaired : RestoreState
     }
+
+    private val _phoneUpdateRequired = MutableStateFlow<PhoneUpdateRequired?>(null)
+    val phoneUpdateRequired: StateFlow<PhoneUpdateRequired?> = _phoneUpdateRequired.asStateFlow()
 
     private val _state = MutableStateFlow(CompanionState())
     val state: StateFlow<CompanionState> = _state.asStateFlow()
@@ -219,7 +225,7 @@ class Session(
                 notificationSink = homeSink, httpClient = httpClient, clientFactory = clientFactory,
                 pairFn = pairFn, eventsFn = eventsFn, hydrateFn = hydrateFn, instancesFn = instancesFn,
                 metadataFn = metadataFn, afterAttachmentDownload = afterAttachmentDownload,
-                roomEventsFn = roomEventsFn, satelliteMode = true, activityFn = activityFn)
+                roomEventsFn = roomEventsFn, satelliteMode = true, phoneVersion = phoneVersion, activityFn = activityFn)
             child.awaitRestored()
             satelliteScopes[saved.id] = homeScope
             homes += child
@@ -242,6 +248,11 @@ class Session(
 
     private val _status = MutableStateFlow<Status>(Status.Unpaired)
     val status: StateFlow<Status> = _status.asStateFlow()
+    private val _serverWasReset = MutableStateFlow(false)
+    val serverWasReset: StateFlow<Boolean> = _serverWasReset.asStateFlow()
+    private val connectionTrace = ConnectionTrace()
+    fun exportConnectionTrace(): String = connectionTrace.export() +
+        _satellites.value.mapIndexed { index, home -> "\nAdditional computer ${index + 1}\n" + home.connectionTrace.export() }.joinToString("")
 
     private val _restoreState = MutableStateFlow<RestoreState>(RestoreState.Pending)
     val restoreState: StateFlow<RestoreState> = _restoreState.asStateFlow()
@@ -312,6 +323,17 @@ class Session(
     private var deferredInvite: PairingInvite? = null
 
     init {
+        scope.launch {
+            _status.collect { current ->
+                connectionTrace.record(when (current) {
+                    Status.Unpaired -> ConnectionTrace.Event.UNPAIRED
+                    Status.Connecting -> ConnectionTrace.Event.CONNECTING
+                    Status.Live -> ConnectionTrace.Event.LIVE
+                    Status.Unauthorized -> ConnectionTrace.Event.UNAUTHORIZED
+                    is Status.Offline -> ConnectionTrace.Event.OFFLINE
+                })
+            }
+        }
         scope.launch { combine(_state, _connection, _status) { _, _, _ -> Unit }.collect { publishHomes() } }
         // No Exception other than cancellation leaves this launch: it is a root
         // coroutine with no caller to catch for it, so [restoreLocked] reports a
@@ -385,6 +407,11 @@ class Session(
                     pairFn(invited, credential, deviceName, pairRequestId)
                 } catch (error: Throwable) {
                     if (error is kotlinx.coroutines.CancellationException) throw error
+                    if (error is PhoneUpdateRequired) {
+                        _phoneUpdateRequired.value = error
+                        _actionError.value = error.message
+                        throw error
+                    }
                     val routeFailure = error is PairingRouteError
                     if (qr && !routeFailure) burnQrCredential(credential)
                     _actionError.value = if (qr && !routeFailure) qrFailureMessage(error) else error.message
@@ -433,6 +460,7 @@ class Session(
                 stopActiveRuntimeLocked()
                 registry = updatedRegistry
                 _connections.value = registry.connections
+                _phoneUpdateRequired.value = null
                 _connection.value = stored
                 token = paired.token
                 // The route that just redeemed leads this session; later launches return to the
@@ -442,6 +470,8 @@ class Session(
                 _state.value = CompanionState()
                 _restoreState.value = RestoreState.Ready
                 _pairingRequested.value = false
+                // Only after credentials and the pairing registry are durable.
+                runCatching { onPairSuccess() }
             } finally {
                 settlePairingAttempt()
             }
@@ -600,6 +630,7 @@ class Session(
             // first-pair marker for the others.
             onboardingStore.setNotificationOnboardingPending(false)
         }
+        _phoneUpdateRequired.value = null
         _connection.value = null
         _status.value = Status.Unpaired
         _restoreState.value = RestoreState.Unpaired
@@ -672,6 +703,7 @@ class Session(
                 connectionStore.saveRegistry(registry)
                 if (registry.connections.isEmpty()) onboardingStore.setNotificationOnboardingPending(false)
                 if (wasActive) {
+                    _phoneUpdateRequired.value = null
                     _connection.value = null
                     _status.value = Status.Unpaired
                     _restoreState.value = RestoreState.Unpaired
@@ -802,6 +834,7 @@ class Session(
         while (true) {
             val saved = registry.activeConnection
             if (saved == null) {
+                _phoneUpdateRequired.value = null
                 _connection.value = null
                 _restoreState.value = RestoreState.Unpaired
                 _status.value = Status.Unpaired
@@ -837,6 +870,8 @@ class Session(
     }
 
     private fun configureActiveConnectionLocked(saved: Connection, storedToken: String) {
+        _phoneUpdateRequired.value = null
+        _serverWasReset.value = false
         _connection.value = saved
         token = storedToken
         // A restored pairing walks the desktop's advertised priority, and it walks
@@ -952,6 +987,7 @@ class Session(
 
     /** Called when the app leaves the screen — deliberate disconnect so the cursor is known. */
     fun disconnect() {
+        connectionTrace.record(ConnectionTrace.Event.DISCONNECT)
         _satellites.value.forEach { it.disconnect() }
         stopRemoteStreams()
         streamJob?.cancel()
@@ -963,15 +999,25 @@ class Session(
     private suspend fun runStream() {
         while (currentCoroutineContext().isActive) {
             val activeClient = client ?: return
-            activeClient.connection.serverEnvironmentId?.let { expected ->
-                val environment = try { activeClient.environment() } catch (error: Throwable) {
+            // Probe before the stream/hydrate decode, including legacy companion pairings.
+            if (phoneVersion != null || activeClient.connection.serverEnvironmentId != null) {
+                val environment = try { activeClient.environment(phoneVersion) } catch (error: Throwable) {
                     if (error is CancellationException) throw error
-                    null
+                    if (error is PhoneUpdateRequired) {
+                        _status.value = Status.Offline("Update the app to continue.")
+                        _phoneUpdateRequired.value = error
+                        return
+                    }
+                    null // Old servers and offline descriptors preserve existing behavior.
                 }
-                if (environment != null && environment.environmentId != expected) {
+                val expected = activeClient.connection.serverEnvironmentId
+                if (environment != null && expected != null && environment.environmentId != expected) {
+                    connectionTrace.record(ConnectionTrace.Event.SERVER_RESET)
+                    _serverWasReset.value = true
                     _status.value = Status.Unauthorized
                     return
                 }
+                _phoneUpdateRequired.value = null
             }
 
             _status.value = Status.Connecting
@@ -2506,6 +2552,18 @@ class Session(
         null
     }
 
+    suspend fun phoneUsagePolicy(): UsageTelemetryPolicy {
+        val homes = (listOf(this) + _satellites.value).filter { it.connection.value != null }
+        if (homes.isEmpty()) return UsageTelemetryPolicy.UNAVAILABLE
+        var unavailable = false
+        for (home in homes) {
+            val usage = home.configStatus()?.anonymousUsage
+            if (usage == null) unavailable = true
+            else if (!usage.allowsTelemetry) return UsageTelemetryPolicy.DENIED
+        }
+        return if (unavailable) UsageTelemetryPolicy.UNAVAILABLE else UsageTelemetryPolicy.ALLOWED
+    }
+
     /**
      * Switch the workspace's voice engine. The sheet reloads the voice list
      * afterwards, because every engine names its own voices.
@@ -2646,6 +2704,16 @@ class Session(
             _state.update { it.apply(Frame.MessagePatch(inThreadId, patched)) }
         } catch (error: Throwable) {
             _actionError.value = error.message
+        }
+    }
+
+    /** Best effort: a lost save only means a reload shows the block's defaults. */
+    suspend fun saveUiState(threadId: String, messageId: String, key: String, state: kotlinx.serialization.json.JsonObject) {
+        val activeClient = client ?: return
+        try {
+            activeClient.setUiState(threadId, messageId, key, state)
+        } catch (error: Throwable) {
+            if (error is kotlinx.coroutines.CancellationException) throw error
         }
     }
 

@@ -14,6 +14,7 @@ import { attachLaunchSplash, readSplashSquad, saveSplashSquad } from "./launch-s
 import { createSharedBrowser } from "./shared-browser.mjs";
 import { authorizeAgentNetwork, authorizeAgentDownload } from './browser-agent-policy.mjs';
 import { registerAttentionNotifications } from "./attention-notifications.mjs";
+import { registerNotch } from "./notch.mjs";
 import { createPrimaryBrowserController } from "./primary-browser-controller.mjs";
 import { createWorkspaceBrowserRegistry } from "./workspace-browser.mjs";
 import { TOOLS_BROWSER_PARTITION, chromeUserAgent, noteBrowserKeyInput, attachToolsBrowserGuest, configureToolsBrowserSession, hardenWebviewAttach, toolsBrowserUrlAllowed } from "./tools-browser.mjs";
@@ -30,7 +31,7 @@ import { createAndroidDeviceController } from "./android-device.mjs";
 import { finishSpeech, startSpeech, stopSpeech } from "./speech.mjs";
 import { openBlankTerminal } from "./terminal-launch.mjs";
 import { pasteMenuItem } from "./paste-menu-item.mjs";
-import { attachUpdaterWindow, startUpdater, registerUpdaterIpc, windowsUpdateCoordinator } from "./updater.mjs";
+import { attachUpdaterWindow, startUpdater, registerUpdaterIpc, windowsUpdateCoordinator, handleUpdaterQuit } from "./updater.mjs";
 import {
   buildDiagnosticsReport,
   diagnosticsFileName,
@@ -43,6 +44,9 @@ import { activateExistingWindow, releaseSingleInstanceLock } from "./single-inst
 import { closeToTrayEnabled, createCloseToTray } from "./close-to-tray.mjs";
 import { pollServerIdentity } from "./server-boot-probe.mjs";
 import { createServerSupervisor } from "./server-supervisor.mjs";
+import { selfHealEnabled } from "./self-heal-policy.mjs";
+import { sendDiagnosticsReport } from "./diagnostics-upload.mjs";
+import { recordCrashCount } from "./crash-count.mjs";
 import { packageUrlFromCommandLine, packageUrlFromDeepLink } from "./package-link.mjs";
 import { windowChromeOptions } from "./window-chrome.mjs";
 import { createWorkspaceWindows } from "./workspace-window.mjs";
@@ -353,12 +357,22 @@ let companyRestoreCommitting = false;
 let companyBackupConfigurationRevision = 0;
 const managedDesktopRelay = createManagedDesktopRelay();
 const utilityServerExits = new WeakMap();
+const expectedUtilityStops = new WeakSet();
+let desktopSafeMode = false;
+let desktopSafeModeReason = null;
 const UTILITY_SERVER_STOP_TIMEOUT_MS = 6_500;
 const trustedApprovalMode = createTrustedApprovalModeCoordinator({ randomId: randomUUID });
 const desktopMutationToken = randomBytes(32).toString("base64url");
 const companionMutationToken = randomBytes(32).toString("base64url");
 const serverSupervisor = createServerSupervisor({
   restart: () => startServerOn(SERVER_PORT),
+  restartSafeMode: (reason) => {
+    if (!selfHealEnabled(desktopDataDir())) return { abort: true };
+    desktopSafeMode = true;
+    desktopSafeModeReason = reason;
+    slog("server recovery: booting once with mods, plugins and routines disabled");
+    return startServerOn(SERVER_PORT);
+  },
   stop: stopUtilityServer,
   onReady(proc) {
     serverProc = proc;
@@ -372,7 +386,7 @@ const serverSupervisor = createServerSupervisor({
     // while the replacement child's health probe was pending.
     syncManagedComposioCredentials();
     if (managedDesktop) void managedDesktop.refresh().catch(() => {});
-    routineWake.start();
+    if (!desktopSafeMode) routineWake.start();
     // Existing chat windows reconnect in place, preserving unsent drafts.
     // A window opened during the outage is still on our error page instead.
     for (const win of BrowserWindow.getAllWindows()) {
@@ -388,6 +402,7 @@ const serverSupervisor = createServerSupervisor({
     // Includes crashes, failed boot and shutdown. Old pending browser calls
     // must lose authority before a replacement server can start work.
     sharedPrimaryBrowser.releaseAll();
+    remoteBrowser.releaseAll();
     serverReady = false;
     serverProc = null;
     companyBackupSchedule?.reconcile();
@@ -398,7 +413,8 @@ const serverSupervisor = createServerSupervisor({
     slog("server recovery paused after repeated failures; quit and reopen to retry");
     dialog.showErrorBox(
       "The bot server stopped",
-      "Automatic recovery could not restart the background server. Quit and reopen BOS Bot to try again. Interrupted chat turns were not resent.\n\n" +
+      (desktopSafeMode ? "Automatic recovery and safe mode could not restart the background server. " : "Automatic recovery could not restart the background server. ") +
+        "Quit and reopen BOS Bot to try again. Interrupted chat turns were not resent.\n\n" +
         `Server log: ${path.join(LOG_DIR, "server.log")}`,
     );
   },
@@ -415,6 +431,7 @@ function desktopDataDir() {
 
 async function stopUtilityServer(proc, timeoutMs = UTILITY_SERVER_STOP_TIMEOUT_MS) {
   if (!proc) return true;
+  expectedUtilityStops.add(proc);
   const exited = utilityServerExits.get(proc);
   if (!exited) return false;
   try {
@@ -641,6 +658,8 @@ function recordDesktopCrash(event) {
   try {
     const record = formatDesktopCrashRecord(event);
     if (!record) return;
+    // Utility server exits are counted by their exact owned process below.
+    if (desktopDataDirLease && !(event.kind === "child" && event.type === "Utility")) recordCrashCount(desktopDataDir());
     fs.mkdirSync(LOG_DIR, { recursive: true });
 
     const flags =
@@ -1418,46 +1437,131 @@ function toolsBrowserAppOrigins() {
 }
 
 // The bot drives the person's own browser tabs (see shared-browser.mjs). The
-// renderer reports its tab strip; main asks it to open/show/close tabs.
-const sharedPrimaryBrowser = createSharedBrowser({
-  contentsFromId: id => webContents.fromId(id),
-  urlAllowed: url => Boolean(webURL(url)) && toolsBrowserUrlAllowed(url, { appOrigins: toolsBrowserAppOrigins }),
-  guestValid: (guestId, profileId) => {
-    try {
-      const guest = webContents.fromId(guestId);
-      return Boolean(guest && !guest.isDestroyed() && guest.getType() === "webview" && guest.hostWebContents === mainWindow?.webContents && toolsBrowserRegistry.source(guest)?.partition === primaryBrowser().partition(profileId));
-    } catch { return false; }
-  },
-  host: {
-    available: () => Boolean(mainWindow && !mainWindow.isDestroyed() && mainWindowShowsLocalUi() && !mainWindow.webContents.isLoadingMainFrame()),
-    // A bot reveal carries its conversation; the renderer opens the pane only there.
-    reveal: origin => {
-      if (!mainWindowShowsLocalUi()) return;
-      pendingBrowserView = origin ?? true;
-      try { mainWindow.webContents.send("primary-browser:external-url", { profileId: primaryBrowser().store.profiles().selected, url: "", reveal: true, ...origin }); } catch {}
+// renderer reports its tab strip; main asks it to open/show/close tabs. One
+// agent per window that can host the BOS browser: `window()` returns that
+// window only while it shows this computer's own UI.
+function createBrowserAgent({ window, available, reveal }) {
+  const agent = createSharedBrowser({
+    contentsFromId: id => webContents.fromId(id),
+    urlAllowed: url => Boolean(webURL(url)) && toolsBrowserUrlAllowed(url, { appOrigins: toolsBrowserAppOrigins }),
+    guestValid: (guestId, profileId) => {
+      try {
+        const guest = webContents.fromId(guestId), host = window();
+        return Boolean(host && guest && !guest.isDestroyed() && guest.getType() === "webview" && guest.hostWebContents === host.webContents && toolsBrowserRegistry.source(guest)?.partition === primaryBrowser().partition(profileId));
+      } catch { return false; }
     },
-    command: command => { if (!mainWindowShowsLocalUi() || !sharedPrimaryBrowser.mounted()) return false; mainWindow.webContents.send("primary-browser:agent-command", command); return true; },
-    signIn: ({ profileId, guestId, username }) => primaryBrowser().botSignIn(profileId, guestId, username),
-    authorize: ({ profileId, guestId, url, action, scope, fullAccess }) => primaryBrowser().authorizeAgent(profileId, guestId, url, action, '', scope, { fullAccess }),
+    host: {
+      available,
+      reveal,
+      command: command => { const host = window(); if (!host || !agent.mounted()) return false; host.webContents.send("primary-browser:agent-command", command); return true; },
+      signIn: ({ profileId, guestId, username }) => primaryBrowser().botSignIn(profileId, guestId, username),
+      authorize: ({ profileId, guestId, url, action, scope, fullAccess }) => primaryBrowser().authorizeAgent(profileId, guestId, url, action, '', scope, { fullAccess }),
+    },
+    notify: state => { window()?.webContents.send("primary-browser:agent-state", state); },
+  });
+  return agent;
+}
+const sharedPrimaryBrowser = createBrowserAgent({
+  window: () => (mainWindowShowsLocalUi() ? mainWindow : null),
+  available: () => Boolean(mainWindow && !mainWindow.isDestroyed() && mainWindowShowsLocalUi() && !mainWindow.webContents.isLoadingMainFrame()),
+  // A bot reveal carries its conversation; the renderer opens the pane only there.
+  reveal: origin => {
+    if (!mainWindowShowsLocalUi()) return;
+    pendingBrowserView = origin ?? true;
+    try { mainWindow.webContents.send("primary-browser:external-url", { profileId: primaryBrowser().store.profiles().selected, url: "", reveal: true, ...origin }); } catch {}
   },
-  notify: state => { if (mainWindowShowsLocalUi()) mainWindow.webContents.send("primary-browser:agent-state", state); },
 });
+// While the main window shows a paired workspace (a remote server), that
+// workspace's bots drive a BOS browser window of its own on this desktop,
+// through computer sharing. The person types into a local page, not a stream.
+// With the local UI on screen the local browser wins and remote calls fall
+// back to the server's own engine.
+let browserWindow = null;
+const browserWindowShowsLocalUi = () => {
+  if (!browserWindow || browserWindow.isDestroyed()) return false;
+  try { return new URL(browserWindow.webContents.getURL()).origin === rendererOrigin(); } catch { return false; }
+};
+const remoteBrowser = createBrowserAgent({
+  window: () => (browserWindowShowsLocalUi() ? browserWindow : null),
+  available: () => Boolean(serverReady && !mainWindowShowsLocalUi()),
+  reveal: () => openBrowserWindow(),
+});
+const browserAgents = [sharedPrimaryBrowser, remoteBrowser];
+const browserAgentForGuest = id => sharedPrimaryBrowser.agentForGuest(id) ?? remoteBrowser.agentForGuest(id);
+const browserAgentControls = profileId => browserAgents.some(agent => agent.hasAgentControl(profileId));
+/** The window whose local UI hosts a BOS browser, for these webContents. */
+function browserHostFor(contents) {
+  if (contents && contents === mainWindow?.webContents && mainWindowShowsLocalUi()) return mainWindow;
+  if (contents && contents === browserWindow?.webContents && browserWindowShowsLocalUi()) return browserWindow;
+  return null;
+}
+function openBrowserWindow() {
+  if (mainWindowShowsLocalUi()) return;
+  if (browserWindow && !browserWindow.isDestroyed()) { if (!browserWindow.isVisible()) browserWindow.showInactive(); return; }
+  const bounds = mainWindow && !mainWindow.isDestroyed() ? mainWindow.getBounds() : null;
+  const win = new BrowserWindow({
+    width: 1100, height: 760, ...(bounds ? { x: bounds.x + 40, y: bounds.y + 40 } : {}), minWidth: 480, minHeight: 360,
+    show: false, title: "BOS Browser", icon: APP_ICON, backgroundColor: "#070707", autoHideMenuBar: true,
+    webPreferences: {
+      contextIsolation: true, preload: path.join(__dirname, "preload.cjs"), webviewTag: true,
+      additionalArguments: ["--bos-primary-browser=1", `--bos-channel=${STAGING ? "staging" : "live"}`],
+    },
+  });
+  browserWindow = win;
+  // Shown without taking focus: the person keeps typing where they were.
+  win.once("ready-to-show", () => { if (!win.isDestroyed()) win.showInactive(); });
+  win.once("closed", () => { if (browserWindow === win) { browserWindow = null; remoteBrowser.releaseAll(); remoteBrowser.unmount(); } });
+  win.webContents.setWindowOpenHandler(({ url }) => {
+    try { void shell.openExternal(externalWebUrl(url)).catch(() => {}); } catch {}
+    return { action: "deny" };
+  });
+  const guard = (event, url) => { try { if (new URL(url).origin === rendererOrigin()) return; } catch {} event.preventDefault(); };
+  win.webContents.on("will-navigate", guard);
+  win.webContents.on("will-redirect", guard);
+  win.webContents.on("context-menu", (_event, params) => showContextMenu(win, params));
+  const url = new URL("/", rendererOrigin());
+  url.searchParams.set("bos-browser-window", "1");
+  void win.loadURL(url.toString()).catch(() => {});
+}
+/** The main window came back to this computer's UI: its own browser takes over. */
+function closeBrowserWindow() {
+  remoteBrowser.releaseAll();
+  if (browserWindow && !browserWindow.isDestroyed()) browserWindow.close();
+}
+/** Computer sharing hands this desktop one browser call from a paired workspace.
+ * Conversations are namespaced by workspace so two servers never share a turn. */
+const sharedBrowserHost = {
+  async run(env, operation) {
+    const scoped = value => `${env.id}:${value}`;
+    if (operation.action === "browser_release") { remoteBrowser.release(scoped(operation.thread_id), operation.generation); return { content: [] }; }
+    const deadline = Date.now() + (operation.timeout_ms ?? 20000);
+    // Only a real call opens the window; listing tools at turn start must not.
+    if (operation.method === "tools/call" && !remoteBrowser.mounted() && !mainWindowShowsLocalUi()) {
+      openBrowserWindow();
+      // A cold window loads the whole local UI before its tab strip reports in.
+      while (!remoteBrowser.mounted() && Date.now() < deadline - 2000) await new Promise(resolve => setTimeout(resolve, 100));
+    }
+    return remoteBrowser.rpc(scoped(operation.bot_id), scoped(operation.thread_id), operation.method, operation.params ?? {}, deadline, { generation: operation.generation, fullAccess: operation.full_access === true });
+  },
+  releaseWorkspace(envId) { for (const id of remoteBrowser.threadIds()) if (id.startsWith(`${envId}:`)) remoteBrowser.release(id); },
+};
 let primaryBrowserController, browserContentBlocker, primaryBrowserFocus;
 function contentBlocker() {
   return browserContentBlocker ??= createContentBlocker({ root:path.join(app.getPath("userData"),"browser"), filters:["easylist.txt","easyprivacy.txt"].map(file=>fs.readFileSync(new URL(`./resources/adblock/${file}`,import.meta.url),"utf8")).join("\n"), contentsFromId:id=>webContents.fromId(id) });
 }
 function primaryBrowser() {
-  return primaryBrowserController ??= createPrimaryBrowserController({ root: path.join(app.getPath("userData"), "browser"), encryption: safeStorage, registry: toolsBrowserRegistry, contentBlocker: contentBlocker(), sessionFromPartition: p => session.fromPartition(p), contentsFromId: id => webContents.fromId(id), dialog, owner: () => mainWindow, shell, agentBusy: id => sharedPrimaryBrowser.hasAgentControl(id) });
+  return primaryBrowserController ??= createPrimaryBrowserController({ root: path.join(app.getPath("userData"), "browser"), encryption: safeStorage, registry: toolsBrowserRegistry, contentBlocker: contentBlocker(), sessionFromPartition: p => session.fromPartition(p), contentsFromId: id => webContents.fromId(id), dialog, owner: () => browserHostFor(browserWindow?.webContents) ?? mainWindow, shell, agentBusy: browserAgentControls });
 }
 const toolsBrowserRegistry = createWorkspaceBrowserRegistry({
   onDownload: (p, row, file) => primaryBrowserController?.download(p, row, file),
   notify: (download) => {
     if (mainWindowShowsLocalUi()) mainWindow.webContents.send("tools-browser:download", download);
+    if (browserWindowShowsLocalUi()) browserWindow.webContents.send("tools-browser:download", download);
   },
 });
 const configuredBrowserPartitions = new Set();
 async function authorizePrimaryAgentRequest(details, partition) {
-  return authorizeAgentNetwork(details, { hasAgentControl: () => sharedPrimaryBrowser.hasAgentControl(primaryBrowserController?.profileFor(partition)), guestFromId: id => webContents.fromId(id), agentForGuest: id => sharedPrimaryBrowser.agentForGuest(id), authorize: (...args) => primaryBrowser().authorizeAgent(...args) });
+  return authorizeAgentNetwork(details, { hasAgentControl: () => browserAgentControls(primaryBrowserController?.profileFor(partition)), guestFromId: id => webContents.fromId(id), agentForGuest: browserAgentForGuest, authorize: (...args) => primaryBrowser().authorizeAgent(...args) });
 }
 function ensureToolsBrowserSession(partition) {
   if (configuredBrowserPartitions.has(partition)) return;
@@ -1476,11 +1580,11 @@ function ensureToolsBrowserSession(partition) {
     } catch { callback({}); }
   });
   ses.on("will-download", (event, item, guest) => {
-    const agent = guest && sharedPrimaryBrowser.agentForGuest(guest.id);
+    const agent = guest && browserAgentForGuest(guest.id);
     if (!agent) { toolsBrowserRegistry.trackDownload(partition, event, item, guest); return; }
     item.pause();
     toolsBrowserRegistry.trackDownload(partition, event, item, guest);
-    void authorizeAgentDownload(guest, item, { agentForGuest: id => sharedPrimaryBrowser.agentForGuest(id), authorize: (...args) => primaryBrowser().authorizeAgent(...args) }).then(allowed => { if (allowed) item.resume(); else item.cancel(); }, () => item.cancel());
+    void authorizeAgentDownload(guest, item, { agentForGuest: browserAgentForGuest, authorize: (...args) => primaryBrowser().authorizeAgent(...args) }).then(allowed => { if (allowed) item.resume(); else item.cancel(); }, () => item.cancel());
   });
   configuredBrowserPartitions.add(partition);
 }
@@ -1502,7 +1606,7 @@ app.on("browser-window-blur",()=>noteBrowserKeyInput());
 app.on("web-contents-created", (_event, contents) => {
   contents.on("will-attach-webview", (event, webPreferences, params) => {
     const partition = toolsBrowserRegistry.has(params?.partition) ? params.partition : TOOLS_BROWSER_PARTITION;
-    if (!mainWindow || contents !== mainWindow.webContents || !mainWindowShowsLocalUi() ||
+    if (!browserHostFor(contents) ||
       !hardenWebviewAttach(webPreferences, params, { appOrigins: toolsBrowserAppOrigins, partition, nativePopups: Boolean(primaryBrowserController?.profileFor(partition)) })) {
       event.preventDefault();
       return;
@@ -1512,12 +1616,12 @@ app.on("web-contents-created", (_event, contents) => {
   contents.on("before-input-event", (event,input)=>{
     noteBrowserKeyInput(input);
     const command=browserCommand(input);
-    if(contents!==mainWindow?.webContents||!mainWindowShowsLocalUi()||!primaryBrowserFocus||input.type!=="keyDown"||!command)return;
+    if(!browserHostFor(contents)||!primaryBrowserFocus||input.type!=="keyDown"||!command)return;
     event.preventDefault();contents.send("primary-browser:shortcut",{command,key:input.key,shift:input.shift,partition:primaryBrowserFocus});
   });
   contents.on("did-attach-webview", (_attachEvent, guest) => {
-    if (!mainWindow || contents !== mainWindow.webContents) return;
-    const owner = mainWindow;
+    const owner = browserHostFor(contents);
+    if (!owner) return;
     const partition = [...configuredBrowserPartitions].find(p => session.fromPartition(p) === guest.session) ?? guest.getLastWebPreferences().partition;
     toolsBrowserRegistry.attach(guest, partition);
     const registerPrimaryGuest = (contents) => {
@@ -1532,7 +1636,7 @@ app.on("web-contents-created", (_event, contents) => {
         const command = browserCommand(input);
         if (contents.getType()!=="webview" || !primaryBrowserController?.profileFor(partition) || input.type !== "keyDown" || !command) return;
         event.preventDefault();
-        if (mainWindowShowsLocalUi()) owner.webContents.send("primary-browser:shortcut", { command, key: input.key, shift: input.shift, partition });
+        if (browserHostFor(owner.webContents)) owner.webContents.send("primary-browser:shortcut", { command, key: input.key, shift: input.shift, partition });
       });
     };
     registerPrimaryGuest(guest);
@@ -1553,7 +1657,7 @@ app.on("web-contents-created", (_event, contents) => {
       nativePopups: Boolean(primaryBrowserController?.profileFor(partition)),
       onNativePopup: registerPrimaryGuest,
       onPopup: (url, options = {}) => {
-        if (owner.isDestroyed() || !mainWindowShowsLocalUi()) return;
+        if (owner.isDestroyed() || !browserHostFor(owner.webContents)) return;
         owner.webContents.send("tools-browser:popup", url, { ...toolsBrowserRegistry.source(guest), background: options.background === true });
       },
     });
@@ -1609,6 +1713,8 @@ async function startServerOn(port) {
     // owner; fallback-port children must not race to replace the parent lease.
     ...desktopDataDirLease.utilityServerLeaseEnvironment(),
     OMB_DATA_DIR: desktopDataDir(),
+    BOS_SAFE_MODE: desktopSafeMode ? "1" : "0",
+    BOS_SAFE_MODE_REASON: desktopSafeModeReason ?? "",
     // A packaged utility child must never fall back to a descriptor inherited
     // from the launching shell. It starts fail-closed until this exact main
     // process sends the private in-memory connection after spawn.
@@ -1692,6 +1798,7 @@ async function startServerOn(port) {
   let exited = false;
   proc.once("exit", (code) => {
     exited = true;
+    if (!desktopShutdownStarted && !expectedUtilityStops.has(proc)) recordCrashCount(desktopDataDir());
     try { desktopHostLifecycle?.childExited(proc.pid); }
     catch (error) { slog(`host recovery child exit receipt held: ${error?.message ?? error}`); }
     trustedApprovalMode.rejectProcess(proc);
@@ -1741,6 +1848,7 @@ async function startServerPackaged() {
   // two passes: a quit-and-reopen relaunch can race the dying instance's
   // server during teardown — one settle-and-retry covers it
   let everyPortForeignOwned = true;
+  let safeModePort = SERVER_PORT;
   for (let attempt = 0; attempt < 2; attempt++) {
     for (const port of SERVER_PORTS) {
       if (desktopShutdownStarted) return false;
@@ -1752,11 +1860,15 @@ async function startServerPackaged() {
       if (started.abort) return false;
       // A child that exited or timed out is not evidence of a port conflict —
       // only "another process answered health checks" is.
-      if (started.reason !== "foreign-owner") everyPortForeignOwned = false;
+      if (started.reason !== "foreign-owner") { everyPortForeignOwned = false; safeModePort = port; }
     }
     await new Promise((r) => setTimeout(r, 2500));
   }
   serverStartConflictOnly = everyPortForeignOwned;
+  if (!everyPortForeignOwned && !desktopShutdownStarted) {
+    SERVER_PORT = safeModePort;
+    return serverSupervisor.recoverInSafeMode("The server could not start after repeated attempts");
+  }
   return false;
 }
 
@@ -2129,6 +2241,21 @@ ipcMain.on("desktop:focus-window", (event) => {
 // Approval, question, done and bot-message banners (electron/attention-notifications.mjs).
 registerAttentionNotifications({ mainWindow: () => mainWindow });
 
+// The notch: who is working, who needs you, what just finished (electron/notch.mjs).
+// The main window's renderer switches it on and feeds it.
+registerNotch({
+  mainWindow: () => mainWindow,
+  pageUrl: () => new URL("/notch.html", rendererOrigin()).toString(),
+  focusMain: () => {
+    const win = mainWindow;
+    if (!win || win.isDestroyed()) return;
+    if (win.isMinimized()) win.restore();
+    if (!win.isVisible()) win.show();
+    win.focus();
+    app.focus({ steal: true });
+  },
+});
+
 // ── environments: this computer's server, or a paired remote one ──────
 // The app switches by loading the chosen server's own UI (electron/menu.mjs).
 // Only {id, name, origin} is stored here; the session credential is the
@@ -2180,6 +2307,7 @@ function sharingController() {
     environments: () => environmentsState.environments,
     enabled: refreshSharedComputersAllowed,
     cuaConnection: () => cuaReady,
+    browserHost: sharedBrowserHost,
     hostControl: async (id, signal) => {
       const lease = async action => {
         const response = await fetch(`http://127.0.0.1:${SERVER_PORT}/api/desktop/shared-computer-control`, {
@@ -2552,6 +2680,8 @@ function createWindow() {
   });
   win.webContents.on("did-finish-load", () => { deliverPackageInstall(win); deliverBrowserLinks(); deliverMarketerLink(win); });
   win.webContents.on("did-finish-load", () => void offerComputerSharing(win));
+  // Back on this computer's own UI: its browser panel serves the bots again.
+  win.webContents.on("did-navigate", () => { if (mainWindowShowsLocalUi()) closeBrowserWindow(); });
 
   // Native context menu for text inputs — without this, right-click does
   // nothing in the Electron window (no Cut/Copy/Paste/Select All).
@@ -2746,16 +2876,16 @@ ipcMain.handle("engine:open-terminal", localOnly("engine:open-terminal", async (
 // A bot's working folder: the native picker, so the path is real and the
 // user never types one. Returns null when they cancel.
 ipcMain.handle("primary-browser:action", localOnly("primary-browser:action", async (event, action, input) => {
-  requireMainWindowSender(event);
+  const agent = requireBrowserHostSender(event);
   if (action === "browser-focus") {
     if (input?.focused === true) primaryBrowserFocus=primaryBrowser().partition(input.profileId);
     else if (primaryBrowserController?.profileFor(primaryBrowserFocus)===input?.profileId) primaryBrowserFocus=undefined;
     return true;
   }
   if (action === "consume-external-link") { const pending=pendingBrowserView;pendingBrowserView=false;return pending; }
-  if (action === "agent-tabs") return sharedPrimaryBrowser.reportTabs(input);
-  if (action === "reveal") { pendingBrowserView = true; mainWindow.webContents.send("primary-browser:external-url", { profileId: primaryBrowser().store.profiles().selected, url: "", reveal: true }); return true; }
-  if (action === "agent-take-over" || action === "agent-give-back" || action === "agent-stop") return sharedPrimaryBrowser.person(action.slice(6), typeof input?.tabId === "string" ? input.tabId : "");
+  if (action === "agent-tabs") return agent.reportTabs(input);
+  if (action === "reveal") { if (agent !== sharedPrimaryBrowser) return true; pendingBrowserView = true; mainWindow.webContents.send("primary-browser:external-url", { profileId: primaryBrowser().store.profiles().selected, url: "", reveal: true }); return true; }
+  if (action === "agent-take-over" || action === "agent-give-back" || action === "agent-stop") return agent.person(action.slice(6), typeof input?.tabId === "string" ? input.tabId : "");
   if (action === "default-browser") {
     if (process.platform === "darwin") { await registerBrowserApp({packaged:app.isPackaged,executable:app.getPath("exe")}); await shell.openExternal("x-apple.systempreferences:com.apple.Desktop-Settings.extension"); return true; }
     return app.setAsDefaultProtocolClient("http") && app.setAsDefaultProtocolClient("https");
@@ -2766,13 +2896,13 @@ ipcMain.handle("primary-browser:action", localOnly("primary-browser:action", asy
 }));
 
 ipcMain.handle("tools-browser:partition", localOnly("tools-browser:partition", (event, workspaceId) => {
-  requireMainWindowSender(event);
+  requireBrowserHostSender(event);
   const partition = toolsBrowserRegistry.register(workspaceId);
   ensureToolsBrowserSession(partition);
   return partition;
 }));
 ipcMain.handle("tools-browser:downloads", localOnly("tools-browser:downloads", (event, partition) => {
-  requireMainWindowSender(event);
+  requireBrowserHostSender(event);
   return toolsBrowserRegistry.list(partition);
 }));
 
@@ -2784,6 +2914,19 @@ ipcMain.handle("desktop:pick-folder", localOnly("desktop:pick-folder", async (ev
     ...(typeof current === "string" && current ? { defaultPath: current } : {}),
   });
   return result.canceled ? null : (result.filePaths[0] ?? null);
+}));
+
+ipcMain.handle("desktop:send-diagnostics", localOnly("desktop:send-diagnostics", async () => {
+  if (!selfHealEnabled(desktopDataDir())) throw new Error("Report sharing is not enabled on this BOS yet.");
+  return sendDiagnosticsReport(await gatherDiagnostics());
+}));
+ipcMain.handle("desktop:exit-safe-mode", localOnly("desktop:exit-safe-mode", async () => {
+  if (!desktopSafeMode || desktopShutdownStarted) return;
+  // Relaunch follows the normal durable shutdown path and its owned child cleanup.
+  delete process.env.BOS_SAFE_MODE;
+  delete process.env.BOS_SAFE_MODE_REASON;
+  app.relaunch();
+  app.quit();
 }));
 
 // One-click bug-report bundle. Secrets are never read; the report is
@@ -3034,6 +3177,15 @@ function publicDesktopRemoteState() {
         deviceId: desktopRemoteAccess.deviceId,
       }
     : { active: false };
+}
+
+/** The main window, or the BOS browser window a paired workspace opened;
+ * returns the browser agent that window's tabs belong to. */
+function requireBrowserHostSender(event) {
+  const sender = BrowserWindow.fromWebContents(event.sender);
+  if (sender && !sender.isDestroyed() && sender === browserWindow) return remoteBrowser;
+  requireMainWindowSender(event);
+  return sharedPrimaryBrowser;
 }
 
 function requireMainWindowSender(event) {
@@ -3596,18 +3748,22 @@ app.whenReady().then(async () => {
       return credentials;
     }).finally(syncManagedComposioCredentials);
   }
-  // in-app auto-update (packaged only) — checks GitHub releases, downloads on
-  // the user's click, installs on "Restart to update"
+  // Quiet background downloads, with the same idle gate for quit and restart.
   const updateLifecycle = createUpdateLifecycleClient({
-    getConnection: () => serverReady && serverProc && !preparedCompanyRestore && !companyRestoreCommitting && !desktopShutdownStarted
-      ? { url: `http://127.0.0.1:${SERVER_PORT}`, pid: serverProc.pid, token: desktopMutationToken, generation: desktopHostLifecycle?.generation }
-      : null,
+    // No ready server (crashed, booting, shut down) means no turn to protect,
+    // so quit/install is admitted. A company restore is real work: refuse.
+    getConnection: () => {
+      if (preparedCompanyRestore || companyRestoreCommitting) throw new Error("A company restore is in progress.");
+      return serverReady && serverProc && !desktopShutdownStarted
+        ? { url: `http://127.0.0.1:${SERVER_PORT}`, pid: serverProc.pid, token: desktopMutationToken, generation: desktopHostLifecycle?.generation }
+        : null;
+    },
     recordIntent: receipt => {
       if (!desktopHostLifecycle || receipt.pid !== serverProc?.pid) throw new Error("Desktop update owner changed; installation held.");
       desktopHostLifecycle.update(receipt);
     },
   });
-  startUpdater({ prepareInstall: updateLifecycle.prepareInstall });
+  startUpdater({ prepareInstall: updateLifecycle.prepareInstall, dataDir: desktopDataDir() });
   refreshApplicationMenu();
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
@@ -3640,6 +3796,7 @@ process.once("SIGINT", requestSignalQuit);
 process.once("SIGTERM", requestSignalQuit);
 
 app.on("before-quit", (e) => {
+  if (handleUpdaterQuit(e)) return;
   // Any quit (menu, tray, updater, signal) really closes the hidden window.
   closeToTray?.markQuitting();
   // Intent is durable before any asynchronous shutdown. A failed write must

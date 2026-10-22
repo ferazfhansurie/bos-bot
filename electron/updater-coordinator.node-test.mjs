@@ -44,13 +44,13 @@ function errorStates(states) {
   return states.filter((entry) => entry.status === "error");
 }
 
-test("automatic check rejection is handled and returns to idle", async () => {
+test("automatic check rejection is handled and exposes an error state", async () => {
   const { updater, coordinator, getState } = harness();
   updater.checkForUpdates = () => Promise.reject(new Error("offline"));
 
   await assert.doesNotReject(coordinator.check());
 
-  assert.equal(getState().status, "idle");
+  assert.equal(getState().status, "error");
 });
 
 test("manual check rejection is handled as a user-visible error", async () => {
@@ -609,4 +609,208 @@ test("contract hold prevents legacy UI and timers from racing a restart", async 
  h.updater.quitAndInstall=()=>installs++;h.updater.checkForUpdates=()=>{checks++;};
  h.coordinator.hold();await h.coordinator.install();await h.coordinator.check(true);await h.coordinator.download();
  assert.equal(installs,0);assert.equal(checks,0);assert.throws(()=>h.coordinator.admit("restart"),/held|progress/);
+});
+
+test("automatic updates download without a renderer action and track native readiness", async () => {
+  const h = harness({ automaticDownload: true, nativeStaging: true });
+  let downloads = 0;
+  h.updater.downloadUpdate = async () => {
+    downloads++;
+    h.updater.emit("update-downloaded", { version: "2.1.3" });
+    return ["update.zip"];
+  };
+  h.updater.checkForUpdates = async () => {
+    h.updater.emit("update-available", { version: "2.1.3" });
+  };
+  await h.coordinator.check();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(downloads, 1);
+  assert.equal(h.getState().status, "downloaded");
+  assert.ok(h.states.some(state => state.status === "preparing"));
+});
+
+test("install on quit runs lifecycle protection and refuses a busy turn", async () => {
+  let installs = 0;
+  const h = harness({ prepareInstall: async () => { throw new Error("busy turn"); } });
+  h.updater.quitAndInstall = () => installs++;
+  await downloadInto(h);
+  assert.equal(h.coordinator.shouldInstallOnQuit(), true);
+  await h.coordinator.install();
+  assert.equal(installs, 0);
+  assert.equal(h.coordinator.shouldInstallOnQuit(), false);
+});
+
+test("install on quit dispatches once and skips terminal handoffs", async () => {
+  const h = harness();
+  let installs = 0;
+  h.updater.quitAndInstall = () => installs++;
+  assert.equal(h.coordinator.shouldInstallOnQuit(), false);
+  await downloadInto(h);
+  assert.equal(h.coordinator.shouldInstallOnQuit(), true);
+  await h.coordinator.install();
+  assert.equal(h.coordinator.shouldInstallOnQuit(), false);
+  assert.equal(installs, 1);
+  const terminal = harness({ handOffInstall: async () => ({}) });
+  await downloadInto(terminal);
+  assert.equal(terminal.coordinator.shouldInstallOnQuit(), false);
+});
+
+test("Mac quit admission protects native preparation and repeated quits", async () => {
+  const admission = deferred();
+  let prepares = 0;
+  let resumes = 0;
+  let prevented = 0;
+  const h = harness({nativeStaging: true, prepareInstall: () => { prepares++; return admission.promise; }});
+  const bytes = deferred();
+  h.updater.downloadUpdate = () => bytes.promise;
+  const downloading = h.coordinator.download();
+  h.updater.emit("update-downloaded", {version:"2.1.3"});
+  const event = {preventDefault() { prevented++; }};
+  assert.equal(h.coordinator.protectQuit(event, () => resumes++), true);
+  assert.equal(h.coordinator.protectQuit(event, () => resumes++), true);
+  await Promise.resolve();
+  assert.equal(prepares, 1);
+  assert.equal(resumes, 0);
+  admission.resolve();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(resumes, 1);
+  assert.equal(prevented, 2);
+  assert.equal(h.coordinator.protectQuit(event, () => resumes++), false);
+  bytes.resolve(["update.zip"]);
+  await downloading;
+});
+
+test("failed native quit admission remains guarded and can retry the lifecycle", async () => {
+  let busy = true;
+  let resumed = 0;
+  const h = harness({nativeStaging:true, prepareInstall: async () => {if (busy) throw new Error("busy turn");}});
+  await downloadInto(h, ["update.zip"]);
+  const event = {preventDefault() {}};
+  assert.equal(h.coordinator.protectQuit(event, () => resumed++), true);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(resumed, 0);
+  busy = false;
+  assert.equal(h.coordinator.protectQuit(event, () => resumed++), true);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(resumed, 1);
+});
+
+test("a second quit cannot bypass pending explicit install admission", async () => {
+  const admission = deferred();
+  const h = harness({prepareInstall: () => admission.promise});
+  let installs = 0;
+  h.updater.quitAndInstall = () => installs++;
+  await downloadInto(h);
+  const installing = h.coordinator.install();
+  assert.equal(h.coordinator.protectQuit({preventDefault() {}}, () => assert.fail("early quit")), true);
+  assert.equal(installs, 0);
+  admission.resolve();
+  await installing;
+  assert.equal(h.coordinator.protectQuit({preventDefault() {}}, () => {}), false);
+  assert.equal(installs, 1);
+});
+
+test("Mac quit protects binary transfer before native preparation can race shutdown", async () => {
+  const admission = deferred();
+  const bytes = deferred();
+  const h = harness({nativeStaging:true, prepareInstall: () => admission.promise});
+  h.updater.downloadUpdate = () => bytes.promise;
+  const downloading = h.coordinator.download();
+  let resumed = 0;
+  assert.equal(h.coordinator.protectQuit({preventDefault() {}}, () => resumed++), true);
+  h.updater.emit("update-downloaded", {version:"2.1.3"});
+  bytes.resolve(["update.zip"]);
+  await downloading;
+  assert.equal(resumed, 0);
+  admission.resolve();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(resumed, 1);
+});
+
+test("shutdown hold prevents a late feed response from starting native download", async () => {
+  const h = harness({automaticDownload:true, nativeStaging:true});
+  const feed = deferred();
+  h.updater.checkForUpdates = () => feed.promise;
+  h.updater.downloadUpdate = () => assert.fail("shutdown must not start native work");
+  const checking = h.coordinator.check();
+  assert.equal(h.coordinator.protectQuit({preventDefault() {}}, () => {}), false);
+  h.coordinator.hold();
+  h.updater.emit("update-available", {version:"2.1.3"});
+  feed.resolve();
+  await checking;
+  await new Promise(resolve => setImmediate(resolve));
+});
+
+const settle = () => new Promise(resolve => setImmediate(resolve));
+const waitFor = async (predicate) => { for (let i = 0; i < 200 && !predicate(); i++) await new Promise(resolve => setTimeout(resolve, 2)); };
+
+test("Mac quit with no owned server is admitted at once", async () => {
+  const { createUpdateLifecycleClient } = await import("./update-lifecycle.mjs");
+  const lifecycle = createUpdateLifecycleClient({ getConnection: () => null, recordIntent: async () => {}, fetch: async () => assert.fail("no server") });
+  const h = harness({ nativeStaging: true, prepareInstall: lifecycle.prepareInstall });
+  await downloadInto(h, ["update.zip"]);
+  let resumed = 0;
+  assert.equal(h.coordinator.protectQuit({ preventDefault() {} }, () => resumed++), true);
+  await settle();
+  assert.equal(resumed, 1);
+  assert.equal(h.coordinator.protectQuit({ preventDefault() {} }, () => resumed++), false);
+});
+
+test("a busy quit retries quietly and goes through once the server is idle", async () => {
+  let busy = true;
+  let resumed = 0;
+  const h = harness({ nativeStaging: true, quitRetryMs: 1, prepareInstall: async () => { if (busy) throw new Error("busy turn"); } });
+  await downloadInto(h, ["update.zip"]);
+  h.coordinator.protectQuit({ preventDefault() {} }, () => resumed++);
+  await settle();
+  assert.equal(h.getState().quitHeld, true);
+  assert.equal(resumed, 0);
+  busy = false;
+  await waitFor(() => resumed > 0);
+  assert.equal(resumed, 1);
+});
+
+test("quit retries are bounded and a repeated quit then quits without waiting", async () => {
+  let prepares = 0;
+  let resumed = 0;
+  const h = harness({ nativeStaging: true, quitRetryMs: 1, quitRetryLimit: 2, prepareInstall: async () => { prepares++; throw new Error("busy turn"); } });
+  await downloadInto(h, ["update.zip"]);
+  h.coordinator.protectQuit({ preventDefault() {} }, () => resumed++);
+  await waitFor(() => prepares >= 3);
+  await new Promise(resolve => setTimeout(resolve, 20));
+  assert.equal(prepares, 3);
+  assert.equal(resumed, 0);
+  assert.equal(h.coordinator.protectQuit({ preventDefault() {} }, () => resumed++), true);
+  await settle();
+  assert.equal(prepares, 4);
+  assert.equal(resumed, 1);
+  assert.equal(h.coordinator.protectQuit({ preventDefault() {} }, () => resumed++), false);
+});
+
+test("quit without waiting releases a held quit and is a no-op otherwise", async () => {
+  let resumed = 0;
+  const h = harness({ nativeStaging: true, quitRetryMs: 60_000, prepareInstall: async () => { throw new Error("Owned desktop server connection is unavailable"); } });
+  await downloadInto(h, ["update.zip"]);
+  assert.equal(h.coordinator.quitWithoutWaiting(), false);
+  h.coordinator.protectQuit({ preventDefault() {} }, () => resumed++);
+  await settle();
+  assert.equal(h.getState().quitHeld, true);
+  assert.equal(h.coordinator.quitWithoutWaiting(), true);
+  assert.equal(resumed, 1);
+  assert.equal(h.coordinator.protectQuit({ preventDefault() {} }, () => resumed++), false);
+});
+
+test("a quit-time hold lapses so a cancelled quit does not disable updates for the session", async () => {
+  const h = harness({ shutdownHoldMs: 5 });
+  let checks = 0;
+  h.updater.checkForUpdates = async () => { checks++; };
+  h.coordinator.holdForQuit();
+  await h.coordinator.check(true);
+  assert.equal(checks, 0);
+  await new Promise(resolve => setTimeout(resolve, 20));
+  await h.coordinator.check(true);
+  assert.equal(checks, 1);
+  h.coordinator.hold();
+  await h.coordinator.check(true);
+  assert.equal(checks, 1);
 });

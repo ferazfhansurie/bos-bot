@@ -5,7 +5,7 @@
 // a glance and offers Check again, because the user often installs from a
 // terminal and comes back. The guide reacts to the result.
 // Most people already pay for Claude or ChatGPT, so those two sign-ins lead;
-// BOS Free and every other engine sit under "More options".
+// BOS Free is visible beside the sign-ins when no engine is ready.
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Check, ChevronDown, RefreshCw } from "lucide-react";
 import { FreeModelSetup } from "../FreeModelSetup";
@@ -14,6 +14,7 @@ import { engineReady } from "@/components/EngineLibrary";
 import { InstanceProviderMark } from "@/components/ProviderIcons";
 import { cn } from "@/lib/cn";
 import { t } from "@/lib/i18n";
+import { useAppConfig } from "@/lib/app-config";
 import { api, useStore, type InstanceInfo } from "@/state/store";
 import { PrimaryButton, staggerIndex, type BeatProps } from "./shared";
 
@@ -62,6 +63,7 @@ function SkeletonRow({ index }: { index: number }) {
 /** `inline` drops the Continue button: the chat sign-in card moves on by itself
  * once an engine is ready. */
 export function EnginesBeat({ onNext, setMascot, bump, inline }: Omit<BeatProps, "onSkip"> & Partial<Pick<BeatProps, "onSkip">> & { inline?: boolean }) {
+  const config = useAppConfig();
   const { state, dispatch } = useStore();
   const [loaded, setLoaded] = useState(false);
   const [failed, setFailed] = useState(false);
@@ -222,7 +224,7 @@ export function EnginesBeat({ onNext, setMascot, bump, inline }: Omit<BeatProps,
   return (
     <div className="flex min-h-0 flex-col">
       <p className="animate-rise mt-1 text-[13.5px] text-ink-secondary">
-        {t("onboarding.engines.loginIntro")}
+        {config.flags.freeEngine && ready.length === 0 ? "Choose BOS Free, or connect the Claude or ChatGPT account you already use." : t("onboarding.engines.loginIntro")}
       </p>
 
       <div
@@ -247,6 +249,8 @@ export function EnginesBeat({ onNext, setMascot, bump, inline }: Omit<BeatProps,
         )}
       </div>
 
+      {instances !== null && ready.length === 0 && !waking && config.flags.freeEngine && <FreeModelSetup />}
+
       <button
         type="button"
         onClick={() => setMore(!more)}
@@ -266,7 +270,7 @@ export function EnginesBeat({ onNext, setMascot, bump, inline }: Omit<BeatProps,
 
       {more && (
         <>
-          <FreeModelSetup />
+          {ready.length > 0 && config.flags.freeEngine && <FreeModelSetup />}
 
           {/* the whole story in one line, and the way back after a terminal trip */}
           <div className="animate-rise mt-4 flex items-center justify-between gap-3">

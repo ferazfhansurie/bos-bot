@@ -104,7 +104,7 @@ describe("guarded routes", () => {
     ["POST", "/api/groups/g1/tasks"], ["PATCH", "/api/groups/g1/tasks/t1"], ["POST", "/api/groups/g1/people"],
     ["DELETE", "/api/groups/g1/queue/q1"], ["POST", "/api/groups/g1/queue/q1/steer"], ["PATCH", "/api/groups/g1/setup"],
     ["POST", "/api/teams/import"],
-    ["POST", "/api/threads/t1/messages"], ["POST", "/api/threads/t1/messages/m1/reactions"], ["POST", "/api/threads/t1/respond"],
+    ["POST", "/api/threads/t1/messages"], ["POST", "/api/threads/t1/messages/m1/reactions"], ["POST", "/api/threads/t1/messages/m1/ui"], ["POST", "/api/threads/t1/respond"],
     ["POST", "/api/bots/b1/messages"], ["POST", "/api/bots/b1/messages/guarded"], ["POST", "/api/bots/b1/messages/m1/edit"],
     ["PATCH", "/api/bots/b1/queue/q1"], ["POST", "/api/bots/b1/queue/q1/steer"], ["POST", "/api/bots/b1/compact"],
     ["POST", "/api/bots/b1/respond"], ["POST", "/api/bots/b1/tasks"], ["DELETE", "/api/bots/b1/tasks/t1"],

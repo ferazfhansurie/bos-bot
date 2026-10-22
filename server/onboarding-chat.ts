@@ -16,6 +16,7 @@ import {
   type OnboardingChatStep,
 } from "../shared/onboarding-chat.ts";
 import type { WireMessage } from "../shared/wire.ts";
+import type { StarterJob } from "../shared/app-config.ts";
 
 const STEPS = ["greet", "name", "about", "engine", "apps", "first-task", "done"] as const satisfies readonly OnboardingChatStep[];
 const APP_IDS = ONBOARDING_APPS.map((app) => app.id) as [OnboardingAppId, ...OnboardingAppId[]];
@@ -69,6 +70,8 @@ export interface OnboardingChatHost {
   personName: string;
   /** False when connected apps can't work here, so no connect cards post. */
   appsAvailable?: boolean;
+  freeEngine?: boolean;
+  starterJobs?: readonly StarterJob[];
   messages(threadId: string): readonly OnboardingLine[];
   append(threadId: string, line: OnboardingChatMessage): void;
   patch(threadId: string, messageId: string, line: OnboardingChatMessage): void;
@@ -108,14 +111,17 @@ export function applyOnboardingChatEvent(host: OnboardingChatHost, before: Onboa
   const post = (step: OnboardingChatStep) => {
     if (posted.has(step)) return;
     posted.add(step);
-    const ctx = { personName: host.personName, botName: state.botName, engineReady: state.engineReady, connected: state.connected, appsAvailable: host.appsAvailable };
+    const ctx = { personName: host.personName, botName: state.botName, engineReady: state.engineReady, connected: state.connected, appsAvailable: host.appsAvailable,
+      freeEngine: host.freeEngine, starterJobs: host.starterJobs };
     const lines = onboardingScript(step, ctx);
     const seed = step === "greet" && lines.length ? host.seedGreeting?.(threadId) : null;
     if (seed) host.patch(threadId, seed, lines[0]);
     for (const line of seed ? lines.slice(1) : lines) host.append(threadId, line);
   };
   if (state.step === "done") {
-    // typing early (or skipping the last card) ends setup; nothing more posts
+    // typing early (or skipping the last card) ends setup; nothing more
+    // posts, except the one greeting when start itself ends setup
+    if (event.type === "start" && before.step === "greet") post("greet");
   } else if (before.step === "greet" && state.step !== "greet") {
     post("greet");
     post(state.step);

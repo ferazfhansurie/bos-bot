@@ -5,13 +5,14 @@ import { expandEnvNames } from "../electron/branding-env.cjs";
 //     "instances": { "<instanceId>": {"driver":"grok", …} } }
 import { readFileSync, mkdirSync, existsSync, renameSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { z } from "zod";
 import { normalizeImageGenerationUrl, type ImageGenerationConfig } from "../shared/image-generation.ts";
 import { botAvatarUrlSchema } from "../shared/bot-avatar.ts";
 import type { ApprovalMode } from "../shared/approval-mode.ts";
 
 import { writeFileAtomic } from "./atomic.ts";
+import { allowInSafeMode } from "./safe-mode.ts";
 import { EFFORT_LEVELS } from "../shared/wire.ts";
 import { isModelVariant, type InstanceConfigMap, type ModelSelection } from "./contracts.ts";
 import { PROVIDER_ICON_PRESETS, providerIconError } from "../shared/provider-icon.ts";
@@ -774,7 +775,7 @@ export function sharedComputersEnabled(cfg: AppConfig): boolean {
  * then omits --strict-mcp-config while keeping skills, hooks and the
  * personal CLAUDE.md out. */
 export function claudeUserMcpEnabled(cfg: AppConfig): boolean {
-  return cfg.features?.claudeUserMcp === true;
+  return allowInSafeMode("plugins") && cfg.features?.claudeUserMcp === true;
 }
 
 /** Opt-in generated titles for new bot threads: a cheap provider one-shot
@@ -834,7 +835,9 @@ export function providerReloadKeys(patch: object): string[] {
 }
 
 // OMB_DATA_DIR isolates test/soak rigs from the user's real fleet.
-export const DATA_DIR = compatEnv.OMB_DATA_DIR ?? join(homedir(), ".openmausbot");
+// Resolved once so a relative or trailing-slash override names the same
+// directory everywhere it is joined or compared.
+export const DATA_DIR = compatEnv.OMB_DATA_DIR ? resolve(compatEnv.OMB_DATA_DIR) : join(homedir(), ".openmausbot");
 const LEGACY_DATA_DIR = join(homedir(), ".opengrokbot");
 export const EVENTS_DIR = join(DATA_DIR, "events");
 export const NATIVE_DIR = join(DATA_DIR, "native");
@@ -1338,6 +1341,7 @@ function skipMcpEntry(name: string, why: string): void {
 /** The validated, normalized custom servers from config — or {}. */
 export function customMcpServers(cfg: AppConfig, only?: string[]): Record<string, CustomMcpServer> {
   const out: Record<string, CustomMcpServer> = {};
+  if (!allowInSafeMode("plugins")) return out;
   for (const [name, raw] of Object.entries(cfg.mcpServers ?? {})) {
     // a bot with its own list gets exactly those names; a bot without one
     // keeps getting every enabled server, as before this field existed
@@ -1348,9 +1352,10 @@ export function customMcpServers(cfg: AppConfig, only?: string[]): Record<string
       continue;
     }
     if (!parsed.server.enabled) continue;
+    const autoApprove = parsed.server.autoApprove?.length ? { autoApprove: [...parsed.server.autoApprove] } : {};
     out[name] = isRemoteMcpServer(parsed.server)
-      ? { type: parsed.server.type, url: parsed.server.url, headers: parsed.server.headers }
-      : { command: parsed.server.command, args: parsed.server.args, env: parsed.server.env };
+      ? { type: parsed.server.type, url: parsed.server.url, headers: parsed.server.headers, ...autoApprove }
+      : { command: parsed.server.command, args: parsed.server.args, env: parsed.server.env, ...autoApprove };
   }
   return out;
 }

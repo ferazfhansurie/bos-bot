@@ -63,6 +63,11 @@ export function AttentionSettings() {
             />
           </SettingRow>
         ))}
+        {window.ogb?.platform === "darwin" && window.ogb.notch && (
+          <SettingRow title={t("attention.notch")} subtitle={t("attention.notch.subtitle")}>
+            <Switch checked={prefs.notch} aria-label={t("attention.notch")} onClick={() => setAttentionPreferences({ notch: !prefs.notch })} />
+          </SettingRow>
+        )}
         <SettingRow title={t("attention.done")} subtitle={t("attention.done.subtitle")}>
           <Choice<DoneNotifyMode>
             value={prefs.done}

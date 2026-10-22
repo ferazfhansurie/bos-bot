@@ -1,4 +1,5 @@
 import { compatEnv, compatEnvironment } from "../../electron/branding-env.cjs";
+import { allowInSafeMode } from "../safe-mode.ts";
 // Claude driver — upstream ClaudeDriver skeleton over agentcal's
 // drivers/claude.js runtime (stream-json both directions, prompt over
 // stdin, completion from a real `result` event — verified against
@@ -35,7 +36,7 @@ import type {
   SteerOutcome,
 } from "../contracts.ts";
 import { gateServer, resultBudget } from "../mcp-gate-config.ts";
-import { newEventId, newId } from "../contracts.ts";
+import { MEMBER_ENV, newEventId, newId } from "../contracts.ts";
 import { askInputSummary, commandSummary, toolDetailPreview } from "../tool-summary.ts";
 import { classifyError, computeBackoff, interruptibleDelay, RETRY_MAX_ATTEMPTS } from "./retry.ts";
 import {
@@ -197,7 +198,7 @@ function claudeEnvironment(
  * to give a bot a server is the app's own `mcpServers` config or the bot
  * project's `.mcp.json`. */
 function inheritsUserConfig(env: NodeJS.ProcessEnv): boolean {
-  return compatEnvironment(env).OMB_CLAUDE_INHERIT_USER_CONFIG === "1";
+  return allowInSafeMode("plugins") && compatEnvironment(env).OMB_CLAUDE_INHERIT_USER_CONFIG === "1";
 }
 
 /** The Engines-page warning while the escape hatch is set. The flag is a
@@ -254,6 +255,7 @@ export function readClaudeAuthSettings(
  * is what has to understand them. A malformed file is ignored rather than
  * failing the turn: an unreadable project config must not brick a bot. */
 function projectMcpServers(cwd: string): Record<string, unknown> {
+  if (!allowInSafeMode("plugins")) return {};
   let parsed: unknown;
   try {
     parsed = JSON.parse(readFileSync(join(cwd, ".mcp.json"), "utf8"));
@@ -1180,7 +1182,17 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
         }
       }
       const isolated = !inheritsUserConfig(turnEnvironment);
-      if (isolated && !shared && !remoteWork) {
+      if (!allowInSafeMode("plugins") && !shared && !remoteWork) {
+        // Safe mode keeps only the harness's own --mcp-config tools (the
+        // health check among them): no user/project settings, so no hooks or
+        // installed plugins, and no skills. Not --safe-mode: it disables MCP
+        // servers too, and an older CLI rejects it and fails every turn.
+        if (claudeCliSupports(cliVersion, "--strict-mcp-config")) args.push("--strict-mcp-config");
+        if (claudeCliSupports(cliVersion, "--setting-sources")) args.push("--setting-sources", "");
+        args.push("--disable-slash-commands");
+        turn = { ...turn, mcpFromUserConfig: false, integrations: { ...turn.integrations, custom: undefined } };
+      }
+      if (isolated && !shared && !remoteWork && allowInSafeMode("plugins")) {
         // A bot gets the tools and instructions its owner gave it, not
         // whatever this machine's Claude Code happens to be set up with.
         // Without these the CLI silently adds, to EVERY turn of every bot:
@@ -1289,8 +1301,11 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
       const botOwned = new Set<string>();
       for (const [name, server] of Object.entries(turn.integrations?.custom ?? {})) {
         if (Object.hasOwn(mcpServers, name)) continue;
-        mcpServers[name] = { ...server };
+        const { autoApprove, ...spec } = server;
+        mcpServers[name] = spec;
         botOwned.add(name);
+        // The owner listed these tools as safe to run without a card.
+        for (const tool of autoApprove ?? []) allowed.push(`mcp__${name}__${tool}`);
       }
       // --strict-mcp-config (above) makes this config the CLI's only source
       // of MCP servers, so a server the bot's OWN project declares would
@@ -1318,16 +1333,21 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
           // not infer its caller from whichever bot thread happens to be busy,
           // or let project/config env impersonate another conversation. These
           // IDs identify the thread; they grant no capability or turn authority.
+          // The member comes from the session that sent this turn's message.
+          // Whatever a config or project file put under the same name is
+          // dropped, so no file and no model can claim to be someone.
+          const { [MEMBER_ENV]: _claimed, ...configured } = (server.env as Record<string, string> | undefined) ?? {};
           mcpServers[name] = {
             ...server,
             env: {
-              ...(server.env as Record<string, string> | undefined),
+              ...configured,
               OMB_BOT_ID: botId ?? "",
               OMB_THREAD_ID: threadId,
+              ...(turn.member ? { [MEMBER_ENV]: JSON.stringify(turn.member) } : {}),
             },
           };
         }
-        const gated = gateServer({ name, server: mcpServers[name], threadId, budget, nodeEnv: NODE_ENV_FLAG });
+        const gated = gateServer({ name, server: mcpServers[name], threadId, budget, nodeEnv: NODE_ENV_FLAG, member: turn.member });
         if (gated) mcpServers[name] = gated;
       }
       // Keep ask_user available even in Full access. Native bypass skips
@@ -2051,14 +2071,16 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
      * summaries can contain paths, commands, or secrets, so the generic
      * `claude -p "prompt"` shape is not safe for review. No tools or MCP
      * servers are mounted in this isolated process. */
-    const generateReview = (prompt: string, signal?: AbortSignal): Promise<string> =>
+    const generateReview = (prompt: string, signal?: AbortSignal, opts: { thinking?: boolean } = {}): Promise<string> =>
       new Promise((resolve, reject) => {
         const child = spawnCli(
           config.cli,
           ["-p", "--model", "claude-haiku-4-5", "--output-format", "text"],
           {
             stdio: ["pipe", "pipe", "pipe"],
-            env: environment("claude-haiku-4-5"),
+            env: opts.thinking === false
+              ? { ...environment("claude-haiku-4-5"), MAX_THINKING_TOKENS: "0" }
+              : environment("claude-haiku-4-5"),
           },
         );
         let stdout = "";
@@ -2174,8 +2196,13 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
           return () => listeners.delete(listener);
         },
       },
-      generateText: (prompt, options) => generateReview(prompt, options?.signal),
-      reviewPermission: generateReview,
+      // The one-shot serves titles (10s), compaction summaries (20s) and the
+      // memory picture. With Haiku's default thinking a memory picture took
+      // ~50s and 6k output tokens; without it ~6s and 350, same answer, so
+      // those callers' timeouts no longer race the thinking. Permission
+      // review keeps thinking: it is a judgement, not a formatting job.
+      generateText: (prompt, options) => generateReview(prompt, options?.signal, { thinking: false }),
+      reviewPermission: (prompt, signal) => generateReview(prompt, signal),
       dispose: async () => {
         try {
           await login.dispose();

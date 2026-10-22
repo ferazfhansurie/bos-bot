@@ -1,9 +1,11 @@
+import { ModsSettings } from "@/mods/ModsSettings";
+import { modsDesktop } from "@/mods/use-mods";
 // App settings, as a real modal with sections rather than one long panel.
 // Per-bot settings (persona, model, computer) live in BotSettingsDialog — this
 // is the stuff shared by every bot: who you are, your keys, and the
 // machine your bots can borrow.
 import { useEffect, useRef, useState } from "react";
-import { Archive, Coins, Download, KeyRound, RefreshCw, Search, TabletSmartphone, Terminal, User, Users, X, Building2 } from "lucide-react";
+import { Archive, Coins, Download, KeyRound, RefreshCw, Search, TabletSmartphone, Terminal, User, Users, X, Building2, HeartPulse } from "lucide-react";
 import { api, useStore, type AppSettingsSection, type ConfigStatus } from "@/state/store";
 import { analyticsEnabled, setAnalyticsEnabled } from "@/lib/analytics";
 import { localeChoices, type LocaleKey } from "@/locales";
@@ -31,12 +33,14 @@ import { DefaultApprovalsSettings } from "./DefaultApprovalsSettings";
 import { AttentionSettings } from "./AttentionSettings";
 import { ApprovalRulesSettings } from "./ApprovalRulesSettings";
 import { WorkspaceBackupSettings } from "./WorkspaceBackupSettings";
+import { HealthSettings } from "./HealthSettings";
 import { CompanyBackupSettings } from "./CompanyBackupSettings";
 import { InitialsAvatar, PersonPhoto } from "./Avatar";
 import { profileInitials } from "./SidebarProfileMenu";
 import { prepareProfilePhoto, saveProfileField, saveProfilePhoto } from "@/lib/profile-photo";
 import { cn } from "@/lib/cn";
 import { setShowThreads, useShowThreads } from "@/lib/thread-preferences";
+import { PlansCard } from "./PlansCard";
 
 // `labelKey`, not a label: t() reads the active pack when it is called, so a
 // label resolved here at module scope would freeze the language the app booted
@@ -51,7 +55,9 @@ const SECTIONS: Array<{
    * desktop Server menu), and listed while it is the open page. */
   hidden?: boolean;
 }> = [
-  { id: "general", labelKey: "settings.section.general", icon: User, keywords: ["profile", "name", "email", "photo", "language", "skin", "theme", "appearance", "display", "threads", "show threads", "hide threads", "permissions", "approval", "access", "full access", "privacy", "analytics"] },
+  { id: "general", labelKey: "settings.section.general", icon: User, keywords: ["profile", "name", "email", "photo", "language", "skin", "theme", "appearance", "display", "threads", "show threads", "hide threads", "permissions", "approval", "access", "full access", "privacy", "analytics", "plans", "pricing", "upgrade", "invite a friend"] },
+  { id: "health", labelKey: "settings.section.health", icon: HeartPulse, keywords: ["health", "doctor", "repair", "diagnostics", "safe mode", "recovery", "fix"] },
+  { id: "mods", labelKey: "settings.section.mods", icon: Building2, keywords: ["mods", "panels", "commands", "customize"] },
   { id: "updates", labelKey: "settings.section.updates", icon: RefreshCw, keywords: ["update", "updates", "restart", "version", "build", "relaunch", "rollback"] },
   { id: "desktopWorkspaces", labelKey: "settings.section.desktopWorkspaces", icon: Building2, keywords: ["workspace", "cloud", "hosted", "vps", "server", "connect", "pair", "switch", "local"], hidden: true },
   { id: "import", labelKey: "settings.section.import", icon: Download, keywords: ["import", "claude code", "codex", "cursor", "claude.md", "agents.md", "skills", "mcp", "sync", "bring your setup", "migrate"] },
@@ -288,7 +294,7 @@ export function SettingsModal() {
   const [query, setQuery] = useState("");
   useEffect(() => window.ogb?.environments?.onOpenSettings?.(() => setQuery("")), []);
   const q = query.trim().toLowerCase();
-  const availableSections = SECTIONS.filter((entry) => !entry.hidden || entry.id === section)
+  const availableSections = SECTIONS.filter(entry => entry.id !== "mods" || modsDesktop()).filter((entry) => !entry.hidden || entry.id === section)
     .filter((entry) => !remoteActive || entry.id === "companion" || entry.id === "general" || entry.id === "desktopWorkspaces")
     .filter((entry) => entry.id !== "desktopWorkspaces" || Boolean(window.ogb?.environments))
     // the operator's screen for other workspaces exists only where a fleet agent does
@@ -448,6 +454,7 @@ export function SettingsModal() {
             )}
             {section === "general" && (
               <>
+                {!remoteActive && <PlansCard />}
                 {!remoteActive && (
                   <Card title={t("settings.profile.title")} subtitle={t("settings.profile.subtitle")}>
                     <ProfileFields />
@@ -514,6 +521,8 @@ export function SettingsModal() {
               </Card>
             )}
 
+            {section === "health" && <HealthSettings />}
+
             {section === "engines" && (
               <EnginesSettings />
             )}
@@ -549,6 +558,7 @@ export function SettingsModal() {
               </>
             )}
 
+            {section === "mods" && <ModsSettings />}
             {section === "import" && <SetupImportSettings />}
             {section === "usage" && <UsageSection />}
             {section === "people" && <>{!window.ogb && <PeopleSection />}<StaffLoginsSection /></>}

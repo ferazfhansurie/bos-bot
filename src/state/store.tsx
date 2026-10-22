@@ -209,6 +209,8 @@ export interface Message {
   peerAsk?: { botId: string; name: string; unattended?: boolean };
   /** emoji reactions; by = "user" or a member botId. */
   reactions?: Array<{ emoji: string; by: string }>;
+  /** smart ui block state, keyed per ```openui block. */
+  uiState?: Record<string, Record<string, unknown>>;
   /** comm chips: "Messaged @X" linking to the bot⇄bot channel. */
   comm?: { groupId: string; threadId?: string; withBotId: string; withName: string; withColor: MausColor };
   /** thread chips: "Opened thread #Title on Bot" linking to that thread */
@@ -787,6 +789,8 @@ export interface InstanceInfo {
 }
 
 export type AppSettingsSection =
+  | "health"
+  | "mods"
   | "general"
   | "import"
   | "desktopWorkspaces"

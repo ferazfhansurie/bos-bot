@@ -10598,3 +10598,21 @@ it("computer preview pins the exact thread and refuses disabled or nonexistent s
   expect(result.body.error).toContain("off");
   expect(result.body.png).toBeUndefined();
 });
+
+it("phone runtime reads stay thread scoped and selection can defer all computer starts", async () => {
+  const made = await api("POST", "/api/bots", { name: "Runtime isolation", modelSelection: { instanceId: "shadow", model: "fixture" }, computer: "off", browser: false });
+  expect(made.status).toBe(201);
+  const bot = made.body.bot ?? made.body;
+  const route = `/api/bots/${bot.id}/runtime`;
+  expect((await api("GET", route)).status).toBe(403);
+  expect((await api("GET", `${route}?threadId=missing-runtime-thread`)).status).toBe(404);
+  const before = await api("GET", `${route}?threadId=${bot.threadId}`);
+  expect(before.status).toBe(200);
+  expect(before.body).toMatchObject({ hostRequired: true, supportsMigration: false, runtimeLocation: "server", selected: null });
+  expect(before.body.options.every((option: { available: boolean }) => !option.available)).toBe(true);
+  const patch = `/api/bots/${bot.id}/tasks/${bot.threadId}`;
+  expect((await api("PATCH", patch, { surface: "browser", deferComputerStart: "yes" })).status).toBe(400);
+  expect((await api("PATCH", patch, { surface: "browser", deferComputerStart: true })).status).toBe(200);
+  expect((await api("GET", `${route}?threadId=${bot.threadId}`)).body.selected).toBe("browser");
+  expect((await api("PATCH", patch, { surface: null, deferComputerStart: true })).status).toBe(200);
+});

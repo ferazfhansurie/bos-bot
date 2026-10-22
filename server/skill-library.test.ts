@@ -101,5 +101,18 @@ describe("bundled verification skill", () => {
       expect(selectBundledSkills(text, ["skillAuthoring"], skills)).toEqual([]);
     }
   });
+  it("mounts smart ui for data asks only where the chat can draw it", () => {
+    const pick = (text: string, caps: string[]) => selectBundledSkills(text, caps, skills).map((skill) => skill.manifest.id);
+    expect(pick("show me a chart of leads by source", ["smartUi"])).toContain("smart-ui");
+    expect(pick("show me a chart of leads by source", [])).not.toContain("smart-ui");
+    expect(pick("is the build stable? fix the paragraph", ["smartUi"])).not.toContain("smart-ui");
+    expect(pick("ok and the second one?\n```openui", ["smartUi"])).toContain("smart-ui");
+  });
 });
 // branding compatibility (electron/branding-compat.json): data-home: existing desktop and companion homes, backups and lease recovery must open the same data
+
+it("loads make-mod for desktop customization requests", () => {
+  const skills = loadBundledSkills(join(process.cwd(), "skills"));
+  expect(skillInstructionsFor("add a panel that shows today's leads", [], skills)).toContain("mod_write");
+  expect(skillInstructionsFor("make a status chip", [], skills)).toContain("permissions");
+});

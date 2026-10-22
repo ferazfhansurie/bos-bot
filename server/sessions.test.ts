@@ -191,6 +191,22 @@ describe("pairing codes", () => {
     expect(explicit.session.label).toBe("Kitchen iPad");
   });
 
+  it("binds a member to a one-use client pairing and keeps it on the session across a reload", () => {
+    const member = { userId: "sam@example.com", name: "Sam", roles: ["Sales User"], claims: { pic_name: "SAM" } };
+    expect(() => registry.openPairing({ scopes: ["client"], reusable: true, member })).toThrow("reusable");
+    expect(() => registry.openPairing({ scopes: ["client"], member: { userId: "" } })).toThrow();
+    const { code } = registry.openPairing({ scopes: ["client"], label: "Sam (sam@example.com)", member });
+    const result = registry.exchange({ code, label: "", source: "gw" });
+    if (!result.ok) throw new Error(result.error);
+    expect(result.session.member).toEqual(member);
+    expect(registry.authenticate(result.token)?.member).toEqual(member);
+    expect(pair().session.member).toBeUndefined();
+    registry.close();
+    const loaded = new SessionRegistry({ file: file(), now: () => clock });
+    expect(loaded.authenticate(result.token)?.member).toEqual(member);
+    loaded.close();
+  });
+
   it("carries scopes from the code into the session, deduplicated", () => {
     const { code } = registry.openPairing({ scopes: ["client", "client"] });
     const result = registry.exchange({ code, label: "viewer", source: "s" });

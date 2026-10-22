@@ -1,0 +1,17 @@
+{
+  "manifest": {
+    "id": "today-at-a-glance",
+    "name": "Today at a glance",
+    "version": "1.0.0",
+    "description": "Today\u2019s thread count and last activity from this bot\u2019s recent threads.",
+    "surfaces": [
+      "chip"
+    ],
+    "permissions": [
+      "threads:read"
+    ]
+  },
+  "files": {
+    "index.html": "<span id=\"status\">Loading today\u2026</span><script>\nasync function update(){try{const threads=await bos.call('threads:read',{});const today=new Date();today.setHours(0,0,0,0);const count=threads.filter(t=>t.createdAt>=+today).length;const last=Math.max(0,...threads.flatMap(t=>t.messages.map(m=>m.at)));document.getElementById('status').textContent=count+' threads today \u00b7 '+(last?new Date(last).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'}):'no recent activity')}catch{document.getElementById('status').textContent='Today is unavailable'}}update();setInterval(update,60000);\n</script>"
+  }
+}

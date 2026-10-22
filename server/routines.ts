@@ -5,6 +5,7 @@ import { dirname, join } from "node:path";
 import { z } from "zod";
 
 import { DATA_DIR } from "./config.ts";
+import { allowInSafeMode } from "./safe-mode.ts";
 import type { RuntimeEvent } from "./contracts.ts";
 import { writeFileAtomic } from "./atomic.ts";
 import { redactSecretsInText } from "./redact.ts";
@@ -1259,6 +1260,7 @@ export class RoutineManager {
   }
 
   runNow(id: string, request?: RoutineRequestCommitFor<"run_now">): RoutineRun | null {
+    if (!allowInSafeMode("routines")) throw new Error("Routines are paused in safe mode. Exit safe mode before running one.");
     if (request) {
       const receipt = this.matchingRoutineRequestReceipt(request);
       if (receipt) {
@@ -1306,6 +1308,7 @@ export class RoutineManager {
     deliveryId: string;
     receivedAt: number;
   }): { id: string } {
+    if (!allowInSafeMode("routines")) throw new Error("Routines are paused in safe mode. Exit safe mode before running one.");
     const existing = this.webhookRunReceipt(input.webhookId, input.deliveryId);
     if (existing) return existing;
     if (this.options.botState(input.botId) === "missing") {
@@ -1436,7 +1439,7 @@ export class RoutineManager {
   get isTicking(): boolean { return this.ticking; }
 
   start() {
-    if (this.timer) return;
+    if (this.timer || !allowInSafeMode("routines")) return;
     void this.tick();
     this.timer = setInterval(() => void this.tick(), 10_000);
     this.timer.unref?.();
@@ -1448,7 +1451,7 @@ export class RoutineManager {
   }
 
   async tick(): Promise<void> {
-    if (this.ticking) return;
+    if (this.ticking || !allowInSafeMode("routines")) return;
     this.ticking = true;
     try {
       const now = this.now();

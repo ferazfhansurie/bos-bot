@@ -14,6 +14,7 @@ struct AgentProfileView: View {
     @State private var name: String
     @State private var title: String
     @State private var description: String
+    @State private var soul: String
     @State private var notifications: Bool
     @State private var crop: AvatarCrop
     @State private var voice: String
@@ -52,6 +53,7 @@ struct AgentProfileView: View {
         _name = State(initialValue: bot.name)
         _title = State(initialValue: bot.title)
         _description = State(initialValue: bot.description)
+        _soul = State(initialValue: bot.soul ?? "")
         _notifications = State(initialValue: bot.notifications)
         _crop = State(initialValue: bot.avatarCrop ?? .mascot)
         _voice = State(initialValue: bot.voice ?? "")
@@ -128,6 +130,14 @@ struct AgentProfileView: View {
     var body: some View {
         NavigationStack {
             Form {
+                if session.canAdminister && !current.isRemote {
+                    BotComputerSettings(bot: current)
+                    BotPermissionsSettings(bot: current)
+                    Section {
+                        NavigationLink("Skills") { BotSkillsSettings(bot: current) }
+                    }
+                    .listRowBackground(Color.clear.glassSheet(cornerRadius: 22))
+                }
                 // Changing the model and generating avatars need the admin scope
                 // on a server; a chat-only phone is not shown either.
                 if session.canAdminister {
@@ -314,6 +324,28 @@ struct AgentProfileView: View {
                     Toggle("Notifications", isOn: $notifications)
                 }
 
+                if session.canAdminister && !current.isRemote {
+                    Section {
+                        if baseline.soul != nil {
+                            TextEditor(text: $soul)
+                                .frame(minHeight: 180)
+                                .textInputAutocapitalization(.sentences)
+                                .accessibilityLabel("Standing instructions")
+                                .disabled(busy)
+                            Text("\(soul.utf8.count) / 24,000 bytes")
+                                .font(.caption)
+                                .foregroundStyle(soul.utf8.count > 24_000 ? Color.red : Color.secondary)
+                        } else {
+                            Text("This computer has not supplied the bot's instructions. Reopen settings after it reconnects.")
+                                .foregroundStyle(.secondary)
+                        }
+                    } header: {
+                        Text("Standing instructions")
+                    } footer: {
+                        Text("Saved with your profile changes. These instructions apply to future turns across this bot's threads; they do not restart an active task.")
+                    }
+                }
+
                 Section {
                     Picker("Voice engine", selection: $engine) {
                         Text("ElevenLabs").tag(VoiceProvider.elevenlabs)
@@ -431,7 +463,7 @@ struct AgentProfileView: View {
 
                 Section {
                     Button("Save profile changes") { Task { await save() } }
-                        .disabled(busy || name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                        .disabled(busy || !canSaveProfile)
                 }
             }
             .navigationTitle("Bot settings")
@@ -464,7 +496,7 @@ struct AgentProfileView: View {
                         if !hasUnsavedIdentityChanges { dismiss() }
                     }
                 }
-                .disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                .disabled(!canSaveProfile)
                 Button("Discard changes", role: .destructive) { dismiss() }
                 Button("Keep editing", role: .cancel) {}
             } message: {
@@ -552,11 +584,16 @@ struct AgentProfileView: View {
         }
     }
 
+    private var canSaveProfile: Bool {
+        !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && soul.utf8.count <= 24_000
+    }
+
     private var hasUnsavedIdentityChanges: Bool {
         name != baseline.name
             || title != baseline.title
             || description != baseline.description
             || notifications != baseline.notifications
+            || (baseline.soul != nil && soul != baseline.soul)
     }
 
     private func profilePatch() -> BotProfilePatch {
@@ -568,6 +605,8 @@ struct AgentProfileView: View {
             title: title == baseline.title ? nil : title.trimmingCharacters(in: .whitespacesAndNewlines),
             description: description == baseline.description
                 ? nil : description.trimmingCharacters(in: .whitespacesAndNewlines),
+            soul: baseline.soul != nil && soul != baseline.soul ? soul : nil,
+            expectedSoul: baseline.soul != nil && soul != baseline.soul ? baseline.soul : nil,
             notifications: notifications == baseline.notifications ? nil : notifications,
             avatarCrop: crop == baseline.crop ? nil : crop,
             // Empty is the server's explicit "use workspace default" value;
@@ -578,6 +617,11 @@ struct AgentProfileView: View {
     }
 
     private func save() async {
+        guard canSaveProfile else { return }
+        if baseline.soul != nil, soul != baseline.soul, current.soul != baseline.soul {
+            session.actionError = "These instructions changed on another device. Copy your edits, then reopen settings before saving."
+            return
+        }
         busy = true
         if let updated = await session.updateProfile(profilePatch(), for: current) {
             synchronizeForm(with: updated)
@@ -787,6 +831,7 @@ struct AgentProfileView: View {
         name = bot.name
         title = bot.title
         description = bot.description
+        soul = bot.soul ?? ""
         notifications = bot.notifications
         crop = bot.avatarCrop ?? .mascot
         voice = bot.voice ?? ""
@@ -804,6 +849,7 @@ private struct ProfileFormSnapshot {
     var name: String
     var title: String
     var description: String
+    var soul: String?
     var notifications: Bool
     var crop: AvatarCrop
     var voice: String
@@ -813,6 +859,7 @@ private struct ProfileFormSnapshot {
         name = bot.name
         title = bot.title
         description = bot.description
+        soul = bot.soul
         notifications = bot.notifications
         crop = bot.avatarCrop ?? .mascot
         voice = bot.voice ?? ""

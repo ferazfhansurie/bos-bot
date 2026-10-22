@@ -8,6 +8,26 @@ const secret = "a".repeat(64);
 const registration = () => ({ id: randomUUID(), name: "Desktop", environmentId: randomUUID(), folders: [], terminal: false, computer: false });
 afterEach(() => vi.useRealTimers());
 describe("shared computer authority and lifecycle", () => {
+  it("serves browser calls only from computers that share their browser, beside other work", async () => {
+    const broker = new SharedComputers(() => true);
+    const plain = registration(), browser = { ...registration(), browser: true };
+    broker.register(plain, "owner", secret); broker.register(browser, "owner", secret);
+    try {
+      expect(broker.browsers("bot").map(computer => computer.id)).toEqual([browser.id]);
+      const call = (computer_id: string, thread_id: string) => ({ computer_id, action: "browser_rpc" as const, method: "tools/list" as const, bot_id: "bot", thread_id, generation: "g" });
+      await expect(broker.request(call(plain.id, "t"), () => true, "bot")).rejects.toMatchObject({ status: 403 });
+      const pending = Array.from({ length: 8 }, (_, n) => broker.request(call(browser.id, `t${n}`), () => true, "bot"));
+      await expect(broker.request(call(browser.id, "t9"), () => true, "bot")).rejects.toThrow(/busy/);
+      const files = broker.request({ computer_id: browser.id, action: "list_files" }, () => true);
+      await expect(broker.request({ computer_id: browser.id, action: "list_files" }, () => true)).rejects.toThrow(/busy/);
+      for (let n = 0; n < 9; n++) {
+        const job = await broker.poll(browser.id, "owner", secret);
+        broker.complete(browser.id, "owner", secret, job!.id, { n });
+      }
+      await expect(Promise.all(pending)).resolves.toHaveLength(8);
+      await expect(files).resolves.toBeTruthy();
+    } finally { broker.close(); }
+  });
   it("requires both the owning paired session and the connector secret", async () => {
     const broker = new SharedComputers(id => id === "owner");
     const computer = registration(); broker.register(computer, "owner", secret);

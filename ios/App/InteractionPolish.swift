@@ -92,7 +92,7 @@ struct PendingThreadComposer: View {
         }
         .foregroundStyle(.secondary)
         .padding(16)
-        .background(.thinMaterial, in: Capsule())
+        .glassCapsule(interactive: false)
         .padding(.horizontal, 16).padding(.bottom, 12)
         .accessibilityLabel("Composer available when the new thread is ready")
     }

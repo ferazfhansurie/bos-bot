@@ -471,6 +471,8 @@ export function createSharedBrowser({ contentsFromId, urlAllowed = () => true, g
     },
     tools() { return desktopBrowserTools; },
     mounted() { return view.mounted; },
+    /** The window holding the tab strip closed without reporting it. */
+    unmount() { view.mounted = false; view.tabs = []; view.active = ''; },
     /** The renderer's tab strip for one profile. Only the selected profile drives. */
     reportTabs(input) {
       if (!input || typeof input.profileId !== 'string') return false;
@@ -495,6 +497,8 @@ export function createSharedBrowser({ contentsFromId, urlAllowed = () => true, g
     release(threadId, generation) {
       for (const [k, t] of threads) if (t.threadId === threadId && (generation === undefined || t.generation === generation)) { t.released = true; for (const [tabId, h] of [...holders]) if (h.key === k) releaseTab(tabId); threads.delete(k); }
     },
+    /** Conversation ids holding browser state, so a workspace can release its own. */
+    threadIds() { return [...new Set([...threads.values()].map(t => t.threadId))]; },
     /** The private server exited: no conversation still has browser authority. */
     releaseAll() {
       for (const t of threads.values()) t.released = true;

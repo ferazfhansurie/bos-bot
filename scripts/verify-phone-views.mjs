@@ -5,6 +5,7 @@ const bytes = readFileSync(new URL('../ios/App/ImagePreview.png', import.meta.ur
 const png = bytes.toString('base64');
 const width = bytes.readUInt32BE(16), height = bytes.readUInt32BE(20);
 let denied = false;
+let selected = null;
 let acknowledgements = 0, captures = 0;
 const viewers = new Set();
 const server = createServer(async (req, res) => {
@@ -13,6 +14,18 @@ const server = createServer(async (req, res) => {
   if (req.headers.authorization !== 'Bearer browser-fixture-token') return json(401, {error:'fixture bearer required'});
   if (path === '/fixture/stats') return json(200, {acknowledgements, captures});
   if (path === '/fixture/deny-preview') { denied = true; return json(200, {ok:true}); }
+  if (path.endsWith('/runtime')) return json(200, {
+    threadId: new URL(req.url, 'http://localhost').searchParams.get('threadId'),
+    selected, busy: false, runtimeLocation: 'server', hostRequired: true, supportsMigration: false,
+    options: [{surface:'browser',label:'Browser',available:true,ready:true,canStart:false,canCreate:false},
+      {surface:'local',label:'This computer',available:true,ready:true,canStart:false,canCreate:false}]
+  });
+  if (req.method === 'PATCH' && /\/tasks\/[^/]+$/.test(path)) {
+    const chunks = []; for await (const chunk of req) chunks.push(chunk);
+    const body = JSON.parse(Buffer.concat(chunks).toString());
+    if (body.deferComputerStart !== true) return json(400, {error:'selection must not start compute'});
+    selected = body.surface; return json(200, {ok:true});
+  }
   if (path.endsWith('/computer/preview')) { captures++; return denied
     ? json(403, {error:'Enable computer viewing for this phone in BOS settings.'})
     : json(200, {surface:'vm', png, format:'image/png'}); }

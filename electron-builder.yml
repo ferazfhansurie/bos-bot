@@ -42,6 +42,8 @@ files:
   - "!electron/resources/speech-helper.swift"
   - "!electron/resources/speech-helper-Info.plist"
   - "!electron/resources/BOS Bot Speech.app/**"
+  - "!electron/resources/notch-helper"
+  - "!electron/resources/notch-helper.swift"
   # The Teach a skill recorder is gone, but a machine that once ran
   # `pnpm build:recorder` may still hold its helper build; never ship it.
   - "!electron/resources/recorder-helper"
@@ -110,6 +112,9 @@ mac:
   extraResources:
     - from: electron/resources/BOS Bot Speech.app
       to: BOS Bot Speech.app
+    # notch geometry + drag sensor (electron/notch.mjs); a plain universal binary
+    - from: electron/resources/notch-helper
+      to: notch-helper
     # CUA must live outside ASAR. prepare-cua stages the signed executable and
     # a self-contained JS/native SDK bundle selected for macOS arm64.
     # ${arch} resolves per built arch — each bundle carries its own natives

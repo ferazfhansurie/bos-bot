@@ -1,11 +1,12 @@
 import { randomUUID } from "node:crypto";
-import { mkdir, open, readFile, rename, unlink } from "node:fs/promises";
+import { mkdir, open, rename, unlink } from "node:fs/promises";
 import { join } from "node:path";
+import { anonymousInstall } from "./anonymous-install.ts";
+import { productHealth } from "./product-health.ts";
 
 export const USAGE_PING_URL = "https://bos.aihlete.com/api/ping";
 export const USAGE_PING_INTERVAL_MS = 24 * 60 * 60 * 1000;
 export const USAGE_PING_TIMEOUT_MS = 5_000;
-const UUID_V4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 type Engine = "claude" | "codex";
 export interface UsageCounts {
   engines: readonly string[];
@@ -14,7 +15,6 @@ export interface UsageCounts {
   room_humans_max: number;
   room_bots_max: number;
 }
-interface PingState { install_id: string; last_attempt_at?: number }
 interface Options {
   dataDir: string;
   enabled: () => boolean;
@@ -81,16 +81,8 @@ export class AnonymousUsagePing {
     let timeout: ReturnType<typeof setTimeout> | undefined;
     try {
       const file = join(this.options.dataDir, "anonymous-usage.json");
-      let state: PingState;
-      try {
-        state = JSON.parse(await readFile(file, "utf8")) as PingState;
-        // Corruption must not mint another install or bypass the daily cap.
-        if (!state || !UUID_V4.test(state.install_id) || state.last_attempt_at !== undefined &&
-            (!Number.isSafeInteger(state.last_attempt_at) || state.last_attempt_at < 0)) return;
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== "ENOENT") return;
-        state = { install_id: randomUUID() };
-      }
+      const state = anonymousInstall(this.options.dataDir);
+      if (!state) return;
       const now = (this.options.now ?? Date.now)();
       if (state.last_attempt_at !== undefined && now - state.last_attempt_at < USAGE_PING_INTERVAL_MS) return;
       if (!this.enabled()) return;
@@ -102,6 +94,7 @@ export class AnonymousUsagePing {
         bots: count(counts.bots), rooms: count(counts.rooms),
         room_humans_max: count(counts.room_humans_max), room_bots_max: count(counts.room_bots_max),
         event: state.last_attempt_at === undefined ? "first_run" : "daily",
+        ...productHealth(this.options.dataDir),
       };
       // Commit before the request: a restart/offline receiver cannot cause a burst.
       await mkdir(this.options.dataDir, { recursive: true });

@@ -84,6 +84,7 @@ fun SettingsScreen(
     val connection by session.connection.collectAsState()
     val connections by session.connections.collectAsState()
     val status by session.status.collectAsState()
+    val serverWasReset by session.serverWasReset.collectAsState()
     val notifications by environment.notifications.access.collectAsState()
     val activityDetail by environment.chatPreferences.activityDetail.collectAsState()
     val scope = rememberCoroutineScope()
@@ -112,6 +113,8 @@ fun SettingsScreen(
     val brightness by environment.chatPreferences.brightness.collectAsState()
     val language by environment.chatPreferences.language.collectAsState()
     val context = LocalContext.current
+    val usageTelemetry = (context.applicationContext as? com.openmausbot.companion.BosApp)?.usageTelemetry
+    var usageEnabled by remember { mutableStateOf(usageTelemetry?.enabled ?: false) }
     var feedbackError by remember { mutableStateOf<String?>(null) }
     var updateStatus by remember(connection?.id) { mutableStateOf<UpdateStatusResponse?>(null) }
     var updateLoaded by remember(connection?.id) { mutableStateOf(false) }
@@ -167,7 +170,7 @@ fun SettingsScreen(
                     Footnote("Every computer is paired separately. Switching the main computer keeps its own saved pairing.")
                 }
                 if (showingComputerSecurity) SettingsSection("Troubleshooting") {
-                    Footnote(troubleshootingText(status))
+                    Footnote(if (status == Session.Status.Unauthorized && serverWasReset) "This computer was reset, pair again." else troubleshootingText(status))
                     SettingsButton("Try reconnecting", enabled = !reconnecting, trailing = { if (reconnecting) CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp) }) {
                         scope.launch { reconnecting = true; try { session.refresh() } finally { reconnecting = false } }
                     }
@@ -177,6 +180,16 @@ fun SettingsScreen(
                     Footnote(SettingsPolicy.UNPAIR_FOOTER)
                 }
             } else {
+                if (usageTelemetry != null) SettingsSection("Privacy") {
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        Text("Anonymous phone usage", modifier = Modifier.weight(1f))
+                        androidx.compose.material3.Switch(checked = usageEnabled, onCheckedChange = {
+                            usageEnabled = it
+                            usageTelemetry.setEnabled(it)
+                        })
+                    }
+                    Footnote("Share anonymous install, open and pairing events. No messages or personal details. Your computer's usage setting must also allow this.")
+                }
                 SettingsSection("Computer") {
                     SettingsLink(connection?.name ?: "Connect a computer", SettingsPolicy.statusText(status), enabled = connection != null || onConnect != null) {
                         if (connection != null) showingComputerDetails = true else onConnect?.invoke()
@@ -220,6 +233,10 @@ fun SettingsScreen(
                     Footnote("Always on keeps a low-priority notification so routine results reach you with the app closed. It uses a little more battery.")
                 }
                 SettingsSection("Help & feedback") {
+                    SettingsLink("Share connection trace") {
+                        feedbackError = com.openmausbot.companion.sharing.shareConnectionTrace(context, session.exportConnectionTrace())
+                    }
+                    Footnote("Connection events only. No addresses, tokens or conversations.")
                     SettingsLink("Contact BOS", "ferazfhansurie@gmail.com") {
                         try { context.startActivity(Intent(Intent.ACTION_SENDTO, Uri.parse("mailto:ferazfhansurie@gmail.com?subject=BOS%20alpha%20feedback"))); feedbackError = null }
                         catch (error: android.content.ActivityNotFoundException) { feedbackError = "No email app available. Contact ferazfhansurie@gmail.com." }

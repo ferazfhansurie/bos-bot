@@ -1105,6 +1105,25 @@ describe("ClaudeDriver turns (fake CLI)", () => {
     expect(seen.argv[seen.argv.indexOf("--setting-sources") + 1]).toBe("project");
   });
 
+  it("safe mode suppresses project and configured plugins while retaining harness tools", async () => {
+    await create();
+    const dump = join(scratch, "safe-mode.json");
+    compatEnv.FAKE_CLAUDE_DUMP = dump;
+    process.env.BOS_SAFE_MODE = "1";
+    writeFileSync(join(scratch, ".mcp.json"), JSON.stringify({ mcpServers: { project: { command: "do-not-run" } } }));
+    try {
+      await instance.adapter.sendTurn({ threadId: "safe-mode", text: "Check health", cwd: scratch, mcpFromUserConfig: true,
+        integrations: { custom: { configured: { command: "do-not-run", args: [], env: {} } } } });
+      await recorder.until(event => event.type === "turn.completed");
+      const seen = JSON.parse(readFileSync(dump, "utf8"));
+      expect(seen.argv).not.toContain("--safe-mode");
+      expect(seen.argv).toContain("--strict-mcp-config");
+      expect(seen.argv[seen.argv.indexOf("--setting-sources") + 1]).toBe("");
+      expect(seen.mcpConfig?.mcpServers ?? {}).not.toHaveProperty("project");
+      expect(seen.mcpConfig?.mcpServers ?? {}).not.toHaveProperty("configured");
+    } finally { delete process.env.BOS_SAFE_MODE; }
+  });
+
   it("inherits the machine's configuration again when the escape hatch is set", async () => {
     const dump = join(scratch, "inherit.json");
     await create(undefined, { FAKE_CLAUDE_DUMP: dump, OMB_CLAUDE_INHERIT_USER_CONFIG: "1" });
@@ -2614,6 +2633,16 @@ describe("ClaudeDriver turns (fake CLI)", () => {
     expect(seen.argv).not.toContain("summarize safely");
     expect(seen.env.CLAUDE_CONFIG_DIR).toBe(instanceConfigDir);
     for (const name of names) expect(seen.env[name]).toBeUndefined();
+    // a formatting one-shot, not a judgement: no thinking
+    expect(seen.env.MAX_THINKING_TOKENS).toBe("0");
+  });
+
+  it("keeps thinking on for permission review", async () => {
+    await create();
+    const dump = join(scratch, "review-env.json");
+    compatEnv.FAKE_CLAUDE_DUMP = dump;
+    await instance.reviewPermission?.("review this request");
+    expect(JSON.parse(readFileSync(dump, "utf8")).env.MAX_THINKING_TOKENS).toBeUndefined();
   });
 
   it("declares safe same-provider permission review", async () => {

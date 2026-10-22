@@ -18,7 +18,7 @@ const root = fileURLToPath(new URL("..", import.meta.url));
 const flag = "--omb-server-recovery-fixture";
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 async function until(check, label) {
-  const deadline = Date.now() + 30_000;
+  const deadline = Date.now() + 120_000;
   while (Date.now() < deadline) {
     if (await check()) return;
     await sleep(20);
@@ -92,6 +92,7 @@ if (process.versions.electron && process.argv.includes(flag)) {
   app.whenReady().then(async () => {
     const dataDir = join(home, "data");
     mkdirSync(dataDir, { recursive: true });
+    writeFileSync(join(dataDir, "app-config.json"), JSON.stringify({ version: 1, flags: { selfHeal: true } }));
     writeFileSync(join(dataDir, "config.json"), JSON.stringify({ instances: {
       claude: { driver: "claudeAgent", displayName: "Isolated fake", config: { cli: join(root, "server/testing/fake-claude-cli.ts") } },
     } }));
@@ -103,15 +104,17 @@ if (process.versions.electron && process.argv.includes(flag)) {
     lease = acquireDataDirLease(dataDir);
     const leaseFile = join(dataDir, "openmausbot-server.lease");
     const parentLease = readFileSync(leaseFile, "utf8");
-    const start = async () => {
+    const start = async (safeMode = false) => {
       const proc = utilityProcess.fork(join(output, "server/index.js"), [], {
         cwd: home, stdio: ["ignore", "pipe", "pipe"],
         env: {
           PATH: dirname(runtime), HOME: home, USERPROFILE: home,
           XDG_CONFIG_HOME: home, XDG_CACHE_HOME: home, XDG_DATA_HOME: home,
           APPDATA: home, LOCALAPPDATA: home, TMPDIR: home, TEMP: home, TMP: home,
+          BOS_NO_PING: "1", BOS_NO_MANAGED_CODEX: "1", BOS_NO_MANAGED_CLAUDE: "1",
           OMB_DATA_DIR: dataDir, OMB_PORT: String(port), OMB_WEBHOOK_PORT: String(webhookPort),
           OMB_STATIC_DIR: join(output, "ui"), OMB_DESKTOP_PARENT: "1",
+          BOS_SAFE_MODE: safeMode ? "1" : "0", BOS_SAFE_MODE_REASON: safeMode ? "Fixture server stopped repeatedly" : "",
           ...lease.utilityServerLeaseEnvironment(),
           FAKE_CLAUDE_MODE: "hang", FAKE_CLAUDE_PROMPTS: join(home, "prompts.jsonl"),
           FAKE_CLAUDE_DUMP: join(home, "fake.json"),
@@ -134,17 +137,20 @@ if (process.versions.electron && process.argv.includes(flag)) {
         if (supervisor.isCurrent(proc)) approval.receive(proc, message);
       });
       for (const stream of [proc.stdout, proc.stderr]) stream?.on("data", (data) => process.stdout.write(data));
-      const identity = await pollServerIdentity({ port, pid: () => proc.pid, bootTimeoutMs: 20_000, isExited: () => exited || quitting });
+      const identity = await pollServerIdentity({ port, pid: () => proc.pid, bootTimeoutMs: 90_000, isExited: () => exited || quitting });
+      record("probe", { outcome: identity.outcome, pid: proc.pid, safeMode });
       if (identity.outcome === "ready" && supervisor.isCurrent(proc)) return { proc };
       return { proc: null, abort: !(await stop(proc)) };
     };
     supervisor = createServerSupervisor({
-      restart: start, stop, log: (message) => record("recovery", { message }),
+      restart: () => start(),
+      restartSafeMode: scenario === "safe-mode" ? () => start(true) : undefined,
+      stop, log: (message) => record("recovery", { message }),
       onReady(proc) {
         active = proc;
         record("ready", { pid: proc.pid, port });
         assert.equal(readFileSync(leaseFile, "utf8"), parentLease, "parent lease must never be replaced");
-        if (scenario === "exhausted" && children.length > 1) setTimeout(() => process.kill(proc.pid, "SIGKILL"), 30);
+        if ((scenario === "exhausted" || (scenario === "safe-mode" && children.length < 5)) && children.length > 1) setTimeout(() => process.kill(proc.pid, "SIGKILL"), 30);
       },
       onUnavailable() { active = null; record("unavailable"); },
       onExhausted() { exhausted = true; record("exhausted"); },
@@ -208,6 +214,19 @@ if (process.versions.electron && process.argv.includes(flag)) {
       process.kill(initialPid, "SIGKILL");
       await exits.get(initial.proc);
       assert.equal(active, null);
+      if (scenario === "safe-mode") {
+        await until(() => children.length === 5 && active, "one safe-mode child ready after normal exhaustion");
+        const safePid = active.pid;
+        const health = await fetcher("/api/doctor");
+        assert.equal(health.safeMode.enabled, true);
+        assert.match(health.safeMode.reason, /Fixture server/);
+        record("safe-mode-health", { safeMode: health.safeMode });
+        assert.equal(await supervisor.recoverInSafeMode("must not duplicate"), false);
+        process.kill(safePid, "SIGKILL");
+        await until(() => exhausted, "safe-mode crash terminates recovery");
+        await sleep(1200);
+        assert.equal(children.length, 5, "only one safe-mode child per desktop launch");
+      }
       if (scenario === "exhausted") {
         await until(() => exhausted, "bounded recovery exhausted");
         assert.equal(children.length, 4, "initial child plus exactly three replacements");
@@ -215,7 +234,7 @@ if (process.versions.electron && process.argv.includes(flag)) {
         assert.equal(children.length, 4, "exhaustion must stop retries without needing app.quit");
       }
       finalReceipt = { passed: true, scenario, url, initialPid, children: children.length,
-        checks: scenario === "quit" ? ["actual before-quit cancels pending retry", "no replacement after retry deadline"] : ["three bounded recovery attempts", "no restart after exhaustion"] };
+        checks: scenario === "quit" ? ["actual before-quit cancels pending retry", "no replacement after retry deadline"] : scenario === "safe-mode" ? ["three normal retries then one safe-mode boot", "server reports safe-mode failure reason", "duplicate safe-mode request refused", "safe-mode crash exhausts without restart"] : ["three bounded recovery attempts", "no restart after exhaustion"] };
     }
     app.quit();
   }).catch((error) => { console.error(error); app.quit(); });
@@ -228,7 +247,7 @@ if (process.versions.electron && process.argv.includes(flag)) {
   mkdirSync(join(output, "ui"));
   writeFileSync(join(output, "ui/index.html"), "<!doctype html><title>Isolated recovery fixture</title>");
   console.log(JSON.stringify({ evidence: output }));
-  for (const scenario of ["recover", "quit", "exhausted"]) {
+  for (const scenario of ["recover", "quit", "exhausted", "safe-mode"]) {
     const home = join(output, scenario, "home");
     mkdirSync(home, { recursive: true });
     const child = spawn(electron, [fileURLToPath(import.meta.url), flag, scenario, output, process.execPath], {
@@ -237,7 +256,7 @@ if (process.versions.electron && process.argv.includes(flag)) {
       stdio: ["ignore", "pipe", "pipe"],
     });
     for (const stream of [child.stdout, child.stderr]) stream.on("data", (data) => appendFileSync(join(output, `${scenario}.log`), data));
-    const timeout = setTimeout(() => child.kill("SIGTERM"), 60_000);
+    const timeout = setTimeout(() => child.kill("SIGTERM"), 240_000);
     const code = await new Promise((resolve) => child.once("exit", resolve));
     clearTimeout(timeout);
     assert.equal(code, 0, `${scenario} failed; see ${join(output, `${scenario}.log`)}`);

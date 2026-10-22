@@ -89,7 +89,7 @@ struct TaskManagerView: View {
                         .font(.subheadline)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding()
-                        .background(.regularMaterial)
+                        .glassSheet(cornerRadius: 20)
                         .accessibilityElement(children: .combine)
                         .accessibilityIdentifier("thread-action-error")
                 }
@@ -140,7 +140,7 @@ struct TaskManagerView: View {
                 if isMutating {
                     ProgressView("Updating threads…")
                         .padding(12)
-                        .background(.regularMaterial, in: Capsule())
+                        .glassCapsule(interactive: false)
                         .padding()
                 } else {
                     DoneUndoPill().padding(.bottom, 8)
@@ -208,7 +208,7 @@ struct TaskManagerView: View {
         }
         .padding(.horizontal, 20)
         .padding(.vertical, 12)
-        .background(.regularMaterial)
+        .glassSheet(cornerRadius: 20)
     }
 
     @ViewBuilder private var threadSections: some View {

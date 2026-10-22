@@ -135,7 +135,13 @@ private struct MarkdownBlockView: View, Equatable {
                 .fixedSize(horizontal: false, vertical: true)
 
         case let .code(language, text):
-            codeBlock(language: language, text: text, tail: tail)
+            if let language, SmartUI.handles(language) {
+                SmartUIBlock(language: language, code: text, streaming: tail) {
+                    codeBlock(language: language, text: text, tail: tail)
+                }
+            } else {
+                codeBlock(language: language, text: text, tail: tail)
+            }
 
         case let .table(headers, rows):
             table(headers: headers, rows: rows)

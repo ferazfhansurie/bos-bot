@@ -9,6 +9,7 @@ import { homedir } from "node:os";
 import { isAbsolute, join, relative, resolve } from "node:path";
 
 import { writeFileAtomic } from "./atomic.ts";
+import { RecoverableRoster } from "./data-recovery.ts";
 import { ensureSections, readSections, changeEmptySection } from "./section-context.ts";
 import { removeBotFolder, soulFile, soulHash, writeSoulMirror } from "./bot-folder.ts";
 import type { BotProfilePatch } from "./bot-profile.ts";
@@ -375,8 +376,6 @@ export type BotWireProjection = Pick<BotRecord, Exclude<keyof BotRecord, BotWire
 export type BotWireProjectionIsExact = AssertExact<Omit<WireBot, "avatarUrl" | "tasks">, BotWireProjection> & AssertSameKeys<Omit<WireBot, "avatarUrl" | "tasks">, BotWireProjection>;
 export const botWireProjectionIsExact: BotWireProjectionIsExact = true;
 
-const BOTS_FILE = join(DATA_DIR, "bots.json");
-const GROUPS_FILE = join(DATA_DIR, "groups.json");
 const messagesFile = (threadId: string) => join(DATA_DIR, `messages-${threadId}.json`);
 
 const COLORS: MausColor[] = [
@@ -513,6 +512,8 @@ export class Store {
   bots: BotRecord[] = [];
   groups: GroupRecord[] = [];
   private threads = new Map<string, ThreadState>();
+  private readonly botRoster = new RecoverableRoster<BotRecord>(DATA_DIR, "bots.json");
+  private readonly groupRoster = new RecoverableRoster<GroupRecord>(DATA_DIR, "groups.json");
   private defaultSelection: () => ModelSelection;
   private listeners = new Set<(change: StoreChange) => void>();
   /** A broken team registry must not prevent loading independent chat data. */
@@ -567,16 +568,9 @@ export class Store {
   constructor(defaultSelection: () => ModelSelection) {
     this.defaultSelection = defaultSelection;
     mkdirSync(DATA_DIR, { recursive: true });
-    try {
-      this.bots = JSON.parse(readFileSync(BOTS_FILE, "utf8"));
-    } catch {
-      this.bots = [];
-    }
-    try {
-      this.groups = JSON.parse(readFileSync(GROUPS_FILE, "utf8"));
-    } catch {
-      this.groups = [];
-    }
+    mdb.initializeMessageDb();
+    this.bots = this.botRoster.load();
+    this.groups = this.groupRoster.load();
     const aliasFile = join(DATA_DIR, "room-runtime-aliases.json");
     if (existsSync(aliasFile)) {
       const rows: unknown = JSON.parse(readFileSync(aliasFile, "utf8"));
@@ -839,16 +833,18 @@ export class Store {
   }
 
   private saveBots(bots: BotRecord[] = this.bots) {
+    this.botRoster.assertWritable();
     this.rememberSections([...this.bots, ...bots].map((bot) => bot.section));
-    writeFileAtomic(BOTS_FILE, JSON.stringify(bots.map(({ busy: _busy, activity: _activity, ...bot }) => ({
+    this.botRoster.save(JSON.stringify(bots.map(({ busy: _busy, activity: _activity, ...bot }) => ({
       ...bot,
       tasks: bot.tasks?.map(({ busy: _taskBusy, activity: _taskActivity, turnStartedAt: _taskTurnStarted, ...task }) => task),
     })), null, 2));
   }
 
   private saveGroups() {
+    this.groupRoster.assertWritable();
     this.rememberSections(this.groups.map((group) => group.section));
-    writeFileAtomic(GROUPS_FILE, JSON.stringify(this.groups.map(({ busyBotId: _busyBotId, turnStartedAt: _turnStartedAt, ...g }) => g), null, 2));
+    this.groupRoster.save(JSON.stringify(this.groups.map(({ busyBotId: _busyBotId, turnStartedAt: _turnStartedAt, ...g }) => g), null, 2));
   }
 
   get sections(): string[] { return readSections(); }
@@ -927,6 +923,7 @@ export class Store {
       completed?: boolean;
     },
   ): GroupRecord {
+    this.groupRoster.assertWritable();
     this.rememberSections([section]);
     const threadId = newId();
     const createdAt = Date.now();
@@ -1197,6 +1194,18 @@ export class Store {
     this.saveGroups();
     this.emit({ type: "group", groupId });
     return group;
+  }
+
+  /** Save one smart ui block's on-screen state (typed or toggled values). */
+  setUiState(threadId: string, messageId: string, key: string, state: Record<string, unknown>): Message | null {
+    threadId = this.canonicalThreadId(threadId);
+    const existing = this.messagesFor(threadId).find((m) => m.id === messageId);
+    if (!existing || existing.role !== "bot") return null;
+    const next = { ...existing.uiState, [key]: state };
+    // a message holds at most 8 blocks' state; the oldest key goes first
+    const keys = Object.keys(next);
+    for (const old of keys.slice(0, Math.max(0, keys.length - 8))) delete next[old];
+    return this.patchMessage(threadId, messageId, { uiState: next });
   }
 
   /** Toggle an emoji reaction on a message ("user" or a member botId). */
@@ -1612,6 +1621,7 @@ export class Store {
       onboardingOffer?: { kind: "digital-marketer"; prompt: string };
     } = {},
   ): BotRecord {
+    this.botRoster.assertWritable();
     this.rememberSections([profile.section]);
     const name = profile.name?.trim() || pickBotName(this.bots.map((b) => b.name));
     const section = sectionKey(profile.section);
@@ -2532,7 +2542,7 @@ export class Store {
   /** First-run seed: BOS coordinates the first assignment in a new workspace.
    * Existing bots, roles and conversations are never migrated here. */
   seedIfEmpty() {
-    if (this.bots.length) return;
+    if (this.bots.length || this.botRoster.readOnly) return;
     const bot = this.createBot(BOS_STARTER, { seedMessages: false });
     this.setChiefOfStaff(bot.id);
     this.appendMessage(bot.threadId, { role: "bot", kind: "text", text: BOS_SEED_GREETING });

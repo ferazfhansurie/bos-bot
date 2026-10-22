@@ -7,6 +7,7 @@ const generatedPaths = [
   "dist-server",
   "release",
   "electron/resources/speech-helper",
+  "electron/resources/notch-helper",
   "electron/resources/BOS Bot Speech.app",
 ];
 

@@ -30,6 +30,49 @@ final class PinnedChatsTests: XCTestCase {
         XCTAssertEqual(pins.visibleIDs(available: Set(pins.ids)), pins.ids)
         XCTAssertEqual(pins.ids.count, 3)
     }
+    func testCrossHomePinsPersistWithoutCollapsingSameBotIDs() {
+        let suite = "bos.pins.cross-home.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        var pins = PinnedChats(ids: ["home:mac:bot", "home:box:bot", "local:bot", "home:mac:bot"])
+        pins.moveToFront("home:box:bot")
+        pins.save(scope: "owner", defaults: defaults)
+        let restored = PinnedChats.load(scope: "owner", defaults: defaults)
+        XCTAssertEqual(restored.ids, ["home:box:bot", "home:mac:bot", "local:bot"])
+        XCTAssertEqual(restored.visibleIDs(available: ["local:bot", "home:mac:bot"]), ["home:mac:bot", "local:bot"])
+        XCTAssertEqual(restored.visibleIDs(available: Set(restored.ids)), restored.ids)
+        XCTAssertTrue(PinnedChats.load(scope: "other-owner", defaults: defaults).ids.isEmpty)
+        pins.toggle("home:mac:bot")
+        XCTAssertEqual(pins.ids, ["home:box:bot", "local:bot"])
+    }
+
+    func testCombinedPinsKeepTheSameIdentityWhenMainComputerChanges() {
+        let suite = "bos.pins.migration.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        PinnedChats(ids: ["local:bot", "home:box:other", "contact:person"]).save(scope: "mac", defaults: defaults)
+        PinnedChats(ids: ["home:mac:bot", "local:other"]).save(scope: "box", defaults: defaults)
+        let combined = PinnedChats.loadCombined(legacyScopes: ["mac", "box"], defaults: defaults)
+        XCTAssertEqual(Set(combined.ids), ["workspace:mac:bot", "workspace:box:other", "workspace:mac:contact:person"])
+        XCTAssertEqual(PinnedChats.scopedKey("local:bot", home: "mac"), PinnedChats.scopedKey("home:mac:bot", home: "box"))
+        XCTAssertEqual(PinnedChats.loadCombined(legacyScopes: ["box", "mac"], defaults: defaults), combined)
+        XCTAssertNotEqual(PinnedChats.scopedKey("local:bot", home: "box"), PinnedChats.scopedKey("local:bot", home: "mac"))
+    }
+
+    func testUnpinDoesNotResurrectFromAnotherHomesLegacyList() {
+        let suite = "bos.pins.unpin-migration.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        PinnedChats(ids: ["local:bot"]).save(scope: "mac", defaults: defaults)
+        PinnedChats(ids: ["home:mac:bot"]).save(scope: "box", defaults: defaults)
+        var combined = PinnedChats.loadCombined(legacyScopes: ["mac", "box"], defaults: defaults)
+        combined.toggle("workspace:mac:bot")
+        combined.save(scope: "all-computers", defaults: defaults)
+        XCTAssertTrue(PinnedChats.loadCombined(legacyScopes: ["box", "mac"], defaults: defaults).ids.isEmpty)
+        XCTAssertTrue(PinnedChats.loadCombined(legacyScope: "mac", defaults: defaults).ids.isEmpty)
+        XCTAssertTrue(PinnedChats.loadCombined(legacyScope: "box", defaults: defaults).ids.isEmpty)
+    }
+
     func testMalformedStorageAndDuplicateIDsAreSafe() {
         let suite = "bos.pins.test.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suite)!

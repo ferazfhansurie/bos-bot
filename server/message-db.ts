@@ -10,13 +10,16 @@
 // Legacy JSON thread files import lazily: the first read of a thread with
 // no rows pulls the old file in, after which the DB is the source of
 // truth (the JSON file is left behind as a one-time backup).
-import { chmodSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, renameSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync } from "node:fs";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
 import { DATA_DIR } from "./config.ts";
 import { peerProvenanceAuthor } from "./peer-provenance.ts";
+import { openRecoverableMessageDb } from "./message-db-recovery.ts";
+import { regularFile } from "./data-recovery.ts";
 import type { Message } from "./store.ts";
+import type { TurnMember } from "./contracts.ts";
 
 const DB_FILE = () => join(DATA_DIR, "messages.db");
 
@@ -29,11 +32,13 @@ function open(): DatabaseSync {
   // Transcripts can contain private conversations and tool output. Create
   // the database with owner-only permissions and also repair an existing
   // file that may have inherited a permissive umask.
-  closeSync(openSync(file, "a", 0o600));
+  if (existsSync(file) && !regularFile(file)) throw new Error("The message database must be a private regular file.");
+  // The recovery opener distinguishes a new install from a zero-byte
+  // truncated file, and creates new files with private permissions itself.
   try {
     chmodSync(file, 0o600);
   } catch {}
-  const db = new DatabaseSync(file);
+  const db = openRecoverableMessageDb(DATA_DIR);
   db.exec("PRAGMA journal_mode = WAL");
   db.exec("PRAGMA synchronous = NORMAL");
   db.exec(`
@@ -183,6 +188,9 @@ function db(): DatabaseSync {
   return handle;
 }
 
+/** Boot-time integrity check, even when there are no legacy transcripts. */
+export function initializeMessageDb(): void { db(); }
+
 /** Nested writes use savepoints: even a caught inner error must not commit
  * half of an inner command. The outer transaction still owns durability. */
 let transactionDepth = 0;
@@ -229,6 +237,8 @@ export interface FollowupPayload {
   mode?: "chat" | "goal";
   via?: "api";
   sender?: Message["sender"];
+  /** The gateway member who sent it (contracts.ts TurnMember). */
+  member?: TurnMember;
 }
 export type FollowupStatus = "pending" | "dispatching" | "interrupted" | "cancelled";
 export interface ChatFollowup {

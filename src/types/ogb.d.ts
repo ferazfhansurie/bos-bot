@@ -127,6 +127,10 @@ const __APP_VERSION__: string;
 
   interface Window {
     ogb?: {
+      health?: {
+        sendDiagnostics(): Promise<{ id: string }>;
+        exitSafeMode(): Promise<void>;
+      };
       appChannel?: "staging" | "live";
       platform: NodeJS.Platform;
       organization?: import("../../electron/managed-desktop.mjs").ManagedDesktopBridge;
@@ -163,7 +167,7 @@ const __APP_VERSION__: string;
       computerSharing?: {
         state(id: string): Promise<DesktopComputerSharing>;
         chooseFolder(): Promise<DesktopSharedFolder | null>;
-        save(id: string, grant: Pick<DesktopComputerSharing, "folders" | "terminal" | "computer">): Promise<DesktopComputerSharing | null>;
+        save(id: string, grant: Pick<DesktopComputerSharing, "folders" | "terminal" | "computer" | "browser">): Promise<DesktopComputerSharing | null>;
         revoke(id: string): Promise<DesktopComputerSharing>;
       };
       getCapabilities(): Promise<DesktopCapabilities>;
@@ -275,6 +279,12 @@ const __APP_VERSION__: string;
         dismiss(id: string): void;
         onEvent(cb: (event: import("@/lib/notify").AttentionEvent) => void): () => void;
       };
+      /** The notch window (electron/notch.mjs); this window feeds it. */
+      notch?: {
+        enable(on: boolean): void;
+        update(snapshot: import("@/notch/types").NotchSnapshot): void;
+        onAction(cb: (action: import("@/notch/types").NotchAction | import("@/notch/types").NotchDrop) => void): () => void;
+      };
       /** Partition for the side-panel Browser tool's <webview>. */
       primaryBrowser?: import("@/lib/primary-browser-types").PrimaryBrowserBridge;
       toolsBrowserPartition?: string;
@@ -335,6 +345,8 @@ const __APP_VERSION__: string;
         download(): Promise<void>;
         /** apply the download: quit-and-install, or copy the command and open a terminal */
         install(): Promise<void>;
+        /** quit now even though update admission is held (busy server) */
+        quitNow?(): Promise<void>;
         onState(cb: (s: UpdaterState) => void): () => void;
       };
     };
@@ -355,6 +367,14 @@ export interface LinuxLocalControlStatus {
 }
 
 export interface UpdaterState {
+  /** A successfully fetched remote minimum requires updating this desktop.
+   *  The UI blocks only while a qualifying update is on its way. */
+  required?: boolean;
+  /** Remote rollout flag; required minimum updates always enable this. */
+  automaticUpdates?: boolean;
+  minimumVersion?: string;
+  /** A staged native update must pass lifecycle admission before quitting. */
+  quitHeld?: boolean;
   status:
     | "idle"
     | "checking"

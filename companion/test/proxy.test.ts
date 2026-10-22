@@ -6,7 +6,7 @@ import { compatEnv } from "../../electron/branding-env.cjs";
 // none of them are visible to a unit test. In particular: SSE arriving but
 // never terminating an event, a resume cursor being dropped on the way
 // through, and the harness's loopback gate rejecting a proxied request.
-import { spawn, type ChildProcess } from "node:child_process";
+import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { createServer, request, type IncomingMessage, type Server } from "node:http";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -319,6 +319,41 @@ describe("the sidecar in front of an unmodified harness", () => {
     const botId = body.bots[0].id;
     expect((await device("PATCH", `/api/bots/${botId}`, { body: { autoApprove: true } })).status).toBe(404);
     expect((await device("PATCH", `/api/groups/not-a-room`, { body: { unread: false } })).status).toBe(404);
+  });
+
+  it("carries phone skills and exact-thread computer settings through the real gateway", async () => {
+    const { body } = await device("GET", "/api/bots");
+    const bot = body.bots[0];
+    // Install only in this fixture's private home; never use a network import.
+    const install = spawnSync(process.execPath, ["--input-type=module", "-e", `
+      import { installSkill } from './server/skills.ts';
+      const result = installSkill(${JSON.stringify(bot.id)}, "fixture", [{path:"SKILL.md", content:${JSON.stringify(["---", "name: phone-check", "description: Offline phone review fixture", "---", "Read this fixture only."].join("\n"))}}]);
+      if ('error' in result) throw new Error(result.error);
+    `], {cwd:ROOT, env:{PATH:compatEnv.PATH, HOME:home, USERPROFILE:home}, encoding:"utf8"});
+    expect(install.status, install.stderr).toBe(0);
+    const skills = await device("GET", `/api/bots/${bot.id}/skills`);
+    expect(skills.status).toBe(200);
+    expect(Array.isArray(skills.body.skills)).toBe(true);
+    const installed = skills.body.skills.find((skill: {name:string}) => skill.name === "phone-check");
+    expect(installed.enabled).toBe(false);
+    const skillPath = `/api/bots/${bot.id}/skills/phone-check`;
+    expect((await device("GET", skillPath)).body.text).toContain("Read this fixture only.");
+    expect((await device("PATCH", skillPath, {body:{enabled:true, expectedSha256:"stale"}})).status).toBe(409);
+    expect((await device("PATCH", skillPath, {body:{enabled:true, source:"extra"}})).status).toBe(400);
+    expect((await device("PATCH", skillPath, {body:{enabled:true, expectedSha256:installed.sha256}})).body.skill.enabled).toBe(true);
+    expect((await device("GET", `/api/bots/${bot.id}/skills`)).body.skills.find((skill: {name:string}) => skill.name === "phone-check").enabled).toBe(true);
+
+    const runtimePath = `/api/bots/${bot.id}/runtime?threadId=${bot.threadId}`;
+    const runtime = await device("GET", runtimePath);
+    expect(runtime.status).toBe(200);
+    expect(runtime.body.threadId).toBe(bot.threadId);
+    expect(runtime.body.supportsMigration).toBe(false);
+    expect((await device("GET", `/api/bots/${bot.id}/runtime`)).status).toBe(403);
+    const patch = `/api/bots/${bot.id}/tasks/${bot.threadId}`;
+    expect((await device("PATCH", patch, { body: { surface: "browser", deferComputerStart: true } })).status).toBe(200);
+    expect((await device("GET", runtimePath)).body.selected).toBe("browser");
+    expect((await device("PATCH", patch, { body: { surface: null, deferComputerStart: true } })).status).toBe(200);
+    expect((await device("POST", `/api/bots/${bot.id}/skills`, { body: { source: "no-import" } })).status).toBe(404);
   });
 
   it("lets a device answer an approval, and manage its own chats", async () => {

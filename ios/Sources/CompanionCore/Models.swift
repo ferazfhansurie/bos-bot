@@ -333,6 +333,8 @@ public struct Message: Codable, Hashable, Identifiable, Sendable {
     public var mime: String?
     /// Agent-generated images carried on a text reply, including late message patches.
     public var attachments: [MessageImageAttachment]?
+    /// Smart ui blocks' typed and toggled values, keyed per block.
+    public var uiState: [String: [String: JSONValue]]?
 
     public var date: Date { Date(timeIntervalSince1970: at / 1000) }
 
@@ -503,6 +505,8 @@ public struct Bot: Codable, Hashable, Identifiable, Sendable {
     public var name: String
     public var title: String
     public var description: String
+    /// Standing instructions; absent on older or restricted server responses.
+    public var soul: String? = nil
     public var notifications: Bool
     public var color: String
     /// An app-owned `/api/attachments/:name` URL. The URL is intentionally
@@ -1068,6 +1072,7 @@ public struct InboxThreadSettings: Codable, Sendable {
     public var autoSettleDays: Int?
 }
 public struct ConfigStatus: Codable, Sendable {
+    public var anonymousUsage: AnonymousUsagePolicy?
     public var threads: InboxThreadSettings?
 
     public var composio: ConfigFlag?
@@ -1129,6 +1134,8 @@ public struct BotProfilePatch: Encodable, Sendable {
     public var name: String?
     public var title: String?
     public var description: String?
+    public var soul: String?
+    public var expectedSoul: String?
     public var notifications: Bool?
     public var avatarUrl: AvatarURL?
     public var avatarCrop: AvatarCrop?
@@ -1151,6 +1158,8 @@ public struct BotProfilePatch: Encodable, Sendable {
         name: String? = nil,
         title: String? = nil,
         description: String? = nil,
+        soul: String? = nil,
+        expectedSoul: String? = nil,
         notifications: Bool? = nil,
         avatarUrl: AvatarURL? = nil,
         avatarCrop: AvatarCrop? = nil,
@@ -1163,6 +1172,8 @@ public struct BotProfilePatch: Encodable, Sendable {
         self.name = name
         self.title = title
         self.description = description
+        self.soul = soul
+        self.expectedSoul = expectedSoul
         self.notifications = notifications
         self.avatarUrl = avatarUrl
         self.avatarCrop = avatarCrop
@@ -1174,7 +1185,7 @@ public struct BotProfilePatch: Encodable, Sendable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case name, title, description, notifications, avatarUrl, avatarCrop, mascotBody, mascotEyes, color, voice, speakReplies
+        case name, title, description, soul, expectedSoul, notifications, avatarUrl, avatarCrop, mascotBody, mascotEyes, color, voice, speakReplies
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -1182,6 +1193,8 @@ public struct BotProfilePatch: Encodable, Sendable {
         try values.encodeIfPresent(name, forKey: .name)
         try values.encodeIfPresent(title, forKey: .title)
         try values.encodeIfPresent(description, forKey: .description)
+        try values.encodeIfPresent(soul, forKey: .soul)
+        try values.encodeIfPresent(expectedSoul, forKey: .expectedSoul)
         try values.encodeIfPresent(notifications, forKey: .notifications)
         if let avatarUrl {
             switch avatarUrl {
@@ -1604,6 +1617,8 @@ public struct ServerEnvironment: Codable, Hashable, Sendable {
     public var label: String
     public var platform: String?
     public var version: String?
+    public var minPhoneVersion: String? = nil
+    public var phoneUpdateUrls: [String: String]? = nil
 }
 
 /// Keep future attachment kinds decodable; only image entries are displayed.

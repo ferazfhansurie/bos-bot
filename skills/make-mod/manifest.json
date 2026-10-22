@@ -1,0 +1,9 @@
+{
+  "id": "make-mod",
+  "name": "Make a mod",
+  "version": "1.0.0",
+  "description": "Build or edit a desktop BOS panel, composer band, status chip or slash command.",
+  "defaultEnabled": true,
+  "triggerTerms": ["mod", "mods", "add a panel", "build a panel", "status chip", "composer band", "/standup", "slash command"],
+  "requiredCapabilities": []
+}

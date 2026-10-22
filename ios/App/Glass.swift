@@ -10,12 +10,17 @@ import SwiftUI
 
 /// Something floating over content: a tile, a pill, a sheet.
 struct GlassSurface<S: InsettableShape>: ViewModifier {
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     let shape: S
     var interactive: Bool = true
     var tint: Color? = nil
 
     func body(content: Content) -> some View {
-        if #available(iOS 26.0, *) {
+        if reduceTransparency {
+            content
+                .background(tint ?? Color(uiColor: .secondarySystemBackground), in: shape)
+                .overlay(shape.strokeBorder(Color.primary.opacity(0.16), lineWidth: 0.5))
+        } else if #available(iOS 26.0, *) {
             let base: Glass = interactive ? .regular.interactive() : .regular
             content.glassEffect(tint.map { base.tint($0) } ?? base, in: shape)
         } else {

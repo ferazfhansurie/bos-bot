@@ -87,6 +87,24 @@ final class ShareClientTests: XCTestCase {
         super.tearDown()
     }
 
+    func testRuntimeSelectionPinsThreadAndDoesNotStartComputer() async throws {
+        ShareRequestStub.responseBody = Data(#"{"threadId":"thread-b","selected":null,"busy":false,"runtimeLocation":"server","hostRequired":true,"supportsMigration":false,"options":[]}"#.utf8)
+        let state = try await client.botRuntime(botId: "bot-a", threadId: "thread-b")
+        XCTAssertTrue(state.hostRequired)
+        XCTAssertFalse(state.supportsMigration)
+        XCTAssertEqual(ShareRequestStub.capturedRequest?.httpMethod, "GET")
+        ShareRequestStub.responseBody = Data("{}".utf8)
+        try await client.selectThreadComputer(botId: "bot-a", threadId: "thread-b", surface: "boxcompute")
+        XCTAssertEqual(ShareRequestStub.capturedRequest?.url?.path, "/api/bots/bot-a/tasks/thread-b")
+        XCTAssertEqual(ShareRequestStub.capturedRequest?.httpMethod, "PATCH")
+        let body = try XCTUnwrap(JSONSerialization.jsonObject(with: XCTUnwrap(ShareRequestStub.capturedBody)) as? [String: Any])
+        XCTAssertEqual(body["surface"] as? String, "boxcompute")
+        XCTAssertEqual(body["deferComputerStart"] as? Bool, true)
+        try await client.selectThreadComputer(botId: "bot-a", threadId: "thread-b", surface: nil)
+        let reset = try XCTUnwrap(JSONSerialization.jsonObject(with: XCTUnwrap(ShareRequestStub.capturedBody)) as? [String: Any])
+        XCTAssertTrue(reset["surface"] is NSNull)
+    }
+
     func testComputerPreviewPinsThreadAndOnlyReads() async throws {
         ShareRequestStub.responseBody = Data(#"{"surface":"vm","png":"fixture","format":"image/png"}"#.utf8)
         let preview = try await client.computerPreview(botId: "bot-a", threadId: "thread+b")

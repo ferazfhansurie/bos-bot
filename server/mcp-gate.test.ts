@@ -38,11 +38,11 @@ describe("mcp-gate", () => {
   let lines: string[];
   let waiting: Array<(line: string) => void>;
 
-  const start = (reply: unknown, env: Record<string, string> = {}) => {
+  const start = (reply: unknown, env: Record<string, string> = {}, upstream = UPSTREAM) => {
     const script = join(scratch, "reply.json");
     writeFileSync(script, JSON.stringify(reply));
     const upstreamJs = join(scratch, "upstream.cjs");
-    writeFileSync(upstreamJs, UPSTREAM);
+    writeFileSync(upstreamJs, upstream);
     gate = spawn(process.execPath, ["--experimental-strip-types", "--no-warnings", GATE], {
       stdio: ["pipe", "pipe", "pipe"],
       env: {
@@ -147,6 +147,23 @@ describe("mcp-gate", () => {
     start({ content: [{ type: "text", text: JSON.stringify({ products }) }], structuredContent: undefined }, { OMB_GATE_BUDGET: "2000" });
     const text = (await call("search_products")).result.content[0].text;
     expect(text.length).toBeLessThan(2_400);
+  });
+
+  it("stamps the signed-in member on every tool call and drops one the model supplied", async () => {
+    const member = { userId: "sam@example.com", roles: ["Sales User"], sessionId: "s-1" };
+    const echoMeta = UPSTREAM.replace("result: reply", "result: { content: [{ type: \"text\", text: JSON.stringify(msg.params._meta ?? null) }] }");
+    start({}, { OMB_GATE_MEMBER: JSON.stringify(member) }, echoMeta);
+    send({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "x", arguments: {}, _meta: { "bos/member": { userId: "boss" }, progressToken: 7 } } });
+    const reply = JSON.parse(await nextLine());
+    expect(JSON.parse(reply.result.content[0].text)).toEqual({ "bos/member": member, progressToken: 7 });
+  });
+
+  it("strips a spoofed member when no one is signed in", async () => {
+    const echoMeta = UPSTREAM.replace("result: reply", "result: { content: [{ type: \"text\", text: JSON.stringify(msg.params._meta ?? null) }] }");
+    start({}, {}, echoMeta);
+    send({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "x", arguments: {}, _meta: { "bos/member": { userId: "boss" } } } });
+    const reply = JSON.parse(await nextLine());
+    expect(JSON.parse(reply.result.content[0].text)).toEqual({});
   });
 
   it("keeps the upstream server's own environment and hides the gate's", async () => {

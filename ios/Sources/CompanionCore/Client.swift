@@ -761,13 +761,21 @@ public struct CompanionClient: Sendable {
     /// `liveActivities` maps a bot id to its running Live Activity's push
     /// token; with `liveStartToken` the Mac can start, update and end the
     /// island while the app is closed.
+    @discardableResult
     public func registerPushToken(_ token: String, environment: String, voipToken: String? = nil,
-                                  liveStartToken: String? = nil, liveActivities: [String: String]? = nil) async throws {
+                                  liveStartToken: String? = nil, liveActivities: [String: String]? = nil) async throws -> PushTokenRegistrationResponse {
         var body: [String: Any] = ["token": token, "environment": environment, "connectionId": connection.id]
         if let voipToken { body["voipToken"] = voipToken }
         if let liveStartToken { body["liveStartToken"] = liveStartToken }
         if let liveActivities { body["liveActivities"] = liveActivities }
-        try await send(makeRequest("POST", "/api/multiplayer/push-token", body: body))
+        let (data, response) = try await perform(makeRequest("POST", "/api/multiplayer/push-token", body: body))
+        try verify(response, data)
+        if data.isEmpty { return PushTokenRegistrationResponse(deliveryConfigured: nil) }
+        do {
+            return try JSONDecoder().decode(PushTokenRegistrationResponse.self, from: data)
+        } catch {
+            throw APIError.transport("The computer sent something this app couldn't read.")
+        }
     }
 
     /// Bot ids (on their own server) the owner took off this home's list.
@@ -1046,8 +1054,15 @@ public struct CompanionClient: Sendable {
 
     /// The server's public descriptor: reachable before pairing, and the way
     /// to notice that the address now belongs to a different server.
-    public func environment() async throws -> ServerEnvironment {
-        try await send(makeRequest("GET", "/.well-known/openmausbot/environment"), as: ServerEnvironment.self)
+    public func environment(phoneVersion: String? = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String) async throws -> ServerEnvironment {
+        let (data, response) = try await perform(makeRequest("GET", "/.well-known/openmausbot/environment"))
+        try verify(response, data)
+        if let update = PhoneUpdateRequired.check(data: data, phoneVersion: phoneVersion) { throw update }
+        do {
+            return try JSONDecoder().decode(ServerEnvironment.self, from: data)
+        } catch {
+            throw APIError.transport("The computer sent something this app couldn't read.")
+        }
     }
 
     /// End this session on the server (server-paired connections only).
@@ -1661,8 +1676,30 @@ public struct CompanionClient: Sendable {
         return (response.routines, response.runs)
     }
 
-    /// A read-only summary of one bot: who it is, what it does and won't do,
-    /// and its recent activity. No settings, no transcript.
+    /// Admin-only skill management; enabling pins the content the person reviewed.
+    public func botSkills(botId: String) async throws -> [BotSkill] {
+        guard Self.validRouteID(botId) else { throw APIError.badURL }
+        return try await send(try makeRequest("GET", "/api/bots/\(botId)/skills"), as: BotSkillsResponse.self).skills
+    }
+
+    public func botSkillText(botId: String, name: String) async throws -> String {
+        guard Self.validRouteID(botId), Self.validRouteID(name) else { throw APIError.badURL }
+        return try await send(try makeRequest("GET", "/api/bots/\(botId)/skills/\(name)"), as: BotSkillText.self).text
+    }
+
+    public func setBotSkillEnabled(botId: String, name: String, enabled: Bool, expectedSHA: String) async throws -> BotSkill {
+        guard Self.validRouteID(botId), Self.validRouteID(name) else { throw APIError.badURL }
+        return try await send(try makeRequest("PATCH", "/api/bots/\(botId)/skills/\(name)",
+            body: ["enabled": enabled, "expectedSha256": expectedSHA]), as: BotSkillResponse.self).skill
+    }
+
+    public func setThreadApproval(botId: String, threadId: String, mode: PhoneApprovalMode, acknowledgeLocalAuto: Bool = false) async throws -> Bot {
+        guard Self.validRouteID(botId), Self.validRouteID(threadId) else { throw APIError.badURL }
+        return try await send(try makeRequest("PATCH", "/api/bots/\(botId)/tasks/\(threadId)",
+            body: ["approvalMode": mode.rawValue, "acknowledgeLocalAuto": acknowledgeLocalAuto]), as: BotResponse.self).bot
+    }
+
+    /// A read-only bot summary, without settings or transcript.
     public func overview(botId: String) async throws -> BotOverview {
         guard Self.validRouteID(botId) else { throw APIError.badURL }
         return try await send(try makeRequest("GET", "/api/bots/\(botId)/overview"), as: BotOverview.self)
@@ -2161,6 +2198,16 @@ public struct CompanionClient: Sendable {
         ).message
     }
 
+    /// Saves a smart ui block's typed and toggled values onto a bot message.
+    public func setUiState(threadId: String, messageId: String, key: String, state: [String: JSONValue]) async throws {
+        struct Body: Encodable { let key: String; let state: [String: JSONValue] }
+        try await send(try makeRequest(
+            "POST",
+            "/api/threads/\(threadId)/messages/\(messageId)/ui",
+            encodedBody: Body(key: key, state: state)
+        ))
+    }
+
     public func edit(botId: String, messageId: String, text: String, threadId: String? = nil) async throws {
         var body = ["text": text]
         if let threadId { body["threadId"] = threadId }
@@ -2247,6 +2294,14 @@ public struct CompanionClient: Sendable {
 
     public func deleteTask(groupId: String, threadId: String) async throws -> Room {
         try await send(try makeRequest("DELETE", "/api/groups/\(groupId)/tasks/\(threadId)"), as: RoomResponse.self).group
+    }
+
+    public func botRuntime(botId: String, threadId: String) async throws -> BotRuntimeStatus {
+        try await send(try makeRequest("GET", "/api/bots/\(botId)/runtime", query: [URLQueryItem(name: "threadId", value: threadId)]), as: BotRuntimeStatus.self)
+    }
+
+    public func selectThreadComputer(botId: String, threadId: String, surface: String?) async throws {
+        try await send(try makeRequest("PATCH", "/api/bots/\(botId)/tasks/\(threadId)", body: ["surface": surface as Any? ?? NSNull(), "deferComputerStart": true]))
     }
 
     public func interrupt(botId: String, threadId: String? = nil) async throws {

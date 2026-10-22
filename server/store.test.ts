@@ -969,13 +969,13 @@ describe("Store", () => {
   });
 
 
-  it("tolerates a corrupt bots.json by starting empty", () => {
+  it("recovers a corrupt bots.json from the last successful save", () => {
     const store = new Store(selection);
     store.createBot();
     writeFileSync(join(DATA_DIR, "bots.json"), "{not json");
 
     const reloaded = new Store(selection);
-    expect(reloaded.bots).toEqual([]);
+    expect(reloaded.bots.map(bot => bot.id)).toEqual(store.bots.map(bot => bot.id));
   });
 
   it("busy is wiped even when bots.json says otherwise", () => {
@@ -1100,6 +1100,20 @@ describe("Store change stream", () => {
     expect(events.map((e) => e.type)).toEqual(["message.patch", "message", "thread", "thread", "message.patch"]);
     expect(events[2]).toMatchObject({ type: "thread", threadId: bot.threadId, activeLeafId: (events[1] as any).message.id });
     expect(events[3]).toMatchObject({ type: "thread", threadId: bot.threadId, activeLeafId: expect.any(String) });
+  });
+
+  it("keeps smart ui block state on bot messages only, a bounded set per message", () => {
+    const store = new Store(selection);
+    const bot = store.createBot();
+    const asked = store.appendMessage(bot.threadId, { role: "user", kind: "text", text: "leads?" });
+    const answer = store.appendMessage(bot.threadId, { role: "bot", kind: "text", text: "```openui\nroot = Col([])\n```" });
+    expect(store.setUiState(bot.threadId, asked.id, "b1", { $q: "x" })).toBeNull();
+    store.setUiState(bot.threadId, answer.id, "b1", { $range: "7d" });
+    for (let i = 2; i <= 9; i++) store.setUiState(bot.threadId, answer.id, `b${i}`, { $i: i });
+    const saved = new Store(selection).messagesFor(bot.threadId).find((m) => m.id === answer.id)?.uiState ?? {};
+    expect(Object.keys(saved)).toHaveLength(8);
+    expect(saved.b1).toBeUndefined();
+    expect(saved.b9).toEqual({ $i: 9 });
   });
 
   it("announces screen frames whose pixels are pruned", () => {

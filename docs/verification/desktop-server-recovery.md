@@ -15,7 +15,7 @@ fresh loopback ports, and configures only the repository's inert fake engine.
 It never launches `electron/main.mjs`, a real computer/browser driver, the
 operator's installed app, or their data directory. It accepts no server URL.
 
-Three separate Electron parents exercise the production supervisor, PID health
+Four separate Electron parents exercise the production supervisor, PID health
 probe, parent-held data-directory lease, private approval coordinator, and built
 server:
 
@@ -31,6 +31,10 @@ server:
   Wait beyond that retry deadline and verify no replacement was spawned.
 - Crash the initial child and every replacement. Verify exactly three retries
   with the production 1/2/4-second delays, then a terminal exhausted state.
+- Exhaust normal recovery with the safe-mode hook enabled. Verify one final
+  child starts with optional systems disabled, `/api/doctor` reports the
+  safe-mode reason, duplicate safe boots are refused, and a crash of that
+  child ends recovery without another child.
 
 The printed evidence directory retains each scenario's JSON receipt and log.
 Successful cleanup removes only the copied server, temporary UI, and fixture
@@ -43,4 +47,5 @@ Limits: this is an owned-child smoke, not a complete packaged desktop or
 renderer test. It does not prove native failure-dialog presentation, renderer
 draft preservation, or real provider/computer-helper cleanup after SIGKILL.
 An interrupted turn remains interrupted; recovery does not synthesize a reply.
-Existing routine scheduling and persisted delegation policies are unchanged.
+The fixture does not exercise the Settings exit-safe-mode button or a full
+desktop relaunch. Safe-mode routine/plugin guards have separate server tests.

@@ -1,10 +1,8 @@
-// Auto-update popup — a small card floating bottom-left, driven by the
-// preload's updater bridge. Renders nothing in the browser/dev (no bridge)
-// and while idle/checking; appears only when actionable: an update to
-// download, a download in progress, a restart to apply, or an error.
-import { useEffect, useState } from "react";
+// Quiet update chip, required-update screen, and actionable failure card.
+// The preload bridge is absent in browser/dev sessions.
+import { useEffect, useRef, useState } from "react";
 import { ArrowDownToLine, Loader2, PackageOpen, RefreshCw, Sparkles, X } from "lucide-react";
-import { useUpdaterState } from "@/lib/updater";
+import { useUpdaterState, type UpdaterState } from "@/lib/updater";
 import { cn } from "@/lib/cn";
 import { brand } from "../lib/brand";
 
@@ -16,8 +14,7 @@ const primaryAction =
 
 // electron-updater surfaces failures as a whole HTTP dump — status line,
 // every response header, stack trace. That is unreadable in a 300px popup,
-// so name the two cases that actually happen and clip anything else to its
-// first line.
+// so name common failures and keep everything else plain.
 function friendlyError(message?: string): string {
   if (!message) return "Something went wrong.";
   if (/cannot find .*\.yml|404/i.test(message))
@@ -25,6 +22,39 @@ function friendlyError(message?: string): string {
   if (/ENOTFOUND|ECONNREFUSED|ETIMEDOUT|net::/i.test(message))
     return "Couldn't reach the update server.";
   return message.split("\n")[0].slice(0, 140);
+}
+
+const INSTALLER_URL = "https://bosbot.my/get";
+
+// A remote minimum blocks the app only while a qualifying update is actually
+// on its way. Config alone, an empty or lagging feed, a failed check or
+// download, a held contract and terminal hand-offs all fall back to a
+// dismissible card: raising the floor early must never lock anyone out.
+export function requiredUpdateBlocks(s: UpdaterState): boolean {
+  if (!s.required || s.installMode === "handoff") return false;
+  if (s.status === "installing") return !s.message;
+  return ["available", "downloading", "preparing", "downloaded"].includes(s.status);
+}
+
+function RequiredUpdate({ state: s }: { state: UpdaterState }) {
+  const dialog = useRef<HTMLDialogElement>(null);
+  useEffect(() => {
+    dialog.current?.showModal();
+    return () => dialog.current?.close();
+  }, []);
+  return (
+    <dialog ref={dialog} onCancel={event => event.preventDefault()} aria-label="Updating BOS"
+      className="fixed inset-0 m-0 flex h-screen max-h-none w-screen max-w-none items-center justify-center border-0 bg-panel p-0 text-ink">
+      <div className="max-w-sm space-y-4 p-8 text-center">
+        <Loader2 className="mx-auto animate-spin text-accent" size={28} />
+        <h1 className="text-lg font-semibold">Updating bos</h1>
+        <p className="text-sm text-ink-secondary">
+          {s.status === "installing" ? "Restarting to finish the update…"
+            : `Getting version ${s.minimumVersion} or newer…${s.percent == null ? "" : ` ${Math.round(s.percent)}%`}`}
+        </p>
+      </div>
+    </dialog>
+  );
 }
 
 export function UpdateBanner() {
@@ -39,10 +69,25 @@ export function UpdateBanner() {
   const status = s?.status;
   useEffect(() => setPending(null), [status]);
 
-  if (!s || s.status === "idle" || s.status === "checking") return null;
+  if (!s) return null;
+  const updater = window.ogb!.updater!;
+  if (requiredUpdateBlocks(s)) return <RequiredUpdate state={s} />;
+  // Below the floor with nothing qualifying on the feed: say so, dismissibly.
+  const requiredIdle = s.required === true && s.status === "idle";
   const key = `${s.status}:${s.version ?? ""}`;
   if (dismissed === key) return null;
-  const updater = window.ogb!.updater!;
+  // Native updates stay out of the way until they are ready or need help.
+  if (!requiredIdle && s.automaticUpdates && s.installMode !== "handoff" && ["idle", "checking", "available", "downloading", "preparing"].includes(s.status)) return null;
+  if (!requiredIdle && (s.status === "idle" || s.status === "checking")) return null;
+
+  if (s.automaticUpdates && s.status === "downloaded" && s.installMode !== "handoff") {
+    return (
+      <button className="fixed bottom-4 left-4 z-50 flex items-center gap-2 rounded-full border border-hairline/40 bg-panel px-3 py-2 text-xs text-ink-secondary shadow-lg hover:text-ink disabled:opacity-50"
+        disabled={pending !== null} onClick={() => { setPending("install"); void updater.install(); }}>
+        <RefreshCw size={12} /> Restart to finish
+      </button>
+    );
+  }
 
   // while busy the card owns the moment: no dismissing, no second click
   const installing = s.status === "installing";
@@ -53,8 +98,9 @@ export function UpdateBanner() {
   // Nothing restarts, and the card has to stop promising that it will.
   const handoff = s.installMode === "handoff";
 
-  const title =
-    s.status === "available"
+  const title = requiredIdle
+    ? "Update required"
+    : s.status === "available"
       ? `${brand().name} ${s.version} is available`
       : s.status === "downloading"
         ? `Downloading ${s.version ?? "update"}…`
@@ -69,8 +115,9 @@ export function UpdateBanner() {
               : s.status === "handed-off"
                 ? "Finish in a terminal"
                 : "Update failed";
-  const subtitle =
-    s.status === "available"
+  const subtitle = requiredIdle
+    ? `This version is no longer supported. Get ${s.minimumVersion ?? "the latest version"} or newer.`
+    : s.status === "available"
       ? "A newer version is ready to download."
       : s.status === "downloading"
         ? // no percent yet means the transfer hasn't reported in — don't imply 0
@@ -91,7 +138,9 @@ export function UpdateBanner() {
                 ? s.terminalOpened
                   ? "Command copied — paste it in the terminal that opened."
                   : "Command copied — paste it in a terminal to finish."
-                : s.retryable === false
+                : s.quitHeld
+                  ? `${brand().name} quits as soon as active tasks finish.`
+                  : s.retryable === false
                   ? `${friendlyError(s.message?.split(" Quit and reopen ")[0])} Quit and reopen ${brand().name} before trying the update again.`
                   : friendlyError(s.message);
 
@@ -117,6 +166,12 @@ export function UpdateBanner() {
           </button>
         )}
       </div>
+
+      {s.required && !busy && (
+        <a className="mt-2 block text-[12.5px] text-accent underline" href={INSTALLER_URL} target="_blank" rel="noreferrer">
+          Download the latest installer
+        </a>
+      )}
 
       {s.status === "handed-off" && s.command && (
         <code className="mt-2.5 block overflow-x-auto rounded-lg bg-control px-2 py-1.5 font-mono text-[11.5px] whitespace-pre text-ink-secondary">
@@ -195,7 +250,15 @@ export function UpdateBanner() {
               )}
             </button>
           )}
-          {s.status === "error" && s.retryable !== false && (
+          {s.status === "error" && s.quitHeld && (
+            <button
+              onClick={() => void updater.quitNow?.()}
+              className="flex flex-1 items-center justify-center gap-1.5 rounded-lg bg-control py-1.5 text-[13px] text-ink hover:bg-raised-hover"
+            >
+              Quit without waiting
+            </button>
+          )}
+          {(requiredIdle || (s.status === "error" && s.retryable !== false)) && (
             <button
               onClick={() => {
                 setPending("check");

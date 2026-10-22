@@ -68,7 +68,7 @@ struct BrowserLiveView: View {
                     Button("type in page") { showingKeyboard = true }.disabled(!controlling || pending)
                     Button("restart browser session", role: .destructive) { confirmingRestart = true }.disabled(!connected || pending)
                 } label: { Image(systemName: "ellipsis").frame(width: 44, height: 44) }.accessibilityLabel("Browser options")
-            }.padding(.horizontal, 8).background(.ultraThinMaterial)
+            }.padding(.horizontal, 8).glassSheet(cornerRadius: 18)
             GeometryReader { geometry in
                 ZStack {
                     Color.black
@@ -120,7 +120,7 @@ struct BrowserLiveView: View {
                     if pending { ProgressView().frame(width: 100, height: 44) }
                     else { Text(controlling ? "give back" : "take control").font(.caption.weight(.semibold)).padding(.horizontal, 12).frame(minHeight: 44) }
                 }.buttonStyle(.bordered).disabled(!connected || !frameCurrent || pending || (held && !controlling))
-            }.padding(.horizontal, 12).background(.ultraThinMaterial)
+            }.padding(.horizontal, 12).glassSheet(cornerRadius: 18)
         }
         .navigationBarBackButtonHidden(true).toolbar(.hidden, for: .navigationBar)
         .sheet(isPresented: $showingTabs) {
@@ -151,7 +151,7 @@ struct BrowserLiveView: View {
         .sheet(isPresented: $showingChat) {
             NavigationStack { ChatView(chat: .bot(bot), onClose: { showingChat = false }) }
                 .safeAreaInset(edge: .top) {
-                    if controlling { HStack { Text("you have browser control").font(.caption); Spacer(); Button("give back") { schedule(.release) } }.padding(12).background(.ultraThinMaterial) }
+                    if controlling { HStack { Text("you have browser control").font(.caption); Spacer(); Button("give back") { schedule(.release) } }.padding(12).glassSheet(cornerRadius: 18) }
                 }
                 .presentationDetents([.medium, .large]).presentationDragIndicator(.visible)
         }

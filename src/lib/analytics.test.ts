@@ -1,67 +1,33 @@
-// BOS Bot's personal edition never sends product analytics: there is no
-// opt-in, so every entry point must stay off and leave storage untouched,
-// whatever a previous Bos install left behind.
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-
-import {
-  analyticsEnabled,
-  emailGateDone,
-  identifyEmail,
-  initAnalytics,
-  optAction,
-  setAnalyticsEnabled,
-  setEmailGateDone,
-  track,
-} from "./analytics";
-
-// The suite runs on the node environment, which has no localStorage.
-const store = new Map<string, string>();
-const baseStorage = {
-  getItem: (k: string) => store.get(k) ?? null,
-  setItem: (k: string, v: string) => void store.set(k, v),
-  removeItem: (k: string) => void store.delete(k),
-};
-vi.stubGlobal("localStorage", baseStorage);
-
-beforeEach(() => store.clear());
-afterEach(() => vi.stubGlobal("localStorage", baseStorage));
-
-describe("analytics in the personal edition", () => {
-  it("is off for a fresh install", () => {
-    expect(analyticsEnabled()).toBe(false);
-  });
-
-  it("stays off when something tries to turn it on", () => {
-    setAnalyticsEnabled(true);
-    expect(analyticsEnabled()).toBe(false);
-  });
-
-  it("stays off when an old install left an opt-in behind", () => {
-    store.set("omb-analytics-opt-out", "0");
-    expect(analyticsEnabled()).toBe(false);
-  });
-
-  it("never asks for a client in any opt state", () => {
-    for (const enabled of [true, false]) {
-      for (const running of [true, false]) {
-        expect(optAction(enabled, running)).toBe("none");
-      }
-    }
-  });
-
-  it("touches no storage on init, track or identify", () => {
-    initAnalytics();
-    track("app_opened", { a: 1 });
-    identifyEmail("someone@example.com");
-    setAnalyticsEnabled(true);
-    expect(store.size).toBe(0);
-  });
+import { beforeEach, expect, it, vi } from "vitest";
+const request = vi.hoisted(() => vi.fn());
+vi.mock("@/state/store", () => ({ api: request }));
+const values = new Map<string, string>();
+beforeEach(() => {
+  vi.resetModules(); request.mockReset(); values.clear();
+  vi.stubGlobal("localStorage", { getItem: (key: string) => values.get(key) ?? null, setItem: (key: string, value: string) => values.set(key, value) });
 });
-
-describe("the email gate", () => {
-  it("is open until submitted or skipped", () => {
-    expect(emailGateDone()).toBe(false);
-    setEmailGateDone("skipped");
-    expect(emailGateDone()).toBe(true);
-  });
+it("follows server optout, never guesses from a legacy browser flag", async () => {
+  request.mockResolvedValue({ analyticsEnabled: false });
+  const analytics = await import("./analytics");
+  await analytics.initAnalytics(); analytics.track("open");
+  expect(analytics.analyticsEnabled()).toBe(false);
+  expect(request).toHaveBeenCalledTimes(1);
+});
+it("forwards only safe event fields through the local server, never email as event props", async () => {
+  request.mockResolvedValue({ analyticsEnabled: true });
+  const analytics = await import("./analytics"); await analytics.initAnalytics();
+  analytics.track("message_sent", { prompt: "private", count: 1 });
+  expect(request.mock.calls.at(-1)).toEqual(["/api/product/events", { method: "POST", body: JSON.stringify({ events: [{ name: "message_sent", props: { count: 1 } }] }) }]);
+  analytics.identifyEmail("typed@example.com");
+  expect(request).toHaveBeenCalledTimes(2);
+  analytics.track("onboarding_completed");
+  expect(request.mock.calls.at(-1)).toEqual(["/api/product/claim", { method: "POST", body: JSON.stringify({ email: "typed@example.com" }) }]);
+  expect(JSON.stringify(request.mock.calls.filter(call => call[0] === "/api/product/events"))).not.toContain("typed@example.com");
+});
+it("clears a pending email on optout and preserves email gate behavior", async () => {
+  request.mockResolvedValue({ analyticsEnabled: true });
+  const analytics = await import("./analytics"); await analytics.initAnalytics();
+  analytics.identifyEmail("typed@example.com"); analytics.setAnalyticsEnabled(false); analytics.track("onboarding_completed");
+  expect(request).toHaveBeenCalledTimes(1);
+  expect(analytics.emailGateDone()).toBe(false); analytics.setEmailGateDone("skipped"); expect(analytics.emailGateDone()).toBe(true);
 });

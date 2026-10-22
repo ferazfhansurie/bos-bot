@@ -491,7 +491,7 @@ struct MediaLightbox: View {
                         .font(.system(size: 15, weight: .medium))
                         .foregroundStyle(.white)
                         .padding(.horizontal, 12).frame(height: 36)
-                        .background(.ultraThinMaterial, in: Capsule())
+                        .glassCapsule()
                         .environment(\.colorScheme, .dark)
                 }
                 Spacer()
@@ -524,7 +524,7 @@ struct MediaLightbox: View {
             .font(.system(size: 16, weight: .semibold))
             .foregroundStyle(.white)
             .frame(width: 40, height: 40)
-            .background(.ultraThinMaterial, in: Circle())
+            .glassCapsule()
             .environment(\.colorScheme, .dark)
     }
 }
@@ -696,7 +696,7 @@ private struct VideoLightbox: View {
                     .font(.system(size: 16, weight: .semibold))
                     .foregroundStyle(.white)
                     .frame(width: 40, height: 40)
-                    .background(.ultraThinMaterial, in: Circle())
+                    .glassCapsule()
                     .environment(\.colorScheme, .dark)
             }
             .accessibilityLabel("Close video player")

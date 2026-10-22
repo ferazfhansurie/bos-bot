@@ -15,6 +15,8 @@ export interface AttentionPreferences {
   done: DoneNotifyMode;
   sound: NotifySound;
   followUps: FollowUpMode;
+  /** the bos notch at the top of the screen (mac only) */
+  notch: boolean;
 }
 
 export const ATTENTION_PREFERENCES_KEY = "omb-attention-preferences";
@@ -26,6 +28,7 @@ export const DEFAULT_ATTENTION_PREFERENCES: AttentionPreferences = {
   done: "unfocused",
   sound: "default",
   followUps: "steer",
+  notch: true,
 };
 
 export const NOTIFY_SOUNDS: readonly NotifySound[] = ["none", "default", "Glass", "Ping", "Tink", "Pop"];
@@ -52,6 +55,7 @@ function normalize(raw: unknown): AttentionPreferences {
     done: value.done === "always" || value.done === "off" ? value.done : "unfocused",
     sound: NOTIFY_SOUNDS.includes(value.sound as NotifySound) ? (value.sound as NotifySound) : "default",
     followUps: value.followUps === "queue" ? "queue" : "steer",
+    notch: value.notch !== false,
   };
 }
 

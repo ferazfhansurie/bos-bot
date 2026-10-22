@@ -1033,12 +1033,15 @@ private fun SearchHitRow(hit: SearchHit, onClick: () -> Unit) {
 fun StatusBanner() {
     val session = LocalCompanion.current.session
     val status by session.status.collectAsState()
+    val serverWasReset by session.serverWasReset.collectAsState()
+    val connection by session.connection.collectAsState()
     val banner: Pair<String, Color>? = when (val current = status) {
         Session.Status.Live, Session.Status.Unpaired -> null
         Session.Status.Connecting -> "Connecting…" to secondaryTint
-        is Session.Status.Offline -> current.message to Color(MausPalette.argb("orange"))
+        is Session.Status.Offline -> (if (connection?.serverEnvironmentId != null)
+            "Your BOS is waking up or offline. ${current.message}" else current.message) to Color(MausPalette.argb("orange"))
         Session.Status.Unauthorized ->
-            "This phone was unpaired on the computer." to MaterialTheme.colorScheme.error
+            (if (serverWasReset) "This computer was reset, pair again." else "This phone was unpaired on the computer.") to MaterialTheme.colorScheme.error
     }
     val (text, tint) = banner ?: return
     Text(

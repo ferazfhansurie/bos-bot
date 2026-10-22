@@ -35,7 +35,12 @@ class BosApp : Application() {
     private val appJob = SupervisorJob()
     val appScope = CoroutineScope(appJob + Dispatchers.Main.immediate)
 
+    lateinit var updates: com.openmausbot.companion.updates.AndroidUpdateController
+        private set
+
     lateinit var session: Session
+        private set
+    lateinit var usageTelemetry: PhoneUsageTelemetry
         private set
     lateinit var notifications: LocalNotificationPoster
         private set
@@ -74,6 +79,8 @@ class BosApp : Application() {
         discovery = NsdDiscovery(this)
         permissions = CompanionPermissions(this)
         onboarding = OnboardingPreferences(this)
+        updates = com.openmausbot.companion.updates.AndroidUpdateController(this, appScope)
+        usageTelemetry = PhoneUsageTelemetry(this, appScope) { session }
         session = Session(
             scope = appScope,
             connectionStore = DataStoreConnectionStore(this),
@@ -86,7 +93,10 @@ class BosApp : Application() {
                     ?: android.os.Build.MODEL
             },
             notificationSink = notifications,
+            phoneVersion = packageManager.getPackageInfo(packageName, 0).versionName?.substringBefore("-"),
+            onPairSuccess = { usageTelemetry.pairSucceeded() },
         )
+        ProcessLifecycleOwner.get().lifecycle.addObserver(usageTelemetry)
         avatars = AvatarImageStore(fetch = session::avatarData)
         voicePreview = VoicePreviewPlayer(this)
 

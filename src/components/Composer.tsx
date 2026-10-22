@@ -1,3 +1,4 @@
+import { useMods, modsDesktop } from "@/mods/use-mods";
 import { RemoteFullAccess } from "./RemoteFullAccess";
 import { useSharedDelivery } from "@/lib/shared-delivery";
 import { track } from "@/lib/analytics";
@@ -652,8 +653,13 @@ export function Composer({
       dispatch({ type: "send", botId: bot.id, ...retry });
     }
   };
+  const mods = useMods();
   const send = (override?: SendPriority, dictatedText?: string) => {
     const sendText = dictatedText ?? text;
+    if (!shared && !group && bot && modsDesktop() && !attachments.length && !locked && !busy) {
+      const command = mods.find(mod => mod.enabled && mod.botId === bot.id && mod.manifest.surfaces.includes("command") && sendText.trim() === `/${mod.manifest.id}`);
+      if (command) { window.dispatchEvent(new CustomEvent("bos-mod-command", { detail: { id: command.manifest.id, botId: bot.id } })); setText(""); return; }
+    }
     const sendGoal = group && !group.dm ? goalTextFromComposer(sendText) : null;
     const sendEffectiveText = sendGoal ?? sendText;
     const sendChannelMode = sendGoal !== null ? "goal" : channelMode;

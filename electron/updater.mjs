@@ -1,7 +1,7 @@
 import { STAGING } from "./release-channel.mjs";
 import { readUpdaterCapability } from "./updater-capability.mjs";
-// In-app auto-updater (electron-updater). Downloads are user-driven; macOS
-// stages the downloaded ZIP immediately and the explicit restart applies it.
+// In-app auto-updater (electron-updater). Downloads run quietly; macOS
+// stages the downloaded ZIP immediately and a protected quit applies it.
 // One state object is broadcast on every transition.
 //
 // Only runs in packaged builds with explicit native policy and valid metadata.
@@ -26,6 +26,7 @@ import {
 } from "./package-install-command.mjs";
 import { openBlankTerminal } from "./terminal-launch.mjs";
 import { createUpdaterCoordinator } from "./updater-coordinator.mjs";
+import { belowMinimumVersion, fetchUpdatePolicy, persistUpdateState } from "./update-policy.mjs";
 
 const require = createRequire(import.meta.url);
 
@@ -35,6 +36,8 @@ let win = null;
 let state = { status: "idle" };
 let updaterCoordinator = null;
 let started = false;
+let stateDirectory = null;
+let configOperation = Promise.resolve();
 let capability = { available: false, reason: "not-initialized", message: "Native updates are not initialized." };
 state = { ...state, capability: capability.reason, available: false };
 
@@ -45,7 +48,7 @@ function unavailableState() {
 
 function runUpdateAction(action) {
   if (!capability.available || !updaterCoordinator) return unavailableState();
-  return action(updaterCoordinator);
+  return configOperation.then(() => action(updaterCoordinator));
 }
 
 function updaterLogger() {
@@ -85,6 +88,7 @@ export function handOffDownloadedPackage(packageType) {
 
 function setState(patch) {
   state = { ...state, ...patch };
+  persistUpdateState(stateDirectory, state);
   try {
     win?.webContents?.send("update:state", state);
   } catch {
@@ -100,6 +104,11 @@ export function registerUpdaterIpc() {
   ipcMain.handle("update:check", localOnly("update:check", () => runUpdateAction((coordinator) => coordinator.check(true))));
   ipcMain.handle("update:download", localOnly("update:download", () => runUpdateAction((coordinator) => coordinator.download())));
   ipcMain.handle("update:install", localOnly("update:install", () => runUpdateAction((coordinator) => coordinator.install())));
+  // A held quit (busy server) offers "Quit without waiting"; it never waits
+  // on the update config and works whether or not the updater is available.
+  ipcMain.handle("update:quit-now", localOnly("update:quit-now", () => {
+    if (!updaterCoordinator?.quitWithoutWaiting()) app.quit();
+  }));
 }
 
 // macOS keeps the process (and updater) alive after its window closes.
@@ -109,9 +118,20 @@ export function attachUpdaterWindow(mainWindow) {
   win = mainWindow;
 }
 
-export function startUpdater({ prepareInstall = null } = {}) {
+function installRequiredUpdate() {
+  if (!state.required) return;
+  if (typeof state.version !== "string" || !/^\d+\.\d+\.\d+$/.test(state.version) || belowMinimumVersion(state.version, state.minimumVersion)) {
+    updaterCoordinator.hold();
+    setState({ status: "error", retryable: false, message: "No published update meets the required version. Download the latest installer." });
+    return;
+  }
+  if (state.installMode !== "handoff") void updaterCoordinator.install();
+}
+
+export function startUpdater({ prepareInstall = null, dataDir = null, fetchPolicy = fetchUpdatePolicy } = {}) {
   if (started) return;
   started = true;
+  stateDirectory = dataDir;
   capability = readUpdaterCapability({ isPackaged: app.isPackaged, staging: STAGING, resourcesPath: process.resourcesPath });
   if (!capability.available) {
     setState({ status: "idle", available: false, capability: capability.reason, message: capability.message, retryable: false });
@@ -129,15 +149,23 @@ export function startUpdater({ prepareInstall = null } = {}) {
     return;
   }
   setState({ available: true, capability: "configured", message: undefined, retryable: undefined });
-  autoUpdater.autoDownload = false; // button-driven download
+  autoUpdater.autoDownload = false; // coordinator owns automatic downloads + native-ready promise
   // Stable line only: a GitHub release marked pre-release (or a beta feed
   // file) is never offered to installed apps.
   autoUpdater.allowPrerelease = false;
   // Squirrel.Mac has a second, native staging pass after the ZIP download.
-  // Start it immediately so "Restart to update" never has to begin that slow
-  // pass and wait indefinitely. Windows keeps the explicit installer click.
-  autoUpdater.autoInstallOnAppQuit = false; // explicit idle-gated install only
+  // Mac's flag enables native staging (it has no vendor quit hook). Other
+  // platforms must not arm the vendor's unprotected onQuit installer. Our
+  // before-quit handler runs every install through the busy-turn lifecycle.
+  autoUpdater.autoInstallOnAppQuit = process.platform === "darwin";
   autoUpdater.logger = updaterLogger();
+  // Staged rollout gates only quiet background checks. A floor applies to
+  // every old install, and a user who presses "Check for updates" asked for
+  // the published version: both bypass rollout eligibility for that check.
+  // OS/signature support checks stay intact.
+  const vendorRollout = autoUpdater.isUserWithinRollout;
+  autoUpdater.isUserWithinRollout = info => state.required === true || updaterCoordinator?.manualCheckActive() === true ||
+    (typeof vendorRollout === "function" ? vendorRollout(info) : true);
 
   // Broadcast the install flavour before the first check so the banner never
   // offers a restart it cannot deliver.
@@ -148,13 +176,37 @@ export function startUpdater({ prepareInstall = null } = {}) {
     handOffInstall: handOff ? handOffDownloadedPackage(packageType) : null,
     nativeStaging: process.platform === "darwin",
     prepareInstall,
+    automaticDownload: () => state.automaticUpdates === true,
+    acceptUpdate: version => !state.required || (typeof version === "string" && /^\d+\.\d+\.\d+$/.test(version) && !belowMinimumVersion(version, state.minimumVersion)),
+    onDownloaded: installRequiredUpdate,
   });
 
-  // first check ~15s after launch (let the app settle), then hourly — both
-  // silent on failure, hence the arrow: a bare `check` would receive the
-  // timer's argument as `manual` and start reporting errors again.
-  setTimeout(() => void updaterCoordinator?.check(), 15_000).unref?.();
-  setInterval(() => void updaterCoordinator?.check(), 60 * 60 * 1000).unref?.();
+  // A known minimum triggers a launch check; offline/missing config preserves
+  // normal startup. Errors are state, including checks made by these timers.
+  // The policy is refetched hourly so an install that launched offline still
+  // sees flag and floor changes; a later offline fetch keeps the last policy.
+  const applyPolicy = (policy, launch) => {
+    if (!policy && !launch) return;
+    const minimum = policy?.minimumVersion;
+    const required = belowMinimumVersion(app.getVersion(), minimum);
+    const wasRequired = state.required === true;
+    setState({automaticUpdates: policy?.autoUpdates === true || required});
+    if (required) {
+      setState({ required: true, minimumVersion: minimum });
+      if (state.status === "downloaded") return installRequiredUpdate();
+      // Hourly refreshes are followed by the timer's own check.
+      if (launch) return updaterCoordinator.check();
+    } else if (wasRequired) {
+      setState({ required: false, minimumVersion: undefined });
+    }
+  };
+  const refreshPolicy = launch => Promise.resolve().then(() => fetchPolicy()).then(policy => applyPolicy(policy, launch)).catch(() => {});
+  configOperation = refreshPolicy(true);
+  setTimeout(() => void configOperation.then(() => updaterCoordinator?.check()), 15_000).unref?.();
+  setInterval(() => {
+    configOperation = configOperation.then(() => refreshPolicy(false));
+    void configOperation.then(() => updaterCoordinator?.check());
+  }, 60 * 60 * 1000).unref?.();
 }
 
 // Dynamic facade: main registers private RPC before the updater/feed starts.
@@ -168,3 +220,19 @@ export const windowsUpdateCoordinator = {
   hold: () => updaterCoordinator?.hold(),
   install: options => updaterCoordinator?.install(options),
 };
+
+// Call before any shutdown side effects. Never let a vendor quit hook bypass
+// the server's idle check. Failed admission can be retried by quitting again.
+export function handleUpdaterQuit(event) {
+  if (updaterCoordinator?.protectQuit(event, () => app.quit())) return true;
+  if ((!state.automaticUpdates && !state.required) || !updaterCoordinator?.shouldInstallOnQuit()) {
+    // Shutdown may defer its final quit while helpers stop. A late feed/config
+    // response must not start native staging after the server is already gone.
+    // The hold lapses, so a quit cancelled later leaves updates working.
+    updaterCoordinator?.holdForQuit();
+    return false;
+  }
+  event.preventDefault();
+  void updaterCoordinator.install();
+  return true;
+}

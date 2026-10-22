@@ -144,6 +144,7 @@ final class Session: ObservableObject {
     private var mascotLedgers: [String: MascotCompletionLedger] = [:]
     private var mascotReplayCutoff: Int?
     private var foldingQuietly = false
+    @Published private(set) var phoneUpdateRequired: PhoneUpdateRequired?
     @Published private(set) var connection: Connection?
     @Published private(set) var connections: [Connection] = []
     /// Whether the live pairing may administer the workspace — see
@@ -151,6 +152,7 @@ final class Session: ObservableObject {
     /// is false rather than offer buttons the server would answer 403 to.
     var browserClient: CompanionClient? { client }
     var canAdminister: Bool { connection?.canAdminister ?? false }
+    @Published private(set) var serverWasReset = false
     @Published private(set) var status: Status = .unpaired {
         didSet {
             let label: String
@@ -381,7 +383,9 @@ final class Session: ObservableObject {
     /// Every other paired computer, connected at the same time as this one.
     @Published private(set) var satellites: [Session] = []
     private var satelliteChanges: [AnyCancellable] = []
-    private var satellitePushRegistered = false
+    @Published private(set) var pushRegistration: PushRegistrationState = .notRegistered
+    @Published private(set) var pushDeviceRegistrationFailed = false
+    private var pushRegistrationAttempt = UUID()
 
     private init(satelliteOf saved: Connection, token: String, primary: Session) {
         isSatellite = true
@@ -512,7 +516,11 @@ final class Session: ObservableObject {
         NotificationCoordinator.shared.voiceHandler = { [weak self] action in
             Task { @MainActor in await self?.handleVoice(action) }
         }
+        NotificationCoordinator.shared.pushRegistrationFailureHandler = { [weak self] in
+            self?.pushDeviceRegistrationFailed = true
+        }
         NotificationCoordinator.shared.pushTokenHandler = { [weak self] token in
+            self?.pushDeviceRegistrationFailed = false
             Task { @MainActor in await self?.registerPushToken(token) }
         }
         // The PushKit token can arrive after the APNs one; register again with both.
@@ -541,6 +549,13 @@ final class Session: ObservableObject {
         }
 #if DEBUG
         let arguments = ProcessInfo.processInfo.arguments
+        if arguments.contains("-phone-update-preview") {
+            phoneUpdateRequired = PhoneUpdateRequired.check(
+                data: Data(#"{"minPhoneVersion":"99.0.0","phoneUpdateUrls":{"ios":"https://bosbot.my/get"}}"#.utf8),
+                phoneVersion: "2.1.3"
+            )
+            return
+        }
         if (arguments.contains("-browser-preview") || arguments.contains("-computer-preview")),
            let index = arguments.firstIndex(of: "-browser-preview-url"), index + 1 < arguments.count,
            let url = URL(string: arguments[index + 1]), url.scheme == "http", url.host == "127.0.0.1", let port = url.port,
@@ -765,7 +780,12 @@ final class Session: ObservableObject {
             // Reachability first, on the public descriptor: a wrong address
             // then fails as an address problem rather than a code problem,
             // and no attempt is spent against the server's lockout.
-            try await Self.confirmServer(at: invited)
+            do {
+                try await Self.confirmServer(at: invited)
+            } catch let update as PhoneUpdateRequired {
+                phoneUpdateRequired = update
+                throw update
+            }
             let paired = try await CompanionClient.pairWithServer(
                 connection: invited,
                 code: code,
@@ -781,6 +801,7 @@ final class Session: ObservableObject {
                 stored.id = existing.id
             }
             try commitPairing(stored, token: paired.token)
+            PhoneUsageTelemetry.shared.record(.pairSuccess)
             return
         }
         let outcome = try await CompanionClient.pairFirstReachable(
@@ -810,6 +831,7 @@ final class Session: ObservableObject {
             stored.id = existing.id
         }
         try commitPairing(stored, token: paired.token, winner: winner)
+        PhoneUsageTelemetry.shared.record(.pairSuccess)
     }
 
     /// The device token goes to the keychain and the connection to defaults —
@@ -867,6 +889,8 @@ final class Session: ObservableObject {
             [route] + stored.orderedEndpoints.filter { $0.url != route.url }
         } ?? stored.orderedEndpoints
         self.rotation = CandidateRotation(endpoints: liveRoutes)
+        pushRegistrationAttempt = UUID()
+        pushRegistration = .notRegistered
         self.client = CompanionClient(
             connection: winner.map(stored.dialing) ?? stored,
             token: token
@@ -977,6 +1001,8 @@ final class Session: ObservableObject {
         guard wasActive else { syncSatellites(); return }
 
         connection = nil
+        pushRegistrationAttempt = UUID()
+        pushRegistration = .notRegistered
         client = nil
         token = nil
         rotation = CandidateRotation(hosts: [])
@@ -1019,6 +1045,8 @@ final class Session: ObservableObject {
         )
         pairingRequested = false
         connection = nil
+        pushRegistrationAttempt = UUID()
+        pushRegistration = .notRegistered
         client = nil
         token = nil
         rotation = CandidateRotation(hosts: [])
@@ -1031,6 +1059,9 @@ final class Session: ObservableObject {
     }
 
     private func configureActiveConnection(_ saved: Connection, token stored: String) {
+        serverWasReset = false
+        pushRegistrationAttempt = UUID()
+        pushRegistration = .notRegistered
         connection = saved
         token = stored
         // New connections honor the desktop's transport policy. Automatic
@@ -1061,6 +1092,8 @@ final class Session: ObservableObject {
         endLinger()
         pendingNotification = nil
         screenWatchers = 0
+        pushRegistrationAttempt = UUID()
+        pushRegistration = .notRegistered
         client = nil
         token = nil
         resetState()
@@ -1391,6 +1424,7 @@ final class Session: ObservableObject {
     /// A fresh state belongs to a different stream; nothing buffered for the
     /// old one may land in it.
     private func resetState() {
+        phoneUpdateRequired = nil
         pendingFrames.removeAll()
         frameFlushTask?.cancel()
         frameFlushTask = nil
@@ -1705,14 +1739,24 @@ final class Session: ObservableObject {
             // refused anyway, and a fresh install must not be shown the old
             // one. Unreachable is not "different": the stream attempt below
             // reports that the usual way.
-            if let expected = client.connection.serverEnvironmentId {
-                let live = try? await client.environment()
+            do {
+                let live = try await client.environment()
                 if Task.isCancelled { return }
-                if let live, live.environmentId != expected {
+                phoneUpdateRequired = nil
+                if let expected = client.connection.serverEnvironmentId, live.environmentId != expected {
                     log.error("server identity changed: \(expected, privacy: .public) is now \(live.environmentId, privacy: .public)")
+                    serverWasReset = true
                     status = .unauthorized
                     return
                 }
+            } catch let update as PhoneUpdateRequired {
+                if Task.isCancelled { return }
+                phoneUpdateRequired = update
+                status = .offline("Update the app to connect to this server.")
+                return
+            } catch {
+                // Old companion sidecars have no descriptor. Network failures
+                // still go through normal stream recovery below.
             }
             log.info("opening stream, cursor=\(self.state.cursor ?? "none", privacy: .public)")
             do {
@@ -1777,10 +1821,9 @@ final class Session: ObservableObject {
                         // not be replayable, so a gap is closed by a snapshot.
                         refreshActivityFeed(using: client)
                         reconcileRemoteStreams(using: client)
-                        if isSatellite, !satellitePushRegistered,
+                        if pushRegistration != .registered && pushRegistration != .registering,
                            let token = UserDefaults.standard.string(forKey: "bos.apnsToken") {
-                            satellitePushRegistered = true
-                            await registerPushToken(token)
+                            Task { [weak self] in await self?.registerOwnPushToken(token) }
                         }
                         continue
                     }
@@ -2196,6 +2239,13 @@ final class Session: ObservableObject {
     /// switch nor an upload delay can move the message elsewhere. The composer
     /// retains an immutable durable payload until this returns true.
     func captureSendClient() -> CompanionClient? { client }
+
+    @discardableResult
+    func applySettingsBot(_ bot: Bot, expectedConnectionID: String?) -> Bool {
+        guard connection?.id == expectedConnectionID else { return false }
+        state.apply(.bot(bot))
+        return true
+    }
 
     func send(
         text: String,
@@ -3420,6 +3470,22 @@ final class Session: ObservableObject {
         return try? await client.config()
     }
 
+    /// Re-read every paired home before each public batch. An unreachable home
+    /// cannot authorize a send, and any explicit server opt-out wins.
+    func phoneUsagePolicy() async -> UsageTelemetryPolicy {
+        let homes = ([self] + satellites).filter { $0.connection != nil }
+        guard !homes.isEmpty else { return .unavailable }
+        var unavailable = false
+        for home in homes {
+            guard let config = await home.configStatus(), let usage = config.anonymousUsage else {
+                unavailable = true
+                continue
+            }
+            if !usage.allowsTelemetry { return .denied }
+        }
+        return unavailable ? .unavailable : .allowed
+    }
+
     func telegramChannel(botId: String) async throws -> TelegramChannelStatus {
         guard let client else { throw URLError(.notConnectedToInternet) }
         return try await client.telegramChannel(botId: botId)
@@ -3862,6 +3928,12 @@ final class Session: ObservableObject {
         } catch { actionError = error.localizedDescription }
     }
 
+    /// Best effort: a lost save only means a reload shows the block's defaults.
+    func saveUiState(threadId: String, messageId: String, key: String, state: [String: JSONValue]) async {
+        guard let client else { return }
+        try? await client.setUiState(threadId: threadId, messageId: messageId, key: key, state: state)
+    }
+
     func edit(_ message: Message, for bot: Bot, text: String) async {
         await perform { try await $0.edit(botId: bot.id, messageId: message.id, text: text, threadId: bot.threadId) }
     }
@@ -3908,24 +3980,56 @@ final class Session: ObservableObject {
         catch { actionError = error.localizedDescription; return nil }
     }
 
+    func botRuntime(botId: String, threadId: String) async throws -> BotRuntimeStatus {
+        guard let client else { throw APIError.transport("Computer is offline") }
+        return try await client.botRuntime(botId: botId, threadId: threadId)
+    }
+
+    func selectThreadComputer(botId: String, threadId: String, surface: String?) async throws {
+        guard let client else { throw APIError.transport("Computer is offline") }
+        try await client.selectThreadComputer(botId: botId, threadId: threadId, surface: surface)
+    }
+
     func refreshNotificationAuthorization() async {
         notificationAuthorization = await NotificationCoordinator.shared.authorizationStatus()
         notificationAuthorizationResolved = true
-        if notificationAuthorization == .authorized || notificationAuthorization == .provisional {
+        if notificationAuthorization == .authorized || notificationAuthorization == .provisional || notificationAuthorization == .ephemeral {
             UIApplication.shared.registerForRemoteNotifications()
             if let token = UserDefaults.standard.string(forKey: "bos.apnsToken") { await registerPushToken(token) }
         }
     }
 
     private func registerPushToken(_ token: String) async {
-        for home in satellites { await home.registerPushToken(token) }
-        guard let client else { return }
+        // One offline computer must not delay registration with the others.
+        await withTaskGroup(of: Void.self) { group in
+            for home in [self] + satellites {
+                group.addTask { await home.registerOwnPushToken(token) }
+            }
+        }
+    }
+
+    private func registerOwnPushToken(_ token: String) async {
+        guard let client else { pushRegistration = .notRegistered; return }
+        let attempt = UUID()
+        pushRegistrationAttempt = attempt
+        pushRegistration = .registering
         // Live Activities follow the main computer only; another home
         // pushing into the same island would fight it.
         let live = LiveActivityTokens.shared
-        try? await client.registerPushToken(token, environment: Self.apnsEnvironment, voipToken: CallKitRinger.shared.voipToken,
-                                            liveStartToken: isSatellite ? nil : live.startToken,
-                                            liveActivities: isSatellite ? nil : live.activities)
+        do {
+            let registration = try await client.registerPushToken(token, environment: Self.apnsEnvironment, voipToken: CallKitRinger.shared.voipToken,
+                                               liveStartToken: isSatellite ? nil : live.startToken,
+                                               liveActivities: isSatellite ? nil : live.activities)
+            guard pushRegistrationAttempt == attempt, self.client?.connection.id == client.connection.id else { return }
+            pushRegistration = registration.state
+            if registration.deliveryConfigured == true {
+                PhoneUsageTelemetry.shared.record(.pushOK)
+            }
+        } catch {
+            guard pushRegistrationAttempt == attempt, self.client?.connection.id == client.connection.id else { return }
+            // Do not surface transport errors containing private host URLs or tokens.
+            pushRegistration = .failed
+        }
     }
 
     func enableNotifications() async {
@@ -3943,13 +4047,29 @@ final class Session: ObservableObject {
 
     var notificationStatusText: String {
         switch notificationAuthorization {
-        case .authorized: return "On"
-        case .provisional: return "Quietly on"
-        case .ephemeral: return "Temporarily on"
+        case .authorized, .provisional, .ephemeral:
+            if pushDeviceRegistrationFailed { return "Device registration failed" }
+            return PushRegistrationState.summary(notificationRegistrationStates)
         case .denied: return "Off in Settings"
         case .notDetermined: return "Not enabled"
         @unknown default: return "Unknown"
         }
+    }
+
+    private var notificationRegistrationStates: [PushRegistrationState] {
+        let homes = [self] + satellites
+        return connections.map { connection in
+            homes.first { $0.connection?.id == connection.id }?.pushRegistration ?? .notRegistered
+        }
+    }
+
+    /// Registration is an acknowledgement from each computer, not proof of delivery.
+    var notificationRegistrationDetails: String {
+        let states = notificationRegistrationStates
+        let registered = states.filter { $0 == .registered }.count
+        let unavailable = states.filter { $0 == .deliveryUnavailable }.count
+        let setup = unavailable > 0 ? " Push not set up on \(unavailable) of your BOS computers. Set up push delivery on those computers." : ""
+        return "Registered with \(registered) of \(states.count) computers.\(setup) Delivery also needs a working push service and is controlled by iOS, Focus and notification settings."
     }
 
     private func perform(quietly: Bool = false, _ body: (CompanionClient) async throws -> Void) async {

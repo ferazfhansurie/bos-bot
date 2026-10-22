@@ -33,7 +33,8 @@ test('full-computer switch reviews exact workspace and broad access before enabl
   assert.match(detail, /Terminal: UNRESTRICTED commands as your user/);
   assert.match(detail, /including credentials/);
   assert.match(detail, /Computer control: can view your screen and operate logged-in apps/);
-  assert.deepEqual(calls[3], ['save', env, { folders: [], terminal: true, computer: true }, identity]);
+  assert.match(detail, /Browser: off/);
+  assert.deepEqual(calls[3], ['save', env, { folders: [], terminal: true, computer: true, browser: false }, identity]);
 });
 
 test('limited folder grant keeps terminal and screen off and reviews the folder path', async () => {
@@ -44,7 +45,15 @@ test('limited folder grant keeps terminal and screen off and reviews the folder 
   assert.match(calls[0][1].detail, /Read only: \/fixture\/Client A/);
   assert.match(calls[0][1].detail, /Terminal: off/);
   assert.match(calls[0][1].detail, /Computer control: off/);
-  assert.deepEqual(calls.at(-1)[2], args.input);
+  assert.deepEqual(calls.at(-1)[2], { ...args.input, browser: false });
+});
+
+test('browser grant is reviewed in plain words and saved only when asked for', async () => {
+  const { args, calls } = fixture();
+  args.input = { folders: [], terminal: false, computer: false, browser: true };
+  await reviewSharedComputerGrant(args);
+  assert.match(calls[0][1].detail, /Browser: bots open a BOS browser window here/);
+  assert.equal(calls.at(-1)[2].browser, true);
 });
 
 test('stale workspace or failed feature enable cannot persist a grant', async () => {

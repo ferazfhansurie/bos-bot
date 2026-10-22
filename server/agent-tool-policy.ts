@@ -6,6 +6,7 @@
  */
 export const READ_ONLY_AGENT_TOOL_NAMES: ReadonlySet<string> = new Set([
   "get_work_plan",
+  "health_check",
   "list_bots",
   "list_team_setup",
   "list_shared_computers",

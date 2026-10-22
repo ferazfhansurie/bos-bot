@@ -9,13 +9,14 @@ export function ComputerSharingSettings({ workspace, onClose }: { workspace: { i
   const [folders, setFolders] = useState<DesktopSharedFolder[]>([]);
   const [terminal, setTerminal] = useState(false);
   const [computer, setComputer] = useState(false);
+  const [browser, setBrowser] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const mounted = useRef(false);
   const pending = useRef(false);
   const panel = useRef<HTMLDivElement>(null);
   const apply = (next: DesktopComputerSharing) => {
-    setState(next); setFolders(next.folders); setTerminal(next.terminal); setComputer(next.computer);
+    setState(next); setFolders(next.folders); setTerminal(next.terminal); setComputer(next.computer); setBrowser(next.browser === true);
   };
   useEffect(() => {
     mounted.current = true;
@@ -46,10 +47,10 @@ export function ComputerSharingSettings({ workspace, onClose }: { workspace: { i
         <span className="font-medium text-ink">Share this computer<span className="mt-1 block text-[12px] font-normal text-ink-secondary">Let {workspace.name}’s bots search and work here. First-time sharing requests terminal commands as you, plus your screen and signed-in apps. A native review shows the exact access before you approve. Use limited access below for selected folders.</span></span>
         <Switch aria-label={`Share this computer with ${workspace.name}`} checked={state?.enabled === true} disabled={busy || !state} onClick={() => void perform(async () => {
           if (!state) return;
-          const hasSavedScope = state.folders.length > 0 || state.terminal || state.computer;
+          const hasSavedScope = state.folders.length > 0 || state.terminal || state.computer || state.browser;
           const next = state.enabled ? await bridge.revoke(workspace.id) : await bridge.save(workspace.id, hasSavedScope
-            ? { folders: state.folders, terminal: state.terminal, computer: state.computer }
-            : { folders: [], terminal: true, computer: true });
+            ? { folders: state.folders, terminal: state.terminal, computer: state.computer, browser: state.browser === true }
+            : { folders: [], terminal: true, computer: true, browser: true });
           if (mounted.current && next) apply(next);
         })} />
       </div>
@@ -75,10 +76,11 @@ export function ComputerSharingSettings({ workspace, onClose }: { workspace: { i
         <legend className="font-medium text-ink">Broader access · optional</legend>
         <label className="flex items-start gap-2"><input className="mt-1" type="checkbox" checked={terminal} onChange={event => setTerminal(event.target.checked)} /><span className="text-ink">Unrestricted terminal<span className="mt-1 block text-[12px] text-ink-secondary">Run commands as you. This can access or delete files anywhere you can, including credentials—not just the folders above.</span></span></label>
         <label className="flex items-start gap-2"><input className="mt-1" type="checkbox" checked={computer} onChange={event => setComputer(event.target.checked)} /><span className="text-ink">Computer control<span className="mt-1 block text-[12px] text-ink-secondary">View your screen and operate your signed-in apps, outside the shared folders. Requires local computer control and OS permissions.</span></span></label>
+        <label className="flex items-start gap-2"><input className="mt-1" type="checkbox" checked={browser} onChange={event => setBrowser(event.target.checked)} /><span className="text-ink">Browser<span className="mt-1 block text-[12px] text-ink-secondary">Bots open pages in a BOS browser window on this computer, using your signed-in sites. You can watch and type in it yourself, without lag.</span></span></label>
       </fieldset>
       <div className="flex flex-wrap gap-2">
-        <button type="button" disabled={busy || !state || (!folders.length && !terminal && !computer)} onClick={() => void perform(async () => {
-          const next = await bridge.save(workspace.id, { folders, terminal, computer });
+        <button type="button" disabled={busy || !state || (!folders.length && !terminal && !computer && !browser)} onClick={() => void perform(async () => {
+          const next = await bridge.save(workspace.id, { folders, terminal, computer, browser });
           if (mounted.current && next) apply(next);
         })} className="rounded-lg bg-accent px-3 py-2 font-medium text-accent-ink disabled:opacity-50">{state?.enabled ? "Save access" : "Share selected access"}</button>
         {state?.enabled && <button type="button" disabled={busy} onClick={() => void perform(async () => {

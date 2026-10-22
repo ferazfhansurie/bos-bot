@@ -14,7 +14,7 @@ import { assertQueueAttachmentsUnchanged } from "./queue-edit.ts";
 //
 // Stop preserves the words and pauses their durable queue until explicit resume.
 
-import { newId } from "./contracts.ts";
+import { newId, type TurnMember } from "./contracts.ts";
 import { chatQueuePaused, setChatQueuePaused, chatFollowups, editChatFollowup, reorderChatFollowups, saveChatFollowup, settleChatFollowups } from "./message-db.ts";
 import type { BotRecord, Message } from "./store.ts";
 
@@ -46,7 +46,15 @@ interface QueueEntry {
     origin?: Message["origin"];
     /** A paired person's send keeps their name through the wait. */
     sender?: Message["sender"];
+    /** A gateway member's send keeps their identity through the wait; one
+     * drained turn never mixes two members (memberKey). */
+    member?: TurnMember;
   }>;
+}
+
+/** Which member a queued send speaks for; "" is no member. */
+export function memberKey(member: TurnMember | undefined): string {
+  return member ? `${member.userId}\u0000${member.sessionId}` : "";
 }
 
 const queues = new Map<string, QueueEntry>(); // threadId → waiting sends
@@ -113,7 +121,7 @@ export function queueSteeredMessage(
   botId: string,
   threadId: string,
   text: string,
-  options: { prompt?: string; replyToId?: string; sendId?: string; reason?: "capacity"; deferUntilIdle?: boolean; unattended?: boolean; peerAsk?: Message["peerAsk"]; origin?: Message["origin"]; sender?: Message["sender"] } = {},
+  options: { prompt?: string; replyToId?: string; sendId?: string; reason?: "capacity"; deferUntilIdle?: boolean; unattended?: boolean; peerAsk?: Message["peerAsk"]; origin?: Message["origin"]; sender?: Message["sender"]; member?: TurnMember } = {},
 ): QueuedSteer {
   const id = newId();
   const entry = queues.get(threadId) ?? { botId, items: [] };
@@ -125,7 +133,7 @@ export function queueSteeredMessage(
   // the first still waits joins it instead of delivering the image twice.
   const same = sameAttachedSend(text);
   const pending = same && !options.unattended && !options.peerAsk
-    && entry.items.find((queued) => same(queued.text) && !queued.unattended && !queued.peerAsk && queued.replyToId === options.replyToId);
+    && entry.items.find((queued) => same(queued.text) && !queued.unattended && !queued.peerAsk && queued.replyToId === options.replyToId && memberKey(queued.member) === memberKey(options.member));
   if (pending) return { id: pending.messageId, joined: true };
   const item = {
     messageId: id,
@@ -139,6 +147,7 @@ export function queueSteeredMessage(
     peerAsk: options.peerAsk,
     ...(options.origin ? { origin: options.origin } : {}),
     ...(options.sender ? { sender: options.sender } : {}),
+    ...(options.member ? { member: options.member } : {}),
   };
   saveChatFollowup({ id, kind: "bot", ownerId: botId, threadId, payload: item });
   entry.items.push(item);
@@ -212,6 +221,7 @@ export function drainSteeredMessages(
     userMessage: Message,
     excludeIds: string[],
     unattended: boolean,
+    member?: TurnMember,
   ) => void | Promise<void>,
   isBlocked?: (botId: string, threadId: string) => boolean,
 ): void {
@@ -228,14 +238,20 @@ export function drainSteeredMessages(
       continue;
     }
     if (chatQueuePaused("bot", entry.botId, threadId) || bot.busy || isBlocked?.(entry.botId, threadId)) continue;
-    // committed to draining: the entry leaves the map before anything runs,
+    // One turn speaks for one member: only the leading run of sends from
+    // the same member drains now; the rest waits for the next settle.
+    const key = memberKey(entry.items[0]?.member);
+    const split = entry.items.findIndex((item) => memberKey(item.member) !== key);
+    const batch = split < 0 ? entry.items : entry.items.slice(0, split);
+    // committed to draining: the batch leaves the map before anything runs,
     // so a settle racing another settle can never fire the same queue twice
-    const ids = entry.items.map((item) => item.messageId);
+    const ids = batch.map((item) => item.messageId);
     settleChatFollowups(ids, "dispatching");
-    queues.delete(threadId);
+    if (split < 0) queues.delete(threadId);
+    else entry.items = entry.items.slice(split);
     changed();
     const appended: Message[] = [];
-    for (const item of entry.items) {
+    for (const item of batch) {
       // queueId is the pending-chip identity from the 202; append still
       // assigns a fresh transcript id so replay/exclude keep using message.id.
       appended.push(
@@ -258,7 +274,8 @@ export function drainSteeredMessages(
     // newline can merge a trailing standalone attachment tag with the next
     // message into one HTML block, which makes that attachment stop being a
     // native image when the combined follow-up is dispatched.
-    const prompt = entry.items.map((item) => item.prompt).join("\n\n");
+    const prompt = batch.map((item) => item.prompt).join("\n\n");
+    const member = batch[0]?.member;
     const running = run(
       entry.botId,
       threadId,
@@ -267,7 +284,9 @@ export function drainSteeredMessages(
       appended.map((message) => message.id),
       // one unattended line makes the whole drained turn unattended: a
       // person's words in the same queue cannot re-attend a bot's own
-      entry.items.some((item) => item.unattended === true),
+      batch.some((item) => item.unattended === true),
+      // only a member's send passes one: older callers see the same six arguments
+      ...(member ? [member] as const : []),
     );
     void Promise.resolve(running).then(
       () => settleChatFollowups(ids, null),

@@ -139,6 +139,13 @@ const ALLOWED: ReadonlyArray<{ method: string; path: RegExp }> = [
   // outside identity, standing instructions (soul, byte-capped), avatar,
   // notifications, and voice preferences.
   { method: "PATCH", path: /^\/api\/bots\/[\w-]+\/profile$/ },
+  // Phone bot settings use the same narrow handlers and admin checks as
+  // desktop. Import/delete stay closed; only reviewed enablement is exposed.
+  { method: "GET", path: /^\/api\/bots\/[\w-]+\/skills$/ },
+  { method: "GET", path: /^\/api\/bots\/[\w-]+\/skills\/[a-z0-9-]+$/ },
+  { method: "PATCH", path: /^\/api\/bots\/[\w-]+\/skills\/[a-z0-9-]+$/ },
+  // Read-only discovery; exact-thread selection uses the existing task PATCH.
+  { method: "GET", path: /^\/api\/bots\/[\w-]+\/runtime$/ },
   // Full model selection, but no other bot settings. The harness validates
   // the live catalog and refuses changes while the bot is working.
   { method: "PATCH", path: /^\/api\/bots\/[\w-]+\/model$/ },
@@ -213,6 +220,7 @@ const ALLOWED: ReadonlyArray<{ method: string; path: RegExp }> = [
   { method: "GET", path: /^\/api\/threads\/[\w-]+\/messages\/[\w-]+\/image$/ },
   MESSAGE_FILE_ROUTE,
   { method: "POST", path: /^\/api\/threads\/[\w-]+\/messages\/[\w-]+\/reactions$/ },
+  { method: "POST", path: /^\/api\/threads\/[\w-]+\/messages\/[\w-]+\/ui$/ },
   { method: "GET", path: /^\/api\/threads\/[\w-]+\/export$/ },
   { method: "POST", path: /^\/api\/threads\/[\w-]+\/respond$/ },
   { method: "GET", path: /^\/api\/search$/ },

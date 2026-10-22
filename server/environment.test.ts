@@ -124,6 +124,8 @@ describe("environment identity", () => {
       label: "cab mini",
       platform: process.platform,
       version: "0.1.99",
+      minPhoneVersion: "2.1.3",
+      phoneUpdateUrls: { ios: "https://bosbot.my/get", android: "https://bosbot.my/updates/android.json" },
       multiplayerProtocol: 1,
       delegatedProtocol: 1,
       sharedConversationIsolation: 1,
@@ -137,7 +139,7 @@ describe("environment identity", () => {
     expect(environmentDescriptor({ environmentId: "abc", desktopManaged: true, sharedComputers: false }).capabilities)
       .not.toHaveProperty("sharedComputers");
     expect(environmentDescriptor({ environmentId: "abc", desktopManaged: true, sharedComputers: true }).capabilities)
-      .toEqual({ remoteSessions: true, sharedComputers: true, selfUpdate: "desktop-managed", emailSignIn: false });
+      .toEqual({ remoteSessions: true, sharedComputers: true, sharedBrowser: true, selfUpdate: "desktop-managed", emailSignIn: false });
   });
 
   it("reports the cloud move's state and epoch only, and null when not moved", () => {

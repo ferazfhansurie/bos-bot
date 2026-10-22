@@ -89,6 +89,7 @@ export function browserStreamPort(value: unknown): number {
 
 type Action = { type: "take" | "release" | "restart" } | { type: "ack"; seq: number }
   | { type: "command"; args: string[] } | { type: "input"; message: ObjectValue }
+  | { type: "input_batch"; messages: ObjectValue[] }
   | { type: "tap"; seq: number; x: number; y: number };
 
 /** HTTP bodies can select a fixed action, never a CLI command, flag, port or CDP method. */
@@ -111,6 +112,16 @@ export function parseBrowserLiveAction(value: unknown): Action {
   if (body.type === "tab-select" || body.type === "tab-close") {
     if (typeof body.tabId !== "string" || !/^t[1-9]\d{0,8}$/.test(body.tabId)) throw invalid();
     return { type: "command", args: body.type === "tab-select" ? ["tab", body.tabId] : ["tab", "close", body.tabId] };
+  }
+  if (body.type === "input_batch") {
+    // A slow link sends queued input in one request. Only raw input fits:
+    // a batch never carries navigation, commands or control changes.
+    if (!Array.isArray(body.events) || !body.events.length || body.events.length > 64) throw invalid();
+    return { type: "input_batch", messages: body.events.map((event) => {
+      const parsed = object(event)?.type === "input_batch" ? null : parseBrowserLiveAction(event);
+      if (parsed?.type !== "input") throw invalid();
+      return parsed.message;
+    }) };
   }
   if (body.type === "tap") {
     if (!integer(body.seq, 1, Number.MAX_SAFE_INTEGER) || !number(body.x, 0, 8192) || !number(body.y, 0, 8192)) throw invalid();
@@ -510,6 +521,10 @@ export class BrowserLive {
           catch (error) { this.abandonPressedInput(viewer); throw error; }
         }
         else if (action.type === "input") await this.input(viewer, action.message);
+        else if (action.type === "input_batch") for (const message of action.messages) {
+          if (!this.current(viewer)) throw new BrowserLiveError("This browser view closed.", 409);
+          await this.input(viewer, message);
+        }
         else if (action.type === "command") await this.command(viewer, action.args);
       });
       return { ok: true };

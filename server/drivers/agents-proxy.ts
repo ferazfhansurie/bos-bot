@@ -44,6 +44,7 @@ import { normalizeCronSchedule } from "../../shared/routine-schedule.ts";
 import { agentToolAnnotations } from "../agent-tool-policy.ts";
 
 import { peerName } from "../peer-roster.ts";
+import { MOD_REQUEST_AGENT_TOOLS } from "../../shared/mods.ts";
 import { boundedAgentResult } from "./agents-result.ts";
 
 const HARNESS = compatEnv.OMB_HARNESS_URL ?? "http://127.0.0.1:8799";
@@ -473,6 +474,11 @@ const TOOLS = [
     inputSchema: { type: "object", additionalProperties: false, properties: {
       reason: { type: "string", minLength: 1, maxLength: 500, description: "A brief reason for the call, used as the notification and spoken opener." },
     }, required: ["reason"] },
+  },
+  {
+    name: "health_check",
+    description: "Check BOS health when the owner asks you to diagnose or fix BOS. Returns the same engine sign-in, CLI, server, WhatsApp, disk, update and push checks as Settings → Health, plus recovery notices and safe mode. This tool only checks; explain the available safe actions or guide the owner to Settings → Health. It does not restart BOS, change accounts, delete data or send a report.",
+    inputSchema: { type: "object", additionalProperties: false, properties: {} },
   },
   {
     name: "list_bots",
@@ -945,6 +951,22 @@ const TOOLS = [
     },
   },
   {
+    name: "mods_list", description: "List your desktop UI mods, their surfaces, permissions and enable state. Private direct conversations only.",
+    inputSchema: { type: "object", additionalProperties: false, properties: {} },
+  },
+  {
+    name: "mod_read", description: "Read your mod manifest and HTML/JS/CSS files before editing.",
+    inputSchema: { type: "object", additionalProperties: false, properties: { id: { type: "string" } }, required: ["id"] },
+  },
+  {
+    name: "mod_write", description: "Create or replace your desktop UI mod. Read make-mod skill first. Bundle contains a strict manifest (id, name, version, description, surfaces, permissions) and files (index.html plus flat .js/.css). Saving turns it off; the owner reviews permissions and enables it in Settings → Mods. Never claim it is enabled.",
+    inputSchema: { type: "object", additionalProperties: false, properties: { bundle: { type: "object", properties: { manifest: { type: "object" }, files: { type: "object", additionalProperties: { type: "string" } } }, required: ["manifest", "files"], additionalProperties: false } }, required: ["bundle"] },
+  },
+  {
+    name: "mod_delete", description: "Remove your named desktop mod when the user asks. Read the exact id first.",
+    inputSchema: { type: "object", additionalProperties: false, properties: { id: { type: "string" } }, required: ["id"] },
+  },
+  {
     name: "pages_list",
     description: "List the owner's pages (documents) that belong to you, newest first, with id, title, snippet and open comment count. Pages are rich documents the owner edits beside the chat. Optional query filters by title or text. Not available in rooms.",
     inputSchema: { type: "object", additionalProperties: false, properties: {
@@ -1093,12 +1115,13 @@ const ROOM_ONLY_TOOLS = new Set(["list_room_targets", "coordinate_bots", "list_l
 const ROOM_REPLACED_TOOLS = new Set(["ask_bot", "delegate_bot", "check_delegation", "wait_delegation", "start_thread", "send_to_thread", "wait_thread"]);
 const COORDINATING = compatEnv.OMB_ROOM_TURN === "1";
 // Pages are the owner's private documents; a room can hold clients.
+const MOD_TOOL_NAMES = new Set(["mods_list", "mod_read", "mod_write", "mod_delete"]);
 const PAGE_TOOL_NAMES = new Set(["pages_list", "page_read", "page_create", "page_write", "page_edit", "page_comment"]);
 // Videos are private the same way.
 const VIDEO_TOOL_NAMES = new Set(["videos_list", "video_read", "video_create", "video_add_media", "video_edit", "video_render", "video_snapshot"]);
 const OWN_THREAD_CREATION = compatEnv.OMB_OWN_THREAD_CREATION === "1";
-const AVAILABLE_TOOLS = COORDINATING
-  ? SHAREABLE_TOOLS.filter(tool => !PAGE_TOOL_NAMES.has(tool.name) && !VIDEO_TOOL_NAMES.has(tool.name))
+const AVAILABLE_TOOLS_FOR_TURN = COORDINATING
+  ? SHAREABLE_TOOLS.filter(tool => !PAGE_TOOL_NAMES.has(tool.name) && !VIDEO_TOOL_NAMES.has(tool.name) && !MOD_TOOL_NAMES.has(tool.name))
     .filter(tool => !ROOM_REPLACED_TOOLS.has(tool.name) || (tool.name === "start_thread" && OWN_THREAD_CREATION))
     .map(tool => tool.name === "start_thread" ? {
       ...tool,
@@ -1108,6 +1131,11 @@ const AVAILABLE_TOOLS = COORDINATING
       } },
     } : tool)
   : SHAREABLE_TOOLS.filter(tool => !ROOM_ONLY_TOOLS.has(tool.name));
+// A mod's bots:ask / apps:call turn reads only; the harness refuses the rest too.
+const MOD_TURN = compatEnv.OMB_MOD_TURN === "1";
+const AVAILABLE_TOOLS = MOD_TURN
+  ? AVAILABLE_TOOLS_FOR_TURN.filter(tool => MOD_REQUEST_AGENT_TOOLS.has(tool.name))
+  : AVAILABLE_TOOLS_FOR_TURN;
 
 type Json = Record<string, unknown>;
 type RoutineAction = "update" | "pause" | "resume" | "run_now" | "delete";
@@ -1319,6 +1347,16 @@ function resolvePath(path: string): string {
 }
 
 async function callTool(name: string, args: Json): Promise<{ text: string; isError?: boolean }> {
+  if (MOD_TOOL_NAMES.has(name)) {
+    const bundle = args.bundle as Json | undefined;
+    const manifest = bundle?.manifest as Json | undefined;
+    const id = name === "mod_write" ? manifest?.id : args.id;
+    if (name !== "mods_list" && (typeof id !== "string" || !/^[a-z][a-z0-9-]{0,63}$/.test(id))) return { text: "Use an exact mod id from mods_list, or a new lowercase slug.", isError: true };
+    const path = `/api/internal/mods${name === "mods_list" ? "" : `/${id}`}`;
+    const r = await apiResponse(path, name === "mod_write" ? { method: "PUT", body: JSON.stringify({ bundle }) } : name === "mod_delete" ? { method: "DELETE" } : undefined);
+    if (!r.ok) return { text: String(r.body.error ?? `HTTP ${r.status}`), isError: true };
+    return { text: JSON.stringify(r.body) + (name === "mod_write" ? "\nSaved off. The owner can review permissions and enable it in Settings → Mods; no restart needed." : "") };
+  }
   if (VIDEO_TOOL_NAMES.has(name)) {
     const { text, isError } = await videoTool(name, args);
     return { text, isError };
@@ -1417,6 +1455,10 @@ async function callTool(name: string, args: Json): Promise<{ text: string; isErr
       groupId: canonical.group_id, botIds: ids, message: canonical.message,
       requestKey: canonical.request_key, rework: canonical.rework, label: canonical.label,
     }) });
+    return { text: JSON.stringify(r), ...(r.error ? { isError: true } : {}) };
+  }
+  if (name === "health_check") {
+    const r = await api("/api/internal/doctor");
     return { text: JSON.stringify(r), ...(r.error ? { isError: true } : {}) };
   }
   if (name === "list_bots") {

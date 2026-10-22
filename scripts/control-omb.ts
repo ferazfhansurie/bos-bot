@@ -397,6 +397,8 @@ export async function launchVerificationServer(
   /** Test-only remote transport: an exact synthetic tailnet name mapped to an
    * owned loopback fixture. Runtime server code has no test transport switch. */
   delegatedFixture?: { origin: string; prepare(dataDir: string): void },
+  /** Slow, parallel native builds may need a longer isolated-server boot budget. */
+  startupTimeoutMs = 20_000,
 ): Promise<VerificationServer> {
   if (boxFixtureApi) {
     if (!/^http:\/\/127\.0\.0\.1:[1-9]\d{0,4}$/.test(boxFixtureApi)) {
@@ -472,7 +474,10 @@ export async function launchVerificationServer(
   });
   closeSync(log);
 
-  const deadline = Date.now() + 20_000;
+  // Parallel worktrees may compile providers/mobile clients at the same time.
+  // The override is launcher-only and never reaches the fixture environment.
+  const startupMs = Number(parentEnv.BOS_FIXTURE_STARTUP_TIMEOUT_MS ?? parentEnv.BOS_VERIFY_STARTUP_TIMEOUT_MS);
+  const deadline = Date.now() + (Number.isFinite(startupMs) && startupMs >= 20_000 ? Math.min(startupMs, 120_000) : Math.max(20_000, Math.min(120_000, startupTimeoutMs)));
   try {
     for (;;) {
       if (signal?.aborted) throw new ControlOmbError("verification launch cancelled");

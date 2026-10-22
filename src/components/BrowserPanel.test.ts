@@ -22,7 +22,7 @@ vi.mock("react", async (importOriginal) => {
     },
   };
 });
-vi.mock("@/state/store", () => ({ api: vi.fn().mockResolvedValue({}), useStore: () => ({ state: { config: { browserProfiles: [] } } }) }));
+vi.mock("@/state/store", () => ({ api: vi.fn().mockResolvedValue({}), ApiError: class extends Error {}, useStore: () => ({ state: { config: { browserProfiles: [] } } }) }));
 vi.mock("./BrowserProfilesManager", () => ({ BrowserProfilesManager: () => null }));
 vi.mock("@/lib/browser-input-queue", () => ({ createBrowserInputQueue: () => {
   const queue = { enqueue: vi.fn(), clear: vi.fn(), drain: vi.fn().mockResolvedValue(undefined) };

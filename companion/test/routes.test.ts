@@ -33,6 +33,21 @@ describe("credentials", () => {
 });
 
 describe("what the app may do", () => {
+  it("opens phone skill review and computer discovery without exposing skill import or delete", () => {
+    for (const [method, path] of [
+      ["GET", "/api/bots/b/skills"], ["GET", "/api/bots/b/skills/awake"],
+      ["PATCH", "/api/bots/b/skills/awake"], ["GET", "/api/bots/b/runtime"],
+    ]) {
+      expect(ask(method, path)).toBeNull();
+      expect(ask(method, path, false)?.status).toBe(401);
+    }
+    for (const [method, path] of [
+      ["POST", "/api/bots/b/skills"], ["DELETE", "/api/bots/b/skills/awake"],
+      ["POST", "/api/bots/b/runtime"], ["GET", "/api/bots/b/skills/awake/files"],
+      ["GET", "/api/bots/b/skills/%2e%2e"],
+    ]) expect(allowed(method, path)).toBe(false);
+  });
+
   it("allows an authenticated resume without opening review or unscoped replay", () => {
     const path = "/api/bots/b/threads/t/recovery/r/resume";
     expect(ask("POST", path)).toBeNull();
@@ -112,6 +127,7 @@ describe("what the app may do", () => {
     ["GET", "/api/threads/th_1/messages/msg_2/image"],
     ["POST", "/api/threads/th_1/messages/msg_2/file"],
     ["POST", "/api/threads/th_1/messages/msg_2/reactions"],
+    ["POST", "/api/threads/th_1/messages/msg_2/ui"],
     ["GET", "/api/threads/th_1/export"],
     ["POST", "/api/threads/th_1/respond"],
     ["GET", "/api/search"],

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ArrowLeft, ArrowRight, EllipsisVertical, Globe, Hand, Loader2, Maximize2, Plus, RotateCw, UserRound, X } from "lucide-react";
 import { browserUnavailableReason } from "@/lib/feature-flags";
-import { api, useStore, type Bot } from "@/state/store";
+import { api, ApiError, useStore, type Bot } from "@/state/store";
 import { BrowserProfilesManager } from "./BrowserProfilesManager";
 import { BrowserViewport, type BrowserFrame } from "./BrowserViewport";
 import { createBrowserInputQueue } from "@/lib/browser-input-queue";
@@ -89,8 +89,16 @@ export function LiveBrowser({ bot }: { bot: Bot }) {
       if (typeof data.viewerId !== "string" || !data.viewerId) return;
       const expected = data.viewerId;
       viewer.current = expected;
-      inputQueue.current = createBrowserInputQueue(async (body) => {
-        if (ownsConnection() && viewer.current === expected) await action(body, expected);
+      // A server older than input_batch rejects it as invalid before running
+      // any of it, so falling back to one request per event replays nothing.
+      let batches = true;
+      inputQueue.current = createBrowserInputQueue(async (bodies) => {
+        if (!ownsConnection() || viewer.current !== expected) return;
+        if (batches && bodies.length > 1) {
+          try { await action({ type: "input_batch", events: bodies }, expected); return; }
+          catch (cause) { if (!(cause instanceof ApiError && cause.status === 400)) throw cause; batches = false; }
+        }
+        for (const body of bodies) if (ownsConnection() && viewer.current === expected) await action(body, expected);
       }, (cause) => {
         if (!ownsConnection() || viewer.current !== expected) return;
         haltMessage.current = cause instanceof Error ? cause.message : String(cause);

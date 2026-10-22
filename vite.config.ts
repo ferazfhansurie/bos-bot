@@ -14,6 +14,15 @@ const { version } = JSON.parse(
 
 export default defineConfig({
   plugins: [react(), tailwindcss()],
+  build: {
+    rollupOptions: {
+      // the notch (electron/notch.mjs) is its own small page
+      input: {
+        main: fileURLToPath(new URL("./index.html", import.meta.url)),
+        notch: fileURLToPath(new URL("./notch.html", import.meta.url)),
+      },
+    },
+  },
   define: {
     __APP_VERSION__: JSON.stringify(version),
     // Cloud rooms (bos 2.0) stay off unless the build opts in.
@@ -33,7 +42,7 @@ export default defineConfig({
       "standalone/**/*.test.mjs",
     ],
     // node:test suites; `pnpm test:scripts` runs them under node --test.
-    exclude: [...configDefaults.exclude, "scripts/bos-readiness.test.mjs", "scripts/enterprise-export-bot.test.mjs", "scripts/linux-package-contract.test.mjs", "scripts/release-contract.test.mjs"],
+    exclude: [...configDefaults.exclude, "scripts/bos-readiness.test.mjs", "scripts/enterprise-export-bot.test.mjs", "scripts/linux-package-contract.test.mjs", "scripts/release-contract.test.mjs", "scripts/release-stage.test.mjs"],
     setupFiles: ["server/testing/setup.ts"],
     // the suite spawns fake provider CLIs and a real harness server;
     // parallel files introduce load-sensitive flakes for no win

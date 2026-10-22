@@ -33,9 +33,9 @@ const sourceChecks = ['electron/main.mjs', 'electron/preload.cjs', 'electron/too
   assert.ok(bytes.equals(readFileSync(join(repo, p))), `archive differs: ${p}`);
   return { path: p, sha256: sha(bytes) };
 });
-const required = ['ui/index.html', 'server/index.js', 'companion', 'skills', 'licenses', 'cua-driver', 'cua-sdk/cua-sdk.mjs', 'cua-sdk/native/libcua_driver_sdk.dylib', 'cua-sdk/native/cua_driver_node_runtime.node', 'cloudflared/cloudflared', 'browser-engine/manifest.json', 'android-platform-tools/darwin/adb', 'BOS Bot Speech.app/Contents/MacOS/speech-helper', 'updater/preflight.py', 'updater/no-downgrade.py'];
+const required = ['ui/index.html', 'server/index.js', 'companion', 'skills', 'licenses', 'cua-driver', 'cua-sdk/cua-sdk.mjs', 'cua-sdk/native/libcua_driver_sdk.dylib', 'cua-sdk/native/cua_driver_node_runtime.node', 'cloudflared/cloudflared', 'browser-engine/manifest.json', 'android-platform-tools/darwin/adb', 'BOS Bot Speech.app/Contents/MacOS/speech-helper', 'notch-helper', 'updater/preflight.py', 'updater/no-downgrade.py'];
 for (const p of required) statSync(join(resources, p));
-for (const p of ['cua-driver', 'cloudflared/cloudflared', 'android-platform-tools/darwin/adb', 'BOS Bot Speech.app/Contents/MacOS/speech-helper']) assert.ok(statSync(join(resources, p)).mode & 0o111, `not executable: ${p}`);
+for (const p of ['cua-driver', 'cloudflared/cloudflared', 'android-platform-tools/darwin/adb', 'BOS Bot Speech.app/Contents/MacOS/speech-helper', 'notch-helper']) assert.ok(statSync(join(resources, p)).mode & 0o111, `not executable: ${p}`);
 function treeDigest(name) {
   const root = join(resources, name), files = [];
   function walk(dir) { for (const e of readdirSync(dir, { withFileTypes: true })) { const p = join(dir, e.name); if (e.isDirectory()) walk(p); else if (e.isFile()) files.push(p); } }

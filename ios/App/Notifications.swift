@@ -28,6 +28,7 @@ final class NotificationCoordinator: NSObject, UNUserNotificationCenterDelegate 
         if let responseHandler { responseHandler(target) }
         else { pendingThreadTarget = target }
     }
+    var pushRegistrationFailureHandler: (@MainActor () -> Void)?
     var pushTokenHandler: ((String) -> Void)?
     var sharedRoomHandler: ((String, String?) -> Void)?
     var foregroundPresentation: (@MainActor (NotificationTarget) -> NotificationPresentation)?

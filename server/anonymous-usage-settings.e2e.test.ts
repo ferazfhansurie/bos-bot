@@ -4,7 +4,7 @@ import { expect, test } from "vitest";
 import { launchVerificationServer } from "../scripts/control-omb.ts";
 
 test("anonymous usage setting persists through the real server and env override wins", async () => {
-  const fixture = await launchVerificationServer();
+  const fixture = await launchVerificationServer({ BOS_FIXTURE_STARTUP_TIMEOUT_MS: "90000" });
   async function config(enabled?: boolean) {
     const response = await fetch(`${fixture.info.url}/api/config`, {
       method: enabled === undefined ? "GET" : "PATCH",
@@ -27,4 +27,4 @@ test("anonymous usage setting persists through the real server and env override 
     const health = await fetch(`${fixture.info.url}/api/health`);
     expect(health.ok).toBe(true);
   } finally { await fixture.close(); }
-}, 60_000);
+}, 120_000);

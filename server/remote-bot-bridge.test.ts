@@ -472,6 +472,24 @@ describe("RemoteBotBridge", () => {
     expect(Date.now() - started).toBeLessThan(2000);
   });
 
+  it("opens no thread on B for a locked home, but still uses the mapped one", async () => {
+    bridge.stop();
+    writeFileSync(join(dir, "remote-bots.json"), JSON.stringify({ version: 1, homes: { [HOME]: {
+      threads: { "shared-1": { botId: "pixie", createdAt: 1 } }, selected: { pixie: "shared-1" }, locked: true,
+    } } }));
+    fake.tasks.push({ threadId: "shared-1", title: "Hairul Chat", createdAt: 1, approvalMode: "auto", autoApprove: true });
+    fake.threads.set("shared-1", []);
+    bridge = make();
+    await bridge.listBots(0);
+    expect(bridge.homeForTest(HOME)!.state.locked).toBe(true);
+    expect((await route("POST", `/api/bots/${botId}/tasks`, { title: "another" })).status).toBe(403);
+    await expect(bridge.roomTurn({ homeId: HOME, remoteBotId: "pixie", title: "room · x", text: "hi", sendId: "locked-room",
+      onThread: () => {}, onActivity: () => {}, deadlineMs: Date.now() + 1000 })).rejects.toMatchObject({ status: 403 });
+    expect(taskCreates()).toBe(0);
+    expect((await route("POST", `/api/bots/${botId}/messages`, { text: "hi", threadId: `rt-${KEY}-shared-1` })).status).toBe(200);
+    expect(taskCreates()).toBe(0);
+  });
+
   it("keeps a room thread out of the relayed thread list after a restart", async () => {
     await bridge.listBots(0);
     await bridge.roomTurn({

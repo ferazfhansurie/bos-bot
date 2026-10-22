@@ -59,6 +59,21 @@ class ClientTest {
     }
 
     @Test
+    fun savingSmartUiStatePostsKeyAndStateToTheMessage() = runBlocking {
+        server.enqueue(json("{}"))
+        client.setUiState(
+            "t1", "m1", "b1x",
+            kotlinx.serialization.json.buildJsonObject { put("rating", kotlinx.serialization.json.JsonPrimitive(4)) },
+        )
+        val request = server.takeRequest()
+        assertEquals("POST /api/threads/t1/messages/m1/ui", "${request.method} ${request.path}")
+        assertEquals(
+            kotlinx.serialization.json.Json.parseToJsonElement("""{"key":"b1x","state":{"rating":4}}"""),
+            kotlinx.serialization.json.Json.parseToJsonElement(request.body.readUtf8()),
+        )
+    }
+
+    @Test
     fun readingCallsMatchTheAllowlist() = runBlocking {
         server.enqueue(json("""{"ok":true}"""))
         server.enqueue(json(fixtureText("bots-paged")))

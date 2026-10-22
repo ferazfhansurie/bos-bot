@@ -106,7 +106,28 @@ function harness(start = new Date(2026, 7, 17, 8, 0, 0).getTime()) {
 
 afterEach(() => {
   vi.restoreAllMocks();
+  vi.unstubAllEnvs();
   for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+});
+
+it("safe mode pauses schedules, queued work, manual runs and webhooks without disabling definitions", async () => {
+  const start = Date.parse("2026-09-13T08:00:00Z");
+  const h = harness(start);
+  const routine = h.manager.create({ name: "Paused", prompt: "Wait", botId: "fixture",
+    schedule: { type: "interval", everyMinutes: 5, anchorAt: start } });
+  h.setBot("busy");
+  h.manager.runNow(routine.id);
+  h.setBot("ready");
+  h.setNow(start + 6 * 60_000);
+  vi.stubEnv("BOS_SAFE_MODE", "1");
+  h.manager.start();
+  await h.manager.tick();
+  expect(h.started).toEqual([]);
+  expect(h.manager.listRuns()[0].status).toBe("queued");
+  expect(() => h.manager.runNow(routine.id)).toThrow(/safe mode/i);
+  expect(() => h.manager.enqueueWebhook({ webhookId: "hook", webhookName: "Hook", prompt: "Wait", botId: "fixture", runOn: "maus", deliveryId: "one", receivedAt: Date.now() })).toThrow(/safe mode/i);
+  h.manager.stop();
+  expect(h.manager.listRoutines()[0].enabled).toBe(true);
 });
 
 describe("bounded scheduled overlap and run health", () => {

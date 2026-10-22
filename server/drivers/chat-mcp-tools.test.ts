@@ -78,6 +78,50 @@ describe("Chat MCP session", () => {
     expect(custom.readOnly("agents_list_bots")).toBe(false);
   });
 
+  it("mounts the host computer and marks only its tools as host control", async () => {
+    const f = fixture();
+    const host = await mountChatTools({ localComputer: { ...f.server, scope: "local-computer" }, custom: { computer: f.server } }, f.controller.signal);
+    sessions.push(host);
+    expect(host.definitions.map((tool) => tool.function.name)).toEqual(["computer_write", "computer_write_2"]);
+    expect(host.hostControl("computer_write")).toBe(true);
+    expect(host.hostControl("computer_write_2")).toBe(false);
+    expect(host.readOnly("computer_write")).toBe(false);
+    // an isolated computer has no host scope, so no host card
+    const vm = await mountChatTools({ localComputer: f.server }, f.controller.signal);
+    sessions.push(vm);
+    expect(vm.hostControl("computer_write")).toBe(false);
+  });
+
+  it("keeps a computer call's outcome when it returns a screenshot, but not a custom server's", async () => {
+    const f = fixture(`if(message.method === "tools/call") { reply(message,{content:[{type:"text",text:"window tree"},{type:"image",data:"fixture",mimeType:"image/png"}]}); continue; }`);
+    const session = await mountChatTools({ localComputer: { ...f.server, scope: "local-computer" }, custom: { audit: f.server } }, f.controller.signal);
+    sessions.push(session);
+    const shot = await session.execute("computer_write", {value:"valid"}, f.controller.signal);
+    expect(shot.ok).toBe(true);
+    expect(shot.text).toContain("window tree");
+    expect(shot.text).toContain("1 screenshot(s) omitted");
+    await expect(session.execute("audit_write", {value:"valid"}, f.controller.signal)).resolves.toMatchObject({ ok: false });
+  });
+
+  it("hands the signed-in member to custom tools and ignores a configured or model-supplied identity", async () => {
+    const f = fixture(`if (message.method === "tools/list") { reply(message, {tools:[{name:"read",description:"x",inputSchema:schema},{name:"write",description:"x",inputSchema:schema}]}); continue; }
+        if (message.method === "tools/call") { reply(message, {content:[{type:"text",text:String(process.env.BOS_MEMBER)}]}); continue; }`);
+    const member = { userId: "sam@example.com", name: "Sam", roles: ["Sales User"], sessionId: "s-1" };
+    const server = { ...f.server, env: { ...f.server.env, BOS_MEMBER: "{\"userId\":\"spoof\"}" }, autoApprove: ["read"] };
+    const session = await mountChatTools({ custom: { audit: server } }, f.controller.signal, member);
+    sessions.push(session);
+    expect(session.readOnly("audit_read")).toBe(true);
+    expect(session.readOnly("audit_write")).toBe(false);
+    const result = await session.execute("audit_write", { value: "x" }, f.controller.signal);
+    expect(JSON.parse(result.text)).toEqual(member);
+    expect(f.read().calls.at(-1)).toMatchObject({ method: "tools/call", params: { name: "write", _meta: { "bos/member": member } } });
+
+    const anonymous = await mountChatTools({ custom: { audit: server } }, f.controller.signal);
+    sessions.push(anonymous);
+    expect((await anonymous.execute("audit_write", { value: "x" }, f.controller.signal)).text).toBe("undefined");
+    expect((f.read().calls.at(-1)?.params as { _meta?: unknown })._meta).toBeUndefined();
+  });
+
   it("discovers without executing, preserves schemas and validates before forwarding original arguments", async () => {
     const f = fixture();
     const session = await f.mount();

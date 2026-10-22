@@ -7,6 +7,7 @@ import { compatEnv, compatEnvironment } from "../electron/branding-env.cjs";
 import { join } from "node:path";
 
 import { DATA_DIR } from "./config.ts";
+import type { TurnMember } from "./contracts.ts";
 import { DEFAULT_RESULT_BUDGET } from "./mcp-trim.ts";
 import { SPAWNED_PROXIES } from "./proxy-paths.ts";
 
@@ -52,6 +53,8 @@ export function gateServer(input: {
   /** node flags the harness spawns its own helpers with */
   nodeEnv?: Record<string, string>;
   execPath?: string;
+  /** Stamped onto every tools/call as `_meta["bos/member"]`. */
+  member?: TurnMember;
 }): { command: string; args: string[]; env: Record<string, string> } | null {
   const { name, server, budget } = input;
   if (budget <= 0) return null;
@@ -67,6 +70,7 @@ export function gateServer(input: {
       OMB_GATE_UPSTREAM: JSON.stringify({ command: spec.command, args: spec.args ?? [], env: spec.env ?? {} }),
       OMB_GATE_SPILL_DIR: spillDir(input.threadId),
       OMB_GATE_BUDGET: String(budget),
+      ...(input.member ? { OMB_GATE_MEMBER: JSON.stringify(input.member) } : {}),
     },
   };
 }

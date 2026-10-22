@@ -55,6 +55,22 @@ it("preserves all sqlite transcript branches, queued sends and persisted avatars
   expect(saved.bytes).toBe(3);
 });
 
+it("keeps attachments referenced only by a quarantined message database or roster", () => {
+  const quarantinedDb = file(0, 4, 9);
+  const quarantinedWal = file(1, 4, 8);
+  const quarantinedRoster = file(2, 4, 7);
+  file(3, ATTACHMENTS_MAX_BYTES - 16, 3);
+  const garbage = file(4, 4, 6);
+  const name = "messages.db.corrupt-123-7b271374-51fb-4fe9-8147-844f83550dd5";
+  // Unopenable bytes: damaged header, then a transcript row fragment.
+  writeFileSync(join(root, name), Buffer.concat([Buffer.from("not a database\0\xff"), Buffer.from(JSON.stringify({ text: `<attached-image path="${quarantinedDb}"/>` }))]));
+  writeFileSync(join(root, `${name}-wal`), `\0\0${names[1]}\0`);
+  writeFileSync(join(root, "bots.json.corrupt-123-7b271374-51fb-4fe9-8147-844f83550dd5"), `[{"avatarUrl":"/api/attachments/${names[2]}"`);
+  saveImage(Buffer.from("new"), "image/png");
+  expect([quarantinedDb, quarantinedWal, quarantinedRoster].every(existsSync)).toBe(true);
+  expect(existsSync(garbage)).toBe(false);
+});
+
 it("protects fresh uploads and unknown filenames with an actionable storage error", () => {
   const recent = file(0, ATTACHMENTS_MAX_BYTES - 1, 0);
   const unknown = join(ATTACHMENTS_DIR, "notes.txt");

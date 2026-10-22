@@ -37,23 +37,23 @@ it("walks a fresh workspace from start to first task, posting each scripted line
     const started = await event({ type: "start" });
     expect(started.status).toBe(200);
     let state: OnboardingChatState = started.body.state;
-    expect(state).toMatchObject({ botName: "BOS", connected: [], completedAt: "" });
-    expect(["engine", "apps"]).toContain(state.step);
+    expect(state).toMatchObject({ botName: "BOS", connected: [] });
+    expect(["engine", "done"]).toContain(state.step);
     expect((await api("GET", "/api/config")).body.onboarding.chat).toEqual(state);
     const thread = () => api("GET", `/api/threads/${state.threadId}/messages`).then((r) => r.body.messages as any[]);
     const opening = await thread();
-    // one greeting with the starter jobs, then the one thing to do next
+    // one greeting with the starter jobs, and the sign-in only when no engine can run
     const lines = onboardingLines(opening);
     expect(lines[0]).toMatchObject({ step: "greet", card: { kind: "suggestions" } });
     expect(lines[0].text).toContain("Hi Ada, I'm BOS");
-    expect(lines[1].step).toBe(state.step);
+    expect(lines.map((line) => line.step)).toEqual(state.step === "engine" ? ["greet", "engine"] : ["greet"]);
     // the first-run seed greeting is taken over, not left above the new one
     expect(opening.some((row) => row.text?.startsWith("I'm BOS, your first AI teammate"))).toBe(false);
     expect(opening.every((row) => row.onboarding)).toBe(true);
     expect((await event({ type: "start" })).body.state).toEqual(state);
     expect((await event({ type: "name", value: "Other" })).body.state).toEqual(state);
     if (state.step === "engine") state = (await event({ type: "engine-ready" })).body.state;
-    expect(state.step).toBe("apps");
+    expect(state.step).toBe("done");
 
     const before = onboardingLines(await thread());
     // each line exactly once
@@ -114,19 +114,19 @@ describe("applyOnboardingChatEvent", () => {
     expect(state.step).toBe("engine");
     expect(rows.map((r) => r.onboarding?.step)).toEqual(["greet", "engine"]);
     state = applyOnboardingChatEvent(host, state, { type: "engine-ready" });
-    expect(state.step).toBe("apps");
+    expect(state.step).toBe("done");
     const count = rows.length;
     state = applyOnboardingChatEvent(host, state, { type: "engine-ready" });
     expect(rows).toHaveLength(count);
   });
 
-  it("with an engine ready, greets then offers apps, and passing on them ends setup", () => {
+  it("with an engine ready, posts one greeting and ends setup", () => {
     const { host, rows } = memoryHost();
-    let state = applyOnboardingChatEvent(host, initialOnboardingState("b1", "t1", "BOS", true), { type: "start" });
-    expect(rows.map((r) => r.onboarding?.step)).toEqual(["greet", "apps", "apps", "apps"]);
-    state = applyOnboardingChatEvent(host, state, { type: "skip" });
+    const state = applyOnboardingChatEvent(host, initialOnboardingState("b1", "t1", "BOS", true), { type: "start" });
+    expect(rows.map((r) => r.onboarding?.step)).toEqual(["greet"]);
     expect(state.step).toBe("done");
-    expect(rows).toHaveLength(4);
+    expect(applyOnboardingChatEvent(host, state, { type: "start" })).toBe(state);
+    expect(rows).toHaveLength(1);
   });
 
   it("does not save an unchanged record", () => {

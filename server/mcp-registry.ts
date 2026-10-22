@@ -97,11 +97,15 @@ const RESERVED_MCP_NAMES = new Set([
   "openmausbot_sandbox",
 ]);
 
+/** Tool names that skip the approval card (an owner's call, in config.json). */
+const autoApproveSchema = z.array(z.string().regex(/^[A-Za-z0-9_.-]{1,64}$/, "autoApprove holds tool names")).max(128).optional();
+
 const stdioEntrySchema = z.object({
   command: z.string().trim().min(1).max(1_024),
   args: z.array(z.string().max(4_096)).max(MAX_ARGS).optional(),
   env: z.record(z.string(), z.string().max(16_384)).optional(),
   enabled: z.boolean().optional(),
+  autoApprove: autoApproveSchema,
 }).strict();
 
 const stdioMutationSchema = stdioEntrySchema.extend({
@@ -114,6 +118,7 @@ const remoteEntrySchema = z.object({
   url: z.string().trim().min(1).max(2_048),
   headers: z.record(z.string(), z.string().max(16_384)).optional(),
   enabled: z.boolean().optional(),
+  autoApprove: autoApproveSchema,
 }).strict();
 
 const remoteMutationSchema = remoteEntrySchema.extend({
@@ -179,6 +184,7 @@ function parseStdio(raw: unknown, mutation: boolean, existing?: StoredMcpServer)
       args: parsed.data.args ?? [],
       env: env.values,
       enabled: enabledFor(parsed.data.enabled, mutation, existing),
+      ...autoApproveFor(parsed.data.autoApprove, mutation, existing),
     },
   };
 }
@@ -205,6 +211,7 @@ function parseRemote(raw: unknown, mutation: boolean, existing?: StoredMcpServer
       url: parsed.data.url,
       headers: headers.values,
       enabled: enabledFor(parsed.data.enabled, mutation, existing),
+      ...autoApproveFor(parsed.data.autoApprove, mutation, existing),
     },
   };
 }
@@ -215,6 +222,12 @@ function parseRemote(raw: unknown, mutation: boolean, existing?: StoredMcpServer
 function enabledFor(value: boolean | undefined, mutation: boolean, existing?: StoredMcpServer): boolean {
   if (!mutation) return value !== false;
   return existing ? (value ?? existing.enabled) : false;
+}
+
+/** An app edit that does not mention autoApprove keeps the stored list. */
+function autoApproveFor(value: string[] | undefined, mutation: boolean, existing?: StoredMcpServer): { autoApprove?: string[] } {
+  const list = value ?? (mutation ? existing?.autoApprove : undefined);
+  return list?.length ? { autoApprove: [...new Set(list)] } : {};
 }
 
 export function parseStoredMcpServer(name: string, raw: unknown): Parsed {

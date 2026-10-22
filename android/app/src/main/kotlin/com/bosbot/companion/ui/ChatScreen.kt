@@ -57,6 +57,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -216,6 +217,17 @@ private fun LoadedChat(
     val chatDrafts = environment.chatDrafts
     val haptics = rememberHaptics()
     val scope = rememberCoroutineScope()
+    // Read through the updated state so a busy flag flipping does not mint a
+    // new thread object and recompose every block in the transcript.
+    val latestChat by androidx.compose.runtime.rememberUpdatedState(chat)
+    val smartUiThread = remember(session, threadId) {
+        SmartUiThread(
+            send = { text -> scope.launch { session.send(text, latestChat) } },
+            save = { messageId, key, state ->
+                scope.launch { session.saveUiState(threadId, messageId, key, state) }
+            },
+        )
+    }
     var threadOpenJob by remember { mutableStateOf<Job?>(null) }
     DisposableEffect(threadId) {
         onDispose { threadOpenJob?.cancel() }
@@ -852,114 +864,117 @@ private fun LoadedChat(
                         detectTapGestures { focusManager.clearFocus() }
                     },
             ) {
-                LazyColumn(
-                    state = listState,
-                    modifier = Modifier
-                        .align(Alignment.Center)
-                        .widthIn(max = CHAT_CONTENT_MAX_WIDTH)
-                        .fillMaxSize(),
-                    contentPadding = PaddingValues(
-                        start = 16.dp,
-                        end = 16.dp,
-                        // Room for the floating face when scrolled to the top.
-                        top = HEADER_CLEARANCE,
-                        bottom = 12.dp,
-                    ),
-                    verticalArrangement = Arrangement.spacedBy(6.dp),
-                ) {
-                    if (hasMore) {
-                        item(key = LOAD_EARLIER_KEY) {
-                            TextButton(
-                                onClick = {
-                                    // Keep the reader where they were: after older
-                                    // messages are prepended, sit back on the one
-                                    // that used to be at the top.
-                                    val anchor = transcript.firstOrNull()?.id
-                                    scope.launch {
-                                        session.loadOlder(threadId)
-                                        if (anchor == null) return@launch
-                                        val fresh = session.state.value
-                                        val freshRows = transcriptRows(
-                                            fresh.visibleTranscript(threadId),
-                                            activityDetail,
-                                        )
-                                        val index = freshRows.indexOfFirst { row ->
-                                            row.id == anchor ||
-                                                (row as? TranscriptRow.ActivityRun)
-                                                    ?.items
-                                                    ?.any { it.id == anchor } == true
+                // Smart ui buttons post here as the person; typed values save on the message.
+                CompositionLocalProvider(LocalSmartUiThread provides smartUiThread) {
+                    LazyColumn(
+                        state = listState,
+                        modifier = Modifier
+                            .align(Alignment.Center)
+                            .widthIn(max = CHAT_CONTENT_MAX_WIDTH)
+                            .fillMaxSize(),
+                        contentPadding = PaddingValues(
+                            start = 16.dp,
+                            end = 16.dp,
+                            // Room for the floating face when scrolled to the top.
+                            top = HEADER_CLEARANCE,
+                            bottom = 12.dp,
+                        ),
+                        verticalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        if (hasMore) {
+                            item(key = LOAD_EARLIER_KEY) {
+                                TextButton(
+                                    onClick = {
+                                        // Keep the reader where they were: after older
+                                        // messages are prepended, sit back on the one
+                                        // that used to be at the top.
+                                        val anchor = transcript.firstOrNull()?.id
+                                        scope.launch {
+                                            session.loadOlder(threadId)
+                                            if (anchor == null) return@launch
+                                            val fresh = session.state.value
+                                            val freshRows = transcriptRows(
+                                                fresh.visibleTranscript(threadId),
+                                                activityDetail,
+                                            )
+                                            val index = freshRows.indexOfFirst { row ->
+                                                row.id == anchor ||
+                                                    (row as? TranscriptRow.ActivityRun)
+                                                        ?.items
+                                                        ?.any { it.id == anchor } == true
+                                            }
+                                            if (index < 0) return@launch
+                                            // The "load earlier" row is item 0 for as
+                                            // long as there is still more to fetch.
+                                            val offset = if (fresh.hasMore[threadId] == true) 1 else 0
+                                            listState.scrollToItem(index + offset)
                                         }
-                                        if (index < 0) return@launch
-                                        // The "load earlier" row is item 0 for as
-                                        // long as there is still more to fetch.
-                                        val offset = if (fresh.hasMore[threadId] == true) 1 else 0
-                                        listState.scrollToItem(index + offset)
-                                    }
-                                },
-                                modifier = Modifier.fillMaxWidth(),
-                            ) {
-                                Text(localized("Load earlier messages"), fontSize = 13.sp)
+                                    },
+                                    modifier = Modifier.fillMaxWidth(),
+                                ) {
+                                    Text(localized("Load earlier messages"), fontSize = 13.sp)
+                                }
                             }
                         }
-                    }
 
-                    itemsIndexedKeyed(transcript) { index, message ->
-                        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                            // A gap in time is worth marking; a timestamp on every
-                            // message is just noise.
-                            if (TranscriptLayout.startsNewRowStretch(transcript, index)) {
-                                Text(
-                                    text = RelativeStamp.separator(
-                                        message.at,
-                                        System.currentTimeMillis(),
-                                        locale = Locale.getDefault(),
-                                    ),
-                                    fontSize = 13.sp,
-                                    color = secondaryTint,
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .padding(top = 6.dp),
-                                    textAlign = TextAlign.Center,
-                                )
-                            }
-                            when (message) {
-                                is TranscriptRow.Single -> MessageRow(
-                                    chat = chat,
-                                    message = message.message,
-                                    // One tail per run of bubbles from the same author,
-                                    // not one per bubble.
-                                    endsRun = TranscriptLayout.endsRowRun(transcript, index),
-                                    openLink = ::openLink,
-                                    openAttachment = ::openAttachment,
-                                    openThread = ::openThread,
-                                )
-                                is TranscriptRow.ActivityRun -> ActivityRunChip(message.items, ::openThread)
+                        itemsIndexedKeyed(transcript) { index, message ->
+                            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                // A gap in time is worth marking; a timestamp on every
+                                // message is just noise.
+                                if (TranscriptLayout.startsNewRowStretch(transcript, index)) {
+                                    Text(
+                                        text = RelativeStamp.separator(
+                                            message.at,
+                                            System.currentTimeMillis(),
+                                            locale = Locale.getDefault(),
+                                        ),
+                                        fontSize = 13.sp,
+                                        color = secondaryTint,
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(top = 6.dp),
+                                        textAlign = TextAlign.Center,
+                                    )
+                                }
+                                when (message) {
+                                    is TranscriptRow.Single -> MessageRow(
+                                        chat = chat,
+                                        message = message.message,
+                                        // One tail per run of bubbles from the same author,
+                                        // not one per bubble.
+                                        endsRun = TranscriptLayout.endsRowRun(transcript, index),
+                                        openLink = ::openLink,
+                                        openAttachment = ::openAttachment,
+                                        openThread = ::openThread,
+                                    )
+                                    is TranscriptRow.ActivityRun -> ActivityRunChip(message.items, ::openThread)
+                                }
                             }
                         }
-                    }
 
-                    if (rawTranscript.isEmpty() && state.hasLoadedPage(threadId) && !chat.busy && chat is Chat.BotChat) {
-                        item(key = "empty-thread-mascot") {
-                            Box(Modifier.fillMaxWidth().height(280.dp), contentAlignment = Alignment.Center) {
-                                ChatAvatar(chat = chat, size = 120.dp, state = MausState.IDLE, animated = false)
+                        if (rawTranscript.isEmpty() && state.hasLoadedPage(threadId) && !chat.busy && chat is Chat.BotChat) {
+                            item(key = "empty-thread-mascot") {
+                                Box(Modifier.fillMaxWidth().height(280.dp), contentAlignment = Alignment.Center) {
+                                    ChatAvatar(chat = chat, size = 120.dp, state = MausState.IDLE, animated = false)
+                                }
                             }
                         }
-                    }
 
-                    if (roomLanes.isNotEmpty()) {
-                        items(roomLanes, key = { "live-room-$it" }) { lane ->
-                            val speaker = state.bots.firstOrNull { it.id == lane.removePrefix(roomLanePrefix) }
-                            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                                Text(speaker?.name ?: "Bot", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = secondaryTint)
-                                StreamingBubble(text = state.streaming[lane], reasoning = state.reasoning[lane])
+                        if (roomLanes.isNotEmpty()) {
+                            items(roomLanes, key = { "live-room-$it" }) { lane ->
+                                val speaker = state.bots.firstOrNull { it.id == lane.removePrefix(roomLanePrefix) }
+                                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                    Text(speaker?.name ?: "Bot", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = secondaryTint)
+                                    StreamingBubble(text = state.streaming[lane], reasoning = state.reasoning[lane])
+                                }
                             }
-                        }
-                    } else if (liveCount == 1) {
-                        item(key = LIVE_BUBBLE_KEY) {
-                            if (tail == TranscriptTail.WORKING) {
-                                WorkingBubble(name = chat.name, color = chat.color)
-                            } else {
-                                StreamingBubble(text = liveText, reasoning = liveReasoning)
+                        } else if (liveCount == 1) {
+                            item(key = LIVE_BUBBLE_KEY) {
+                                if (tail == TranscriptTail.WORKING) {
+                                    WorkingBubble(name = chat.name, color = chat.color)
+                                } else {
+                                    StreamingBubble(text = liveText, reasoning = liveReasoning)
+                                }
                             }
                         }
                     }

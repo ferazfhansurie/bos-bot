@@ -65,9 +65,10 @@ export interface OnboardingPrepared {
   firstJob?: { title: string; prompt: string };
 }
 
-/** The jobs the first message offers as taps. Each one is useful without any
- * connected app, so a tap works the moment an engine is signed in. */
+/** Starter taps begin with a draft or with a reviewed connection step when
+ * the job needs an app. They never authorize account linking or scheduling. */
 export const FIRST_TASKS = [
+  { id: "whatsapp-work-groups", title: "Summarise my work groups every morning", prompt: "Help me summarise my WhatsApp work groups every morning. First let me choose which groups to link and read. Draft one sample summary, then let me review the schedule, time zone and delivery destination before enabling a routine. Do not link accounts, read groups or schedule anything without my approval." },
   { id: "inbox", title: "Find what needs me in my inbox", prompt: "Look through my recent email and tell me the three things that need me most. Draft replies, but don't send anything." },
   { id: "meeting", title: "Prep me for a meeting", prompt: "Help me prepare for my next meeting. Look at my calendar first and pick the next real meeting, then give me a one-page brief: who's in it, what they care about, and three things to ask. If the meeting isn't on a calendar you can see, tell me exactly where to connect the right one, and in the same message ask who it's with." },
   { id: "summarise", title: "Summarise a document", prompt: "I want to summarise a document. Ask me to attach it, then give me the key points, the numbers that matter and anything I need to act on." },
@@ -84,20 +85,23 @@ export interface OnboardingScriptContext {
   /** Connected apps need a Composio project or broker. Without one the
    * apps step says what to do next instead of offering cards that can't work. */
   appsAvailable?: boolean;
+  /** A configured empty array deliberately hides starter taps. */
+  starterJobs?: readonly { id: string; title: string; prompt: string }[];
+  freeEngine?: boolean;
 }
 
-/** The messages a step posts, in order. The first message is the greeting
- * plus the jobs people hand over first, as taps; the engine sign-in follows
- * only when no engine can run yet, and the app connections only once one
- * can. Product copy, not the bot's own voice. */
+/** The messages a step posts, in order. The first message is one short
+ * greeting plus the jobs people hand over first, as taps; the engine sign-in
+ * follows only when no engine can run yet. Apps connect when a job needs
+ * them, not up front. Product copy, not the bot's own voice. */
 export function onboardingScript(step: OnboardingChatStep, ctx: OnboardingScriptContext): OnboardingChatMessage[] {
   const person = ctx.personName.trim().split(/\s+/)[0] ?? "";
   switch (step) {
     case "greet":
       return [{
         step,
-        text: `Hi${person ? ` ${person}` : ""}, I'm ${ctx.botName}, your own AI teammate. I work on my own computer, so I keep going while you're away, and I use your apps the way you do.\n\nHere's what people hand me first. Tap one, or just tell me in your own words. Nothing goes out to anyone unless you say so.`,
-        card: { kind: "suggestions", items: FIRST_TASKS.map(task => ({ ...task })) },
+        text: `Hi${person ? ` ${person}` : ""}, I'm ${ctx.botName}, your AI teammate. Tell me what you need, or tap a job below. Nothing goes out without your OK.`,
+        card: { kind: "suggestions", items: (ctx.starterJobs ?? FIRST_TASKS).map(task => ({ ...task })) },
       }];
     case "name":
       return [{ step, text: "What would you like to call me? You can change this later.", card: { kind: "name-input", value: ctx.botName, submitted: false } }];
@@ -106,7 +110,9 @@ export function onboardingScript(step: OnboardingChatStep, ctx: OnboardingScript
         { step, text: `${ctx.botName} it is. Nice to meet you${person ? `, ${person}` : ""}.` },
       ];
     case "engine":
-      return ctx.engineReady ? [] : [{ step, text: "One thing first: I need a brain. Sign in with the Claude or ChatGPT account you already have and I'm ready in a minute. Your login stays on your BOS.", card: { kind: "engine" } }];
+      return ctx.engineReady ? [] : [{ step, text: ctx.freeEngine === false
+        ? "Connect the Claude or ChatGPT account you already have to get started. Your login stays on your BOS."
+        : "Start with BOS Free, or connect the Claude or ChatGPT account you already have. Choose an engine below to get started. Your login stays on your BOS.", card: { kind: "engine" } }];
     case "apps":
       if (ctx.appsAvailable === false) {
         return [{ step, text: "I'm ready. Pick a job above or tell me what you need, and I'll get started." }];
@@ -116,7 +122,7 @@ export function onboardingScript(step: OnboardingChatStep, ctx: OnboardingScript
         ...ONBOARDING_APPS.filter(app => app.id !== "googlecalendar").map(app => ({ step, text: "", card: { kind: "connect" as const, app: app.id, connected: ctx.connected.includes(app.id) } })),
       ];
     case "first-task":
-      return [{ step, text: "Pick one to start, or type anything.", card: { kind: "suggestions", items: FIRST_TASKS.map(task => ({ ...task })) } }];
+      return [{ step, text: "Pick one to start, or type anything.", card: { kind: "suggestions", items: (ctx.starterJobs ?? FIRST_TASKS).map(task => ({ ...task })) } }];
     case "done":
       return [];
   }
@@ -124,7 +130,7 @@ export function onboardingScript(step: OnboardingChatStep, ctx: OnboardingScript
 
 /** The greeting for a prepared workspace: what bos already knows about the
  * business, the team set up for it, and its first job as the first tap. */
-export function preparedGreeting(ctx: Pick<OnboardingScriptContext, "personName" | "botName">, prepared: OnboardingPrepared): OnboardingChatMessage {
+export function preparedGreeting(ctx: Pick<OnboardingScriptContext, "personName" | "botName" | "starterJobs">, prepared: OnboardingPrepared): OnboardingChatMessage {
   const person = ctx.personName.trim().split(/\s+/)[0] ?? "";
   const facts = prepared.profile.filter(item => item.value.trim()).map(item => `- ${item.label}: ${item.value.trim()}`).join("\n");
   const team = prepared.team.map(bot => `${bot.name} (${bot.job.trim().replace(/\.$/, "")})`).join(", ");
@@ -135,7 +141,7 @@ export function preparedGreeting(ctx: Pick<OnboardingScriptContext, "personName"
     team ? `Your team is set up and ready: ${team}.` : "",
     prepared.firstJob ? `Your first job is below. Tap it and I'll start. Nothing goes out to anyone unless you say so.` : "Tap a job below, or tell me in your own words. Nothing goes out to anyone unless you say so.",
   ].filter(Boolean).join("\n\n");
-  const items = [...(prepared.firstJob ? [{ id: "prepared", ...prepared.firstJob }] : []), ...FIRST_TASKS.map(task => ({ ...task }))];
+  const items = [...(prepared.firstJob ? [{ id: "prepared", ...prepared.firstJob }] : []), ...(ctx.starterJobs ?? FIRST_TASKS).map(task => ({ ...task }))];
   return { step: "greet", text, card: { kind: "suggestions", items } };
 }
 
@@ -151,23 +157,22 @@ export function nextOnboardingState(state: OnboardingChatState, event: Onboardin
   const after = (step: OnboardingChatStep): OnboardingChatStep =>
     step === "greet" ? "name"
     : step === "name" ? "about"
-    : step === "about" ? (state.engineReady ? "apps" : "engine")
-    : step === "engine" ? "apps"
-    // the greeting already offers the starter jobs, so passing on apps ends setup
+    : step === "about" ? (state.engineReady ? "done" : "engine")
+    // the greeting already offers the starter jobs, so nothing else is asked
     : "done";
   const finish = (next: OnboardingChatState): OnboardingChatState =>
     next.step === "done" ? { ...next, completedAt: now().toISOString() } : next;
   switch (event.type) {
-    // the greeting carries its own starter jobs, so start goes straight to
-    // what the person must do: sign in, or connect an app
-    case "start": return state.step === "greet" ? { ...state, step: state.engineReady ? "apps" : "engine" } : state;
+    // the greeting carries its own starter jobs, so start ends setup unless
+    // the person must sign in first
+    case "start": return state.step === "greet" ? (state.engineReady ? finish({ ...state, step: "done" }) : { ...state, step: "engine" }) : state;
     case "name": {
       const botName = cleanName(event.value);
       if (state.step !== "name" || !botName) return state;
-      return { ...state, botName, step: state.engineReady ? "apps" : "engine" };
+      return finish({ ...state, botName, step: state.engineReady ? "done" : "engine" });
     }
     case "engine-ready":
-      return { ...state, engineReady: true, step: state.step === "engine" ? "apps" : state.step };
+      return finish({ ...state, engineReady: true, step: state.step === "engine" ? "done" : state.step });
     // a connection resumes the bot on that app, which is the first task
     case "connected":
       return state.connected.includes(event.app) ? state

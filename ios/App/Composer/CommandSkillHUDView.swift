@@ -114,26 +114,7 @@ public struct CommandSkillHUDView: View {
                 .padding(.bottom, 8)
             }
         }
-        .background(
-            LinearGradient(
-                colors: isDark ? [
-                    Color(hex: "#0F172A").opacity(0.96),
-                    Color(hex: "#1E293B").opacity(0.94)
-                ] : [
-                    Color.white.opacity(0.96),
-                    Color(hex: "#F8FAFC").opacity(0.94)
-                ],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            )
-        )
-        .background(.ultraThinMaterial)
-        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .stroke(isDark ? Color.white.opacity(0.14) : Color.black.opacity(0.08), lineWidth: 0.8)
-        )
-        .shadow(color: Color.black.opacity(isDark ? 0.25 : 0.08), radius: 8, y: 3)
+        .glassSheet(cornerRadius: 16)
         .padding(.horizontal, 10)
         .padding(.bottom, 4)
     }

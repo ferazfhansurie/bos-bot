@@ -21,6 +21,7 @@ import {
   codexNativeIncomingLogMessage,
   codexPredatesAstra,
   codexUpdateCommand,
+  managedCatalogOptions,
 } from "./codex.ts";
 import { removeTempDir } from "../testing/cleanup.ts";
 import * as procs from "../procs.ts";
@@ -54,6 +55,15 @@ describe("CodexDriver.decodeConfig", () => {
       .toMatchObject({ managed: { url: "http://localhost:1/v1" } });
     expect(() => CodexDriver.decodeConfig({ managed: { url: "http://company.example/v1", models: ["m"] } }))
       .toThrow("Invalid Company Codex endpoint.");
+  });
+
+  it("keeps catalog opt-in and takes only labels for approved models from it", () => {
+    expect(CodexDriver.decodeConfig({ managed: { url: "https://company.example/v1", models: ["m"] } }).managed).not.toHaveProperty("catalog");
+    expect(CodexDriver.decodeConfig({ managed: { url: "https://company.example/v1", models: ["m"], catalog: true } }).managed?.catalog).toBe(true);
+    expect(managedCatalogOptions(["a", "b"], { data: [{ id: "b", label: "B · 10 left" }, { id: "x", label: "not approved" }, { id: "a", label: 5 }] }))
+      .toEqual([{ id: "a", label: "a" }, { id: "b", label: "B · 10 left" }]);
+    expect(managedCatalogOptions(["a"], null)).toEqual([{ id: "a", label: "a" }]);
+    expect(managedCatalogOptions(["a"], { data: [{ id: "a", label: "x\n".repeat(60) }] })[0].label.length).toBeLessThanOrEqual(80);
   });
 });
 
@@ -248,6 +258,21 @@ describe("CodexDriver turns (fake app-server)", () => {
     expect(turnStart.params.input[0].text).toBe("list files");
     const threadStart = seen.calls.find((c: { method: string }) => c.method === "thread/start");
     expect(threadStart.params).toMatchObject({ model: "gpt-5.6-sol", modelProvider: "openai", developerInstructions: "You are Testy." });
+  });
+
+  it("safe mode disables native plugins and configured MCP mounts", async () => {
+    await create();
+    const dump = join(scratch, "safe-mode.json");
+    compatEnv.FAKE_CODEX_DUMP = dump;
+    process.env.BOS_SAFE_MODE = "1";
+    try {
+      await instance.adapter.sendTurn({ threadId: "safe-mode", text: "Check health",
+        integrations: { custom: { configured: { command: "do-not-run", args: [], env: {} } } } });
+      await recorder.until(event => event.type === "turn.completed");
+      const seen = JSON.parse(readFileSync(dump, "utf8"));
+      for (const override of ["features.plugins=false", "features.remote_plugin=false", "features.hooks=false", "mcp_servers={}"]) expect(seen.argv).toContain(override);
+      expect(seen.argv.some((arg: string) => arg.startsWith("mcp_servers.configured."))).toBe(false);
+    } finally { delete process.env.BOS_SAFE_MODE; }
   });
 
   it("ignores requests received after turn completion", async () => {
@@ -656,6 +681,26 @@ describe("CodexDriver turns (fake app-server)", () => {
     // the connect tools must be in the first step's catalog, not pending
     expect(argv).toContain("mcp_servers.openmausbot_connectors.required=true");
     expect(argv).not.toContain("mcp_servers.notes.required");
+  });
+
+  it("hands the sending member to custom servers and auto-approves only the listed tools", async () => {
+    await create();
+    const dump = join(scratch, "member-mcp.json");
+    compatEnv.FAKE_CODEX_DUMP = dump;
+    const member = { userId: "sam@example.com", roles: ["Sales User"], sessionId: "s-1" };
+    await instance.adapter.sendTurn({
+      threadId: "t-member-mcp",
+      text: "go",
+      member,
+      integrations: { custom: { crm: { command: "node", args: ["crm.mjs"], env: {}, autoApprove: ["my_day"] } } },
+    });
+    await recorder.until((event) => event.type === "turn.completed");
+    const seen = JSON.parse(readFileSync(dump, "utf8"));
+    const argv = seen.argv.join(" ");
+    expect(JSON.parse(seen.env.BOS_MEMBER)).toEqual(member);
+    expect(argv).toContain('mcp_servers.crm.env_vars=["BOS_MEMBER"]');
+    expect(argv).toContain('mcp_servers.crm.tools.my_day.approval_mode="auto"');
+    expect(argv).not.toContain("mcp_servers.crm.default_tools_approval_mode");
   });
 
   it("mounts a url server for codex to connect to, header values off argv", async () => {

@@ -40,6 +40,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.openmausbot.companion.core.Markdown
 import com.openmausbot.companion.core.MarkdownBlock
+import kotlinx.serialization.json.JsonObject
 
 /**
  * Bot replies, rendered — the port of `ios/App/MarkdownText.swift`.
@@ -70,12 +71,21 @@ fun MarkdownText(
      * instead of handed to a browser that cannot reach it.
      */
     openLink: ((String) -> Unit)? = null,
+    /** The message these blocks belong to, so a smart ui block can save its values onto it. */
+    messageId: String? = null,
+    /** The message's saved smart ui values, keyed per block. */
+    uiState: Map<String, JsonObject>? = null,
 ) {
     val blocks = Markdown.blocks(source)
     CompositionLocalProvider(LocalLinkOpener provides openLink) {
         Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(8.dp)) {
             blocks.forEachIndexed { index, block ->
-                MarkdownBlockView(block, tail = caret && index == blocks.lastIndex)
+                MarkdownBlockView(
+                    block,
+                    tail = caret && index == blocks.lastIndex,
+                    messageId = messageId,
+                    uiState = uiState,
+                )
             }
         }
     }
@@ -85,7 +95,12 @@ fun MarkdownText(
 private val LocalLinkOpener = compositionLocalOf<((String) -> Unit)?> { null }
 
 @Composable
-private fun MarkdownBlockView(block: MarkdownBlock, tail: Boolean) {
+private fun MarkdownBlockView(
+    block: MarkdownBlock,
+    tail: Boolean,
+    messageId: String?,
+    uiState: Map<String, JsonObject>?,
+) {
     val muted = secondaryTint
     when (block) {
         is MarkdownBlock.Paragraph ->
@@ -124,39 +139,56 @@ private fun MarkdownBlockView(block: MarkdownBlock, tail: Boolean) {
             }
 
         is MarkdownBlock.Code ->
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .background(muted.copy(alpha = 0.14f), RoundedCornerShape(10.dp))
-                    .padding(10.dp),
-                verticalArrangement = Arrangement.spacedBy(4.dp),
-            ) {
-                block.language?.takeIf { it.isNotEmpty() }?.let {
-                    Text(
-                        text = it,
-                        fontSize = 11.sp,
-                        fontFamily = FontFamily.Monospace,
-                        fontWeight = FontWeight.Medium,
-                        color = muted,
-                    )
-                }
-                // Horizontal scroll rather than wrapping: wrapped code is harder
-                // to read than code you have to push sideways, and indentation is
-                // most of what a snippet is saying.
-                // Selection is the caller's to grant: a settled bubble wraps this
-                // whole block in a SelectionContainer, and the live one must not.
-                Text(
-                    text = buildAnnotatedString {
-                        append(block.text)
-                        appendCaret(tail, muted)
-                    },
-                    fontSize = 14.sp,
-                    fontFamily = FontFamily.Monospace,
-                    modifier = Modifier.horizontalScroll(rememberScrollState()),
+            if (SmartUi.handles(block.language)) {
+                SmartUiBlock(
+                    language = block.language.orEmpty(),
+                    code = block.text,
+                    streaming = tail,
+                    messageId = messageId,
+                    savedStates = uiState,
+                    openLink = LocalLinkOpener.current,
+                    fallback = { CodeCard(block, tail, muted) },
                 )
+            } else {
+                CodeCard(block, tail, muted)
             }
 
         MarkdownBlock.Rule -> HorizontalDivider(Modifier.padding(vertical = 2.dp))
+    }
+}
+
+@Composable
+private fun CodeCard(block: MarkdownBlock.Code, tail: Boolean, muted: Color) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(muted.copy(alpha = 0.14f), RoundedCornerShape(10.dp))
+            .padding(10.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        block.language?.takeIf { it.isNotEmpty() }?.let {
+            Text(
+                text = it,
+                fontSize = 11.sp,
+                fontFamily = FontFamily.Monospace,
+                fontWeight = FontWeight.Medium,
+                color = muted,
+            )
+        }
+        // Horizontal scroll rather than wrapping: wrapped code is harder
+        // to read than code you have to push sideways, and indentation is
+        // most of what a snippet is saying.
+        // Selection is the caller's to grant: a settled bubble wraps this
+        // whole block in a SelectionContainer, and the live one must not.
+        Text(
+            text = buildAnnotatedString {
+                append(block.text)
+                appendCaret(tail, muted)
+            },
+            fontSize = 14.sp,
+            fontFamily = FontFamily.Monospace,
+            modifier = Modifier.horizontalScroll(rememberScrollState()),
+        )
     }
 }
 

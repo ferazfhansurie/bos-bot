@@ -25,6 +25,9 @@ export interface EnvironmentDescriptor {
   label: string;
   platform: NodeJS.Platform;
   version: string;
+  /** Phone protocol floor, checked before decoding the rest of the API. */
+  minPhoneVersion: string;
+  phoneUpdateUrls: { ios: string; android: string };
   /** Host-to-host room and peer-session protocol. Absent on pre-hardening Macs. */
   multiplayerProtocol: 1;
   delegatedProtocol: 1;
@@ -37,6 +40,7 @@ export interface EnvironmentDescriptor {
      * maintainer flag `features.sharedComputers` is on: a server with it off
      * advertises nothing, exactly like a build that predates the feature. */
     sharedComputers?: true;
+    sharedBrowser?: true;
     /** Who can update the server: the desktop app that runs it, or the operator. */
     selfUpdate: "desktop-managed" | "operator";
     /** Whether /pair offers "sign in with your email" (an allow-list is set). */
@@ -137,6 +141,11 @@ export function environmentDescriptor(input: { environmentId: string; desktopMan
     label: compatEnv.OMB_ENVIRONMENT_LABEL?.trim() || hostname(),
     platform: process.platform,
     version: serverVersion(),
+    minPhoneVersion: "2.1.3",
+    phoneUpdateUrls: {
+      ios: "https://bosbot.my/get",
+      android: "https://bosbot.my/updates/android.json",
+    },
     multiplayerProtocol: 1,
     delegatedProtocol: 1,
     sharedConversationIsolation: 1,
@@ -145,7 +154,7 @@ export function environmentDescriptor(input: { environmentId: string; desktopMan
       remoteSessions: true,
       // Never advertise a protocol this server would refuse: the routes are
       // gone unless features.sharedComputers is on, so the capability is too.
-      ...(input.sharedComputers === true ? { sharedComputers: true as const } : {}),
+      ...(input.sharedComputers === true ? { sharedComputers: true as const, sharedBrowser: true as const } : {}),
       selfUpdate: input.desktopManaged ? "desktop-managed" : "operator",
       emailSignIn: input.emailSignIn === true,
       ...(input.passwordSignIn === true ? { passwordSignIn: true } : {}),

@@ -1,4 +1,5 @@
 import { compatEnv, compatEnvironment } from "../../electron/branding-env.cjs";
+import { allowInSafeMode } from "../safe-mode.ts";
 // Codex driver — upstream CodexDriver skeleton over agentcal's
 // drivers/codex.js runtime: the official `codex` CLI headless over its
 // app-server JSON-RPC protocol (newline-delimited JSON on stdio).
@@ -30,7 +31,7 @@ import type {
   SteerOptions,
   SteerOutcome,
 } from "../contracts.ts";
-import { newEventId, newId } from "../contracts.ts";
+import { MEMBER_ENV, newEventId, newId, type TurnMember } from "../contracts.ts";
 import { decodeCodexSelection, readCodexModelCatalog, STATIC_CODEX_MODELS } from "./codex-catalog.ts";
 import { codexLocalProviderArgs } from "./local-inject.ts";
 import { augmentedPath, splitCliString } from "../env-path.ts";
@@ -122,7 +123,7 @@ export interface CodexConfig {
   cli: string;
   fullAuto: boolean;
   /** Ephemeral Company routing, supplied by the trusted desktop parent. */
-  managed?: { url: string; models: string[] };
+  managed?: { url: string; models: string[]; catalog?: boolean };
 }
 
 function decodeConfig(raw: unknown): CodexConfig {
@@ -135,7 +136,7 @@ function decodeConfig(raw: unknown): CodexConfig {
 }
 
 function decodeManagedCodex(raw: object): NonNullable<CodexConfig["managed"]> {
-  const value = raw as { url?: unknown; models?: unknown };
+  const value = raw as { url?: unknown; models?: unknown; catalog?: unknown };
   if (typeof value.url !== "string" || !Array.isArray(value.models) || !value.models.length || value.models.some(model => typeof model !== "string" || !/^[\w][\w./+-]*$/.test(model))) {
     throw new Error("Invalid Company Codex configuration.");
   }
@@ -144,7 +145,20 @@ function decodeManagedCodex(raw: object): NonNullable<CodexConfig["managed"]> {
   // where a local proxy terminates TLS on the trusted machine instead.
   const loopback = url.hostname === "localhost" || url.hostname === "[::1]" || /^127(?:\.\d{1,3}){3}$/.test(url.hostname);
   if (url.username || url.password || url.search || url.hash || (url.protocol !== "https:" && !(url.protocol === "http:" && loopback))) throw new Error("Invalid Company Codex endpoint.");
-  return { url: url.href.replace(/\/$/, ""), models: value.models as string[] };
+  return { url: url.href.replace(/\/$/, ""), models: value.models as string[], ...(value.catalog === true ? { catalog: true } : {}) };
+}
+
+// A Company endpoint with catalog:true may name its approved models at
+// <url>/models ({data:[{id,label}]}), e.g. "GPT-6 Luna · ~480 messages left".
+// Only labels come from there: the allowlist and its order stay the config's.
+export function managedCatalogOptions(models: string[], payload: unknown): { id: string; label: string }[] {
+  const rows = Array.isArray((payload as { data?: unknown } | null)?.data) ? (payload as { data: unknown[] }).data : [];
+  const labels = new Map<string, string>();
+  for (const row of rows) {
+    const { id, label } = (row ?? {}) as { id?: unknown; label?: unknown };
+    if (typeof id === "string" && typeof label === "string") labels.set(id, label.replace(/[\u0000-\u001f\u007f]/g, " ").trim().slice(0, 80));
+  }
+  return models.map(id => ({ id, label: labels.get(id) || id }));
 }
 
 export function managedCodexArgs(config: NonNullable<CodexConfig["managed"]>): string[] {
@@ -495,6 +509,7 @@ function mountMcpServer(
   name: string,
   server: McpServerSpec,
   preApproved = true,
+  member?: TurnMember,
 ): void {
   const prefix = `mcp_servers.${name}`;
   if ("url" in server) {
@@ -523,13 +538,24 @@ function mountMcpServer(
     }
   } else {
     Object.assign(env, server.env);
+    const names = Object.keys(server.env);
+    // The member comes from the session that sent this turn's message; the
+    // registry refuses the name in config, so nothing else can claim it.
+    if (member) {
+      env[MEMBER_ENV] = JSON.stringify(member);
+      names.push(MEMBER_ENV);
+    }
     appServerArgs.push(
       "-c", `${prefix}.command=${JSON.stringify(server.command)}`,
       "-c", `${prefix}.args=${JSON.stringify(server.args)}`,
       // Values stay in the child environment; argv contains names only so
       // credentials never appear in process listings or diagnostics.
-      "-c", `${prefix}.env_vars=${JSON.stringify(Object.keys(server.env))}`,
+      "-c", `${prefix}.env_vars=${JSON.stringify(names)}`,
     );
+  }
+  // The owner listed these tools as safe to run without a card.
+  for (const tool of server.autoApprove ?? []) {
+    appServerArgs.push("-c", `${prefix}.tools.${tool}.approval_mode="auto"`);
   }
   // Harness-owned servers are pre-quieted; a user-configured server keeps
   // codex's on-request policy so its tool calls become approval cards.
@@ -574,8 +600,21 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
     };
     const catalogEnv = childEnv();
     let models = config.managed ? { default: config.managed.models[0], options: config.managed.models.map(id => ({ id, label: id })) } : STATIC_CODEX_MODELS;
+    let catalogAt = 0;
+    const refreshCatalog = async () => {
+      const managed = config.managed;
+      const key = compatEnvironment(input.environment).OPENMAUSBOT_COMPANY_API_KEY;
+      if (!managed?.catalog || !key) return;
+      catalogAt = Date.now();
+      try {
+        const res = await fetch(`${managed.url}/models`, { headers: { authorization: `Bearer ${key}` }, redirect: "error", signal: AbortSignal.timeout(4000) });
+        if (res.ok) models = { default: managed.models[0], options: managedCatalogOptions(managed.models, await res.json()) };
+      } catch {
+        // Labels are cosmetic; keep the last ones when the endpoint is down.
+      }
+    };
     const refreshModels = async () => {
-      if (config.managed) return;
+      if (config.managed) return refreshCatalog();
       try {
         const resolved = await readCodexModelCatalog(catalogEnv, fetch, config.cli);
         if (resolved.options.length) models = resolved;
@@ -583,7 +622,8 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
         // Keep the last usable catalog when a local provider is down.
       }
     };
-    await refreshModels();
+    if (config.managed) void refreshCatalog();
+    else await refreshModels();
     const authentication = new CodexDeviceAuthController({
       cli: config.cli,
       environment: childEnv,
@@ -729,6 +769,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
     };
 
     const sendTurn = async (turn: SendTurnInput) => {
+      if (!allowInSafeMode("plugins")) turn = { ...turn, integrations: { ...turn.integrations, custom: undefined } };
       if (config.managed) {
         // One blanket refusal hides which prerequisite broke; name it so the
         // person can fix the actual gap instead of reconnecting blind.
@@ -776,6 +817,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
       const launchAttempt = async (attempt: number): Promise<void> => {
         const env = childEnv();
         const appServerArgs = ["app-server", ...(config.managed ? managedCodexArgs(config.managed) : codexLocalProviderArgs(env, turn.model))];
+        if (!allowInSafeMode("plugins")) appServerArgs.push("-c", "features.plugins=false", "-c", "features.remote_plugin=false", "-c", "features.hooks=false", "-c", "mcp_servers={}");
         if (turn.integrations?.composio) {
           mountMcpServer(appServerArgs, env, "openmausbot_connectors", turn.integrations.composio);
           // codex omits an optional server whose tools/list hasn't landed when a
@@ -806,7 +848,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
             noteSkippedSseServer(name);
             continue;
           }
-          mountMcpServer(appServerArgs, env, name, server, false);
+          mountMcpServer(appServerArgs, env, name, server, false, turn.member);
         }
         if (turn.integrations?.phone) {
           const bridge = turn.integrations.phone;
@@ -1733,6 +1775,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
     displayName: input.displayName,
     enabled: input.enabled,
     get models() {
+      if (config.managed?.catalog && Date.now() - catalogAt > 60_000) void refreshCatalog();
       return models;
     },
     refreshModels,

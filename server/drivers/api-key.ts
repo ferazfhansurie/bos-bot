@@ -69,6 +69,7 @@ export const ApiKeyDriver: ProviderDriver<ApiKeyConfig> = {
       apiKey: config.key,
       apiUrl: config.url,
       tools: config.tools,
+      localComputer: true,
       models: () => catalog,
       refreshModels: refresh,
       redirect: "error",

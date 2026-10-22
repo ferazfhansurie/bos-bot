@@ -58,6 +58,7 @@ export function HelloBeat({ onNext, onSkip }: BeatProps) {
       />
       <input
         type="email"
+        aria-describedby="welcome-email-disclosure"
         aria-label={t("phone.signIn.email")}
         value={email}
         onChange={(e) => setEmail(e.target.value)}
@@ -66,6 +67,7 @@ export function HelloBeat({ onNext, onSkip }: BeatProps) {
         className={`animate-rise mt-3 ${inputClass}`}
         style={staggerIndex(2)}
       />
+      <p id="welcome-email-disclosure" className="mt-2 text-xs leading-relaxed text-ink-secondary">Optional. If anonymous usage is on, we use this email to match your consented BOS signup after setup.</p>
       {failed && <p role="alert" className="mt-3 text-[13px] text-danger">{t("onboarding.profile.error")}</p>}
       <PrimaryButton onClick={() => void saveProfile()} disabled={!valid || saving} className="animate-rise mt-3" style={staggerIndex(3)}>
         {t("onboarding.continue")}

@@ -220,13 +220,36 @@ export interface SendTurnInput {
    * config.toml and ignores this; the Claude driver drops
    * --strict-mcp-config for the turn. */
   mcpFromUserConfig?: boolean;
+  /** The signed-in member this turn acts for, set by the server from the
+   * session that sent the message (see sessions.ts memberSchema), never by
+   * the model. Drivers hand it to every bot-owned tool server: stdio env
+   * BOS_MEMBER (JSON) and MCP tools/call `_meta["bos/member"]`. */
+  member?: TurnMember;
 }
+
+export interface TurnMember {
+  userId: string;
+  name?: string;
+  email?: string;
+  roles?: string[];
+  claims?: Record<string, string | number | boolean | string[]>;
+  /** The BOS session that sent the message. */
+  sessionId: string;
+}
+
+/** Env name a custom stdio server reads the turn's member from. */
+export const MEMBER_ENV = "BOS_MEMBER";
+/** MCP request `_meta` key carrying the turn's member. */
+export const MEMBER_META = "bos/member";
 
 /** An MCP server this machine starts and talks to over stdio. */
 export interface StdioMcpSpec {
   command: string;
   args: string[];
   env: Record<string, string>;
+  /** Tool names of this server that run without an approval card. Set by
+   * the server's owner in config.json, never by the model. */
+  autoApprove?: string[];
 }
 
 /** An MCP server reached over HTTP: streamable HTTP (`http`, the current
@@ -236,6 +259,7 @@ export interface RemoteMcpSpec {
   type: "http" | "sse";
   url: string;
   headers: Record<string, string>;
+  autoApprove?: string[];
 }
 
 export type McpServerSpec = StdioMcpSpec | RemoteMcpSpec;

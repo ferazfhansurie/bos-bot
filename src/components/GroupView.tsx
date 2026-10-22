@@ -94,7 +94,7 @@ export function RoomReplyText({ message, members, everyone, threadId, forceOpen 
   const open = expanded || forceOpen;
   return <>
     <div className={cn(collapsible && !open && "line-clamp-6")}>
-      <ChatMarkdown text={message.text ?? ""} mentionPeers={members} everyone={everyone} message={threadId ? { threadId, messageId: message.id } : undefined} />
+      <ChatMarkdown text={message.text ?? ""} mentionPeers={members} everyone={everyone} message={threadId ? { threadId, messageId: message.id, uiState: message.uiState } : undefined} />
     </div>
     {collapsible && <button type="button" aria-expanded={open} onClick={() => setExpanded(!open)} disabled={forceOpen} className="mt-2 text-xs font-medium text-accent hover:underline">{open ? "Show less" : "Show more"}</button>}
   </>;

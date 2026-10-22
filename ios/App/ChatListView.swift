@@ -11,7 +11,6 @@ import CompanionCore
 struct ChatListView: View {
     @EnvironmentObject private var session: Session
     @State private var query = ""
-    @State private var conversationFilter = "all"
     @State private var pinnedChats = PinnedChats()
     @State private var showingProfile = false
     @State private var profilePhoto: PhotosPickerItem?
@@ -245,10 +244,10 @@ struct ChatListView: View {
             }
             .sheet(item: $managingThreads) { chat in
                 TaskManagerView(chat: chat) { threadId in
-                    guard let bot = session.state.bot(forThread: threadId) else { return }
+                    guard let bot = session.owner(of: chat).state.bot(forThread: threadId) else { return }
                     managingThreads = nil
                     open(Chat.bot(bot))
-                }
+                }.session(session.owner(of: chat))
             }
             .task(id: query) {
                 let expected = query
@@ -695,20 +694,7 @@ struct ChatListView: View {
 
     @ViewBuilder
     private var rosterSections: some View {
-        Picker("Conversation status", selection: $conversationFilter) {
-            Text("All").tag("all")
-            Text("Unread").tag("unread")
-            Text("Waiting").tag("waiting")
-            Text("Running").tag("running")
-        }
-        .pickerStyle(.segmented)
-        .padding(.horizontal, 16).padding(.vertical, 10)
-        .accessibilityIdentifier("conversation-status-filter")
-        if conversationFilter != "all" && shownConversations.isEmpty {
-            Text("No conversations match this filter.")
-                .foregroundStyle(.secondary).padding(.horizontal, 16).padding(.vertical, 12)
-        }
-        if conversationFilter == "all" && !attention.isEmpty {
+        if !attention.isEmpty {
             sectionLabel(Text("Needs attention"))
                 .padding(.top, 10)
                 .padding(.bottom, 4)
@@ -748,8 +734,7 @@ struct ChatListView: View {
     }
 
     @ViewBuilder private func peopleSection(_ people: [ConversationEntry]) -> some View {
-        // a status filter is a search; folding its matches away would hide them
-        let open = peopleExpanded || conversationFilter != "all"
+        let open = peopleExpanded
         let unread = people.filter(conversationUnread).count
         Button {
             Haptics.selection()
@@ -842,7 +827,7 @@ struct ChatListView: View {
 
     private var pinnedConversations: [ConversationEntry] {
         let byID = Dictionary(uniqueKeysWithValues: orderedConversations.map { ($0.id, $0) })
-        return pinnedChats.visibleIDs(available: Set(byID.keys)).compactMap { byID[$0] }.filter(matchesConversationFilter)
+        return pinnedChats.visibleIDs(available: Set(byID.keys)).compactMap { byID[$0] }
     }
 
     private func togglePin(_ entry: ConversationEntry) {
@@ -885,6 +870,7 @@ struct ChatListView: View {
                 .buttonStyle(.plain)
                 .accessibilityLabel("\(conversationName(entry)), pinned chat\(conversationBusy(entry) ? ", working" : conversationUnread(entry) ? ", unread" : "")")
                 .contextMenu {
+                    if let (summary, home) = botEntry(entry) { threadMenu(summary.chat, in: home) }
                     pinButton(entry)
                     if let (summary, _) = botEntry(entry) { OpenBesideButton(chat: homeChat(summary.chat)) }
                     if pinnedChats.ids.first != entry.id {
@@ -1036,30 +1022,12 @@ struct ChatListView: View {
     /// chat that was under the finger.
     private var shownConversations: [ConversationEntry] {
         let hidden = hiddenChats
-        let live = orderedConversations.filter { (showHidden || !hidden.contains($0.id)) && matchesConversationFilter($0) }
+        let live = orderedConversations.filter { showHidden || !hidden.contains($0.id) }
 #if DEBUG
         if ProcessInfo.processInfo.arguments.contains("-roster-order-live") { return live }
 #endif
         let byID = Dictionary(live.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         return rowOrder.arrange(live.map(\.id)).compactMap { byID[$0] }
-    }
-
-    private func matchesConversationFilter(_ entry: ConversationEntry) -> Bool {
-        switch conversationFilter {
-        case "unread": return conversationUnread(entry)
-        case "running":
-            if let (summary, _) = botEntry(entry) {
-                if case .bot(let bot) = summary.chat, let tasks = bot.tasks {
-                    return tasks.contains { $0.activity == "working" || $0.activity == "running" }
-                }
-                return summary.chat.busy && !waitingChats.contains(summary.chat.id)
-            }
-            return false
-        case "waiting":
-            if case .local(let summary) = entry { return waitingChats.contains(summary.chat.id) }
-            return false
-        default: return true
-        }
     }
 
     private func settleOrder(_ ids: [String]) {
@@ -1239,11 +1207,13 @@ struct ChatListView: View {
             .session(owner)
         }
         .buttonStyle(.plain)
+        .accessibilityIdentifier("bot-chat.\(summary.chat.id)")
         .doneSwipe(color: MausPalette.color(summary.chat.color), enabled: doneTask(summary.chat)?.task.canMarkDone == true) {
             markDone(summary.chat, after: 0)
         }
         .contextMenu {
             let entry: ConversationEntry = home.map { .home(summary, $0, connectionID: $0.connection?.id ?? "") } ?? .local(summary)
+            threadMenu(summary.chat, in: owner)
             pinButton(entry)
             OpenBesideButton(chat: homeChat(summary.chat))
             markDoneButton(summary.chat)
@@ -1255,6 +1225,26 @@ struct ChatListView: View {
                 Button("Remove from list", systemImage: "minus.circle", role: .destructive) {
                     botPendingRemoval = summary.chat
                 }
+            }
+        }
+    }
+
+    /// Native iOS context menus provide the floating liquid-glass surface.
+    /// Tap still opens the latest chat; holding offers exact thread choices.
+    @ViewBuilder private func threadMenu(_ chat: Chat, in owner: Session) -> some View {
+        if case let .bot(bot) = chat, !chat.isRemoteBot {
+            let live = owner.state.bot(bot.id) ?? bot
+            let tasks = ThreadListPolicy.ordered(live.threadGroups(queuedThreadIds: owner.state.queuedThreadIds).flatMap(\.tasks), pins: [])
+            Section("Threads") {
+                ForEach(Array(tasks.prefix(8)), id: \.threadId) { task in
+                    Button {
+                        if let selected = live.projected(forThread: task.threadId) { open(Chat.bot(selected)) }
+                    } label: {
+                        Label(task.displayTitle, systemImage: task.busy == true ? "circle.dotted" : task.unread == true ? "circle.fill" : "bubble.left")
+                    }
+                    .accessibilityIdentifier("hold-thread.\(task.threadId)")
+                }
+                Button("All threads", systemImage: "square.stack") { managingThreads = .bot(live) }
             }
         }
     }
@@ -1907,15 +1897,16 @@ struct StatusBanner: View {
             case .connecting:
                 banner("Connecting…", systemImage: "arrow.triangle.2.circlepath", tint: .secondary)
             case let .offline(reason):
-                // The Mac was reachable from anywhere last time, so the
-                // likeliest cause is the Mac, not this phone's network.
+                // A hosted route can lead to a desktop or a cloud server.
+                // Keep the advice neutral when its host type is unknown.
                 banner(
-                    session.macMayBeAsleep ? "Your Mac may be asleep. \(reason)" : reason,
-                    systemImage: session.macMayBeAsleep ? "moon.zzz" : "wifi.slash",
+                    session.macMayBeAsleep || session.connection?.pairedWithServer == true
+                        ? "Your BOS is waking up or offline. \(reason)" : reason,
+                    systemImage: "wifi.slash",
                     tint: .orange
                 )
             case .unauthorized:
-                banner("This device was unpaired on the computer.", systemImage: "lock.slash", tint: .red)
+                banner(session.serverWasReset ? "This computer was reset, pair again." : "This device was unpaired on the computer.", systemImage: "lock.slash", tint: .red)
             }
         }
         .animation(.default, value: session.status)

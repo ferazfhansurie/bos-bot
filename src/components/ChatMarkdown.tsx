@@ -19,6 +19,7 @@ import { RichChart } from "./RichChart";
 import { parseChartSpec } from "./rich-chart";
 import { parseStats, StatCards } from "./RichStats";
 import { ARTIFACT_LANGS, HtmlArtifact } from "./HtmlArtifact";
+import type { SmartUiMessage } from "./SmartUiBlock";
 import { rehypeNumericColumns } from "../lib/rich-table";
 import { lazy, memo, Suspense, useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import Markdown, { defaultUrlTransform } from "react-markdown";
@@ -58,6 +59,9 @@ const CACHE_MAX = 200;
 // tokenize on it — long enough to skip per-token churn mid-fence, short
 // enough that the highlight lands before the stream settles
 const STREAM_SETTLE_MS = 250;
+// openui (smart ui) loads on first use, so plain chats never pay for it.
+const SmartUiBlock = lazy(() => import("./SmartUiBlock"));
+const SMART_UI_LANGS = new Set(["openui", "openui-lang"]);
 
 // Our own two-colour-scheme code palette. It matches the token colours of
 // chatgpt desktop's code blocks (comment grey, green strings, blue numbers,
@@ -605,7 +609,7 @@ export function citationLabel(href: string | undefined, children: ReactNode): st
 }
 
 function ChatMarkdownComponent({ text, streaming = false, message, mentionPeers = NO_MENTION_PEERS, everyone = false }: {
-  text: string; streaming?: boolean; message?: MessageAttachmentContext;
+  text: string; streaming?: boolean; message?: MessageAttachmentContext & Pick<SmartUiMessage, "uiState">;
   mentionPeers?: readonly MentionPeer[]; everyone?: boolean;
 }) {
   // "#Title" mentions link to the threads the person can see (ThreadRefs);
@@ -639,6 +643,13 @@ function ChatMarkdownComponent({ text, streaming = false, message, mentionPeers 
             if (lang === "stats") {
               const items = parseStats(code);
               if (items) return <StatCards items={items} />;
+            }
+            if (SMART_UI_LANGS.has(lang.toLowerCase())) {
+              return (
+                <Suspense fallback={<div role="status" className="rounded-2xl border border-hairline p-4 text-ink-secondary">Drawing…</div>}>
+                  <SmartUiBlock code={code} streaming={streaming} message={message} />
+                </Suspense>
+              );
             }
             if (ARTIFACT_LANGS.has(lang.toLowerCase())) return <HtmlArtifact code={code} lang={lang.toLowerCase()} streaming={streaming} />;
             if (streaming && (lang === "chart" || lang === "stats")) return <div role="status" className="rounded-2xl border border-hairline p-4 text-ink-secondary">Preparing visual…</div>;

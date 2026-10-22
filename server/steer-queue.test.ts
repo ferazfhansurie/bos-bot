@@ -95,6 +95,27 @@ describe("steer-queue module", () => {
     expect(run).toHaveBeenCalledOnce();
   });
 
+  it("drains one member's sends per turn and keeps the next member's for the following turn", () => {
+    const bot = fakeBot("member-owner", "member-thread", false);
+    const store = fakeStore([bot]);
+    const sam = { userId: "sam@example.com", sessionId: "s-sam" };
+    const lee = { userId: "lee@example.com", sessionId: "s-lee" };
+    queueSteeredMessage(bot.id, bot.threadId, "one", { member: sam });
+    queueSteeredMessage(bot.id, bot.threadId, "two", { member: sam });
+    queueSteeredMessage(bot.id, bot.threadId, "three", { member: lee });
+    const run = vi.fn();
+    drainSteeredMessages(store, run);
+    expect(run).toHaveBeenCalledOnce();
+    expect(run.mock.calls[0][2]).toBe("one\n\ntwo");
+    expect(run.mock.calls[0][6]).toEqual(sam);
+    expect(hasQueuedSteeredMessages(bot.id, bot.threadId)).toBe(true);
+    drainSteeredMessages(store, run);
+    expect(run).toHaveBeenCalledTimes(2);
+    expect(run.mock.calls[1][2]).toBe("three");
+    expect(run.mock.calls[1][6]).toEqual(lee);
+    expect(hasQueuedSteeredMessages(bot.id, bot.threadId)).toBe(false);
+  });
+
   it("steers only the correction and restores its original queue position on refusal", () => {
     const bot = fakeBot("single-owner", "single-thread", true);
     const first = queueSteeredMessage(bot.id, bot.threadId, "later task");

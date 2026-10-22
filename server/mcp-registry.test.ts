@@ -20,6 +20,15 @@ describe("custom MCP registry", () => {
     });
   });
 
+  it("keeps an auto-approve list of plain tool names, deduplicated, across edits that omit it", () => {
+    const added = parseMcpServerMutation("crm", { command: "node", args: ["crm.mjs"], autoApprove: ["my_day", "my_day", "search_leads"] });
+    expect(added).toMatchObject({ ok: true, server: { autoApprove: ["my_day", "search_leads"] } });
+    if (!added.ok) throw new Error(added.error);
+    expect(parseMcpServerMutation("crm", { command: "node", args: ["crm.mjs"] }, added.server)).toMatchObject({ ok: true, server: { autoApprove: ["my_day", "search_leads"] } });
+    expect(parseMcpServerMutation("crm", { command: "node", autoApprove: ["mcp__crm__*"] }).ok).toBe(false);
+    expect(parseStoredMcpServer("crm", { url: "https://crm.example/mcp", autoApprove: ["read"] })).toMatchObject({ ok: true, server: { autoApprove: ["read"] } });
+  });
+
   it("refuses unsafe and reserved routing names", () => {
     expect(mcpServerNameError("Bad.Name")).toMatch(/lowercase/);
     expect(mcpServerNameError("computer")).toMatch(/reserved/);

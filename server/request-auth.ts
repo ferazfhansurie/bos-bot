@@ -209,6 +209,7 @@ export const CLIENT_ALLOW: ReadonlyArray<{ methods: readonly string[]; path: Reg
   { methods: ["GET"], path: /^\/api\/search$/ },
   { methods: ["GET"], path: /^\/api\/activity$/ },
   { methods: ["GET"], path: /^\/api\/jobs$/ },
+  { methods: ["GET"], path: /^\/api\/bots\/[\w-]+\/runtime$/ },
   // needs-me and the digest: derived from the same reads as /api/bots
   { methods: ["GET"], path: /^\/api\/inbox$/ },
   { methods: ["GET"], path: /^\/api\/lead-actions$/ },

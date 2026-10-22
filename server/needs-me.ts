@@ -77,7 +77,7 @@ const INLINE_OPTIONS = 6;
  * Proposals (skills, routines, profiles, team setup) and multi-question sets
  * need their full card, so the row only opens the thread. A room's own
  * (non-live) card has no answer path outside the room either. */
-function cardAnswer(message: NeedsMeMessage, inRoom: boolean): Pick<InboxItem, "messageId" | "requestId" | "approval" | "options"> {
+function cardAnswer(message: NeedsMeMessage, inRoom: boolean): Pick<InboxItem, "messageId" | "requestId" | "approval" | "options" | "freeText"> {
   const card = message.card!;
   const live = card.requestId ? { requestId: card.requestId } : {};
   const base = { messageId: message.id, ...live };
@@ -85,7 +85,8 @@ function cardAnswer(message: NeedsMeMessage, inRoom: boolean): Pick<InboxItem, "
   if (card.tool) return card.requestId ? { ...base, approval: true } : base;
   if (!card.requestId && inRoom) return base;
   const options = parseChoices(card.options, INLINE_OPTIONS);
-  return options?.length ? { ...base, options } : base;
+  if (options?.length) return { ...base, options };
+  return card.requestId && !inRoom ? { ...base, freeText: true } : base;
 }
 
 /** The one inbox row a conversation earns, or null when it needs nothing. */

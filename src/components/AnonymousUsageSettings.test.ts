@@ -22,7 +22,9 @@ describe("AnonymousUsageSettings", () => {
     expect(markup).toContain('aria-label="share anonymous usage counts"');
     expect(markup).toContain('aria-checked="true"');
     expect(markup).toContain("bos.aihlete.com");
-    expect(markup).toContain("No names, emails, messages, paths, prompts or tokens.");
+    expect(markup).toContain("No chat, file names, paths, prompts or tokens.");
+    expect(markup).toContain("bosbot.my");
+    expect(markup).toContain("email, it is sent separately to match a consented signup.");
   });
   it("reflects the server opt-out and environment override", () => {
     fixture.usage = { enabled: false };

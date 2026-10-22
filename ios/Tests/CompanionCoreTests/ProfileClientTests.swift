@@ -66,6 +66,25 @@ final class ProfileClientTests: XCTestCase {
         super.tearDown()
     }
 
+    func testPhonePermissionChangePinsThreadAndNeverUsesBotDefault() async throws {
+        ProfileRequestStub.responseBody = Self.botResponse
+        _ = try await client.setThreadApproval(botId: "avatar-bot", threadId: "chosen-thread", mode: .auto, acknowledgeLocalAuto: true)
+        XCTAssertEqual(ProfileRequestStub.capturedRequest?.url?.path, "/api/bots/avatar-bot/tasks/chosen-thread")
+        let body = try XCTUnwrap(JSONSerialization.jsonObject(with: XCTUnwrap(ProfileRequestStub.capturedBody)) as? [String: Any])
+        XCTAssertEqual(body["approvalMode"] as? String, "auto")
+        XCTAssertEqual(body["acknowledgeLocalAuto"] as? Bool, true)
+        XCTAssertNil(body["updateBotDefault"])
+    }
+
+    func testSkillEnablePinsReviewedContent() async throws {
+        ProfileRequestStub.responseBody = Data(#"{"skill":{"name":"test-skill","description":"Test","enabled":true,"source":"local","sha256":"reviewed","warnings":[]}}"#.utf8)
+        _ = try await client.setBotSkillEnabled(botId: "avatar-bot", name: "test-skill", enabled: true, expectedSHA: "reviewed")
+        XCTAssertEqual(ProfileRequestStub.capturedRequest?.url?.path, "/api/bots/avatar-bot/skills/test-skill")
+        let body = try XCTUnwrap(JSONSerialization.jsonObject(with: XCTUnwrap(ProfileRequestStub.capturedBody)) as? [String: Any])
+        XCTAssertEqual(body["expectedSha256"] as? String, "reviewed")
+        XCTAssertEqual(body["enabled"] as? Bool, true)
+    }
+
     func testProfilePatchPreservesServerLimitsWithoutClientTruncation() throws {
         let name = String(repeating: "n", count: 100)
         let title = String(repeating: "t", count: 200)

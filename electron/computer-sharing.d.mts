@@ -4,11 +4,12 @@ export interface SharingState {
   folders: SharedFolder[];
   terminal: boolean;
   computer: boolean;
+  browser: boolean;
   connected?: boolean;
   error?: string;
 }
 interface Workspace { id: string; name: string; origin: string }
-interface Identity { sessionId: string; environmentId: string }
+interface Identity { sessionId: string; environmentId: string; browser?: true }
 export function validateSharedFolders(folders: unknown): Promise<SharedFolder[]>;
 export function createComputerSharing(options: {
   file: string;
@@ -18,13 +19,14 @@ export function createComputerSharing(options: {
   protectedPaths?: string[];
   cuaConnection: () => Promise<{ mcpCommand: string; mcpArgs: string[]; mcpEnv?: Record<string, string> } | null>;
   hostControl?: (id: string, signal: AbortSignal) => Promise<{ renew(): Promise<unknown>; release(): Promise<unknown> }>;
+  browserHost?: { run(env: Workspace, operation: Record<string, unknown>): Promise<unknown>; releaseWorkspace(id: string): void };
 }): {
   state(id: string): SharingState;
   identity(env: Workspace): Promise<Identity>;
   inspectIdentity(env: Workspace): Promise<Identity>;
   observe(env: Workspace): Promise<Identity | null>;
   decline(env: Workspace, identity: Identity): void;
-  save(env: Workspace, input: Pick<SharingState, "folders" | "terminal" | "computer">, identity: Identity): Promise<SharingState>;
+  save(env: Workspace, input: Pick<SharingState, "folders" | "terminal" | "computer"> & { browser?: boolean }, identity: Identity): Promise<SharingState>;
   revoke(env: Workspace): SharingState;
   forget(env: Workspace): void;
   start(): void;

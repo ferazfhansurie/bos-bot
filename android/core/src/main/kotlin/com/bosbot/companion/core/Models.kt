@@ -206,6 +206,8 @@ data class Message(
      * finally lands.
      */
     val queueId: String? = null,
+    /** Smart ui blocks' typed and toggled values, keyed per block. Absent on old servers. */
+    val uiState: Map<String, JsonObject>? = null,
 ) {
     @Serializable(with = MessageKindSerializer::class)
     enum class Kind { TEXT, OPTIONS, ACTIVITY, SCREEN, UNKNOWN }
@@ -776,6 +778,7 @@ data class ConfigStatus(
     val imageGen: ConfigFlag? = null,
     val profile: Profile? = null,
     val threads: ThreadConfig? = null,
+    val anonymousUsage: AnonymousUsagePolicy? = null,
 ) {
     /**
      * "This engine can speak", not "a key is on file" — under the built-in
@@ -1280,7 +1283,7 @@ val Bot.isRemote: Boolean get() = remote != null
 @Serializable data class ServerSession(val id: String, val label: String, val scopes: List<String>, val expiresAt: Double? = null) {
     val isAdmin: Boolean get() = "admin" in scopes
 }
-@Serializable data class ServerEnvironment(val environmentId: String, val label: String, val platform: String? = null, val version: String? = null)
+@Serializable data class ServerEnvironment(val environmentId: String, val label: String, val platform: String? = null, val version: String? = null, val minPhoneVersion: String? = null, val phoneUpdateUrls: Map<String, String>? = null)
 @Serializable data class ServerPairResponse(val token: String, val session: ServerSession, val environment: ServerEnvironment)
 val BotTask.canMarkDone: Boolean get() = !isArchived && !isWorking
 

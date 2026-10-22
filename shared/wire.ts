@@ -411,6 +411,9 @@ export interface WireMessage {
   peerAsk?: { botId: string; name: string; unattended?: boolean };
   /** emoji reactions; by = "user" or a member botId. */
   reactions?: Array<{ emoji: string; by: string }>;
+  /** smart ui: what the person typed or toggled in each ```openui block,
+   * keyed by block (smartUiKey), so a reload keeps it. */
+  uiState?: Record<string, Record<string, unknown>>;
   outputDraft?: import("./output-draft.js").OutputDraft;
   /** comm chips: "Messaged @X", linking to the bot-bot channel. */
   comm?: { groupId: string; threadId?: string; withBotId: string; withName: string; withColor: string };
@@ -609,6 +612,8 @@ export interface InboxItem {
   approval?: boolean;
   /** the card's choices, when the row can be answered with one tap */
   options?: string[];
+  /** a plain live question with no choices: typed words answer it */
+  freeText?: boolean;
 }
 
 export interface InboxResponse {

@@ -5,16 +5,22 @@ const folder = z.object({ id: z.string().uuid(), name: z.string().min(1).max(120
 export const sharedComputerRegistration = z.object({
   id: z.string().uuid(), name: z.string().min(1).max(120), environmentId: z.string().uuid(),
   folders: z.array(folder).max(20), terminal: z.boolean(), computer: z.boolean(),
+  // The desktop's own BOS browser window serves this workspace's browser tools.
+  browser: z.boolean().optional(),
   allowedBotIds: z.array(z.string().uuid()).min(1).max(100).optional(),
 }).strict();
 export const sharedComputerOperation = z.object({
   computer_id: z.string().uuid(),
-  action: z.enum(["list_files", "read_file", "write_file", "run_command", "computer_tools", "computer_call"]),
+  action: z.enum(["list_files", "read_file", "write_file", "run_command", "computer_tools", "computer_call", "browser_rpc", "browser_release"]),
   folder_id: z.string().uuid().optional(), path: z.string().max(2048).optional(),
   content: z.string().max(350_000).optional(), encoding: z.enum(["utf8", "base64"]).optional(),
   expected_sha256: z.string().regex(/^[a-f0-9]{64}$/).optional(),
   command: z.string().max(8000).optional(), tool_name: z.string().max(100).optional(),
   arguments: z.record(z.string(), z.unknown()).optional(),
+  // browser_rpc / browser_release: one agent_browser MCP call for one turn.
+  method: z.enum(["tools/list", "tools/call"]).optional(), params: z.record(z.string(), z.unknown()).optional(),
+  bot_id: z.string().max(200).optional(), thread_id: z.string().max(200).optional(), generation: z.string().max(200).optional(),
+  profile_id: z.string().max(200).optional(), full_access: z.boolean().optional(), timeout_ms: z.number().int().min(1000).max(40_000).optional(),
 }).strict();
 type Registration = z.infer<typeof sharedComputerRegistration>;
 type Operation = z.infer<typeof sharedComputerOperation>;
@@ -89,15 +95,23 @@ export class SharedComputers {
     this.computers.delete(id); entry.wake?.();
     for (const job of entry.jobs.values()) this.finish(entry, job, failure("Computer disconnected. An in-flight action may have completed; inspect before retrying."));
   }
+  /** Online computers whose desktop browser serves this bot's browser tools. */
+  browsers(botId: string) { return this.list(botId).filter(entry => entry.browser === true); }
   request(operation: Operation, active: () => boolean, botId?: string): Promise<unknown> {
     const entry = this.computers.get(operation.computer_id);
     if (!entry || !this.online(entry)) return Promise.reject(failure("This shared computer is offline. Keep its desktop app open; do not substitute files on the server."));
     if (!this.allowed(entry, botId)) return Promise.reject(failure("This bot has no grant for this shared computer", 403));
-    if (entry.jobs.size >= 1) return Promise.reject(failure("This shared computer is busy. Wait for its current action to finish."));
+    const browser = operation.action === "browser_rpc" || operation.action === "browser_release";
+    if (browser && entry.registration.browser !== true) return Promise.reject(failure("This computer does not share its browser", 403));
+    // Browser calls are serialized per conversation on the desktop, so several
+    // turns may browse at once; files, terminal and screen stay one at a time.
+    const queued = [...entry.jobs.values()].filter(job => (job.operation.action === "browser_rpc" || job.operation.action === "browser_release") === browser).length;
+    if (queued >= (browser ? 8 : 1)) return Promise.reject(failure("This shared computer is busy. Wait for its current action to finish."));
     if (!active()) return Promise.reject(failure("The requesting turn ended", 401));
     return new Promise((resolve, reject) => {
       const id = randomUUID();
-      const job: Job = { id, operation, active: () => active() && this.allowed(entry, botId), sent: false, resolve, reject, timer: setTimeout(() => this.finish(entry, job, failure("Computer action timed out. Its outcome is unknown; inspect before retrying.")), 45_000) };
+      const timeout = browser ? (operation.timeout_ms ?? 20_000) + 10_000 : 45_000;
+      const job: Job = { id, operation, active: () => active() && this.allowed(entry, botId), sent: false, resolve, reject, timer: setTimeout(() => this.finish(entry, job, failure("Computer action timed out. Its outcome is unknown; inspect before retrying.")), timeout) };
       entry.jobs.set(id, job); entry.wake?.();
     });
   }

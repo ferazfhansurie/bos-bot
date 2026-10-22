@@ -235,6 +235,18 @@ const bridge = {
       return () => ipcRenderer.removeListener("attention:event", handler);
     },
   },
+  /** The notch window (electron/notch.mjs): this window switches it on,
+   * sends it a snapshot of who is working and who needs the person, and
+   * carries out what the person does there. Local page only. */
+  notch: {
+    enable: (on) => ipcRenderer.send("notch:enable", on === true),
+    update: (snapshot) => ipcRenderer.send("notch:snapshot", JSON.stringify(snapshot)),
+    onAction: (cb) => {
+      const handler = (_event, value) => cb(value);
+      ipcRenderer.on("notch:action", handler);
+      return () => ipcRenderer.removeListener("notch:action", handler);
+    },
+  },
   /** Live VNC/noVNC in a sandboxed window owned by the app window. */
   desktopViewer: {
     open: (url, title, contextId) => ipcRenderer.invoke("desktop-viewer:open", url, title, contextId),
@@ -291,6 +303,10 @@ const bridge = {
   /** Writes the redacted diagnostics report to a user-chosen file; resolves
    * the path, or null when the save dialog was cancelled. */
   exportDiagnostics: () => ipcRenderer.invoke("desktop:export-diagnostics"),
+  health: {
+    sendDiagnostics: () => ipcRenderer.invoke("desktop:send-diagnostics"),
+    exitSafeMode: () => ipcRenderer.invoke("desktop:exit-safe-mode"),
+  },
   /** Ask where to save a bot-created file (inside ~/.openmausbot), copy it
    * there and reveal it. Returns the chosen path, or null if the user
    * cancelled the dialog. The chat bubble shows the
@@ -316,6 +332,7 @@ const bridge = {
     check: () => ipcRenderer.invoke("update:check"),
     download: () => ipcRenderer.invoke("update:download"),
     install: () => ipcRenderer.invoke("update:install"),
+    quitNow: () => ipcRenderer.invoke("update:quit-now"),
     onState: (cb) => {
       ipcRenderer
         .invoke("update:get-state")

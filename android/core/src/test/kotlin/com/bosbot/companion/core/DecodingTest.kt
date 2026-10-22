@@ -26,6 +26,17 @@ class DecodingTest {
     }
 
     @Test
+    fun messageUiStateIsOptionalAndKeyedPerBlock() {
+        val bare = CompanionJson.decodeFromString<Message>("""{"id":"m1","role":"bot","kind":"text","at":1,"text":"hi"}""")
+        assertNull(bare.uiState)
+        val saved = CompanionJson.decodeFromString<Message>(
+            """{"id":"m1","role":"bot","kind":"text","at":1,"text":"hi","uiState":{"b1x":{"rating":4}}}""",
+        )
+        assertEquals(setOf("b1x"), saved.uiState?.keys)
+        assertEquals("4", saved.uiState?.get("b1x")?.get("rating").toString())
+    }
+
+    @Test
     fun decodesTheFullFleetToo() {
         val fleet = decodeFixture<Fleet>("bots-full")
         assertTrue(fleet.bots.isNotEmpty())

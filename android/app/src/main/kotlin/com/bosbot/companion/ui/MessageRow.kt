@@ -518,6 +518,8 @@ private fun TextBubble(
                         MarkdownText(
                             source = message.text.orEmpty(),
                             openLink = openLink?.let { open -> { url -> open(url, message) } },
+                            messageId = message.id,
+                            uiState = message.uiState,
                         )
                     }
                 }

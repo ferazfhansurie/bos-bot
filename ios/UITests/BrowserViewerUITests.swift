@@ -2,6 +2,29 @@ import XCTest
 
 final class BrowserViewerUITests: XCTestCase {
     @MainActor
+    func testComputerPickerSavesAndReadsBackThreadSelection() throws {
+        guard let raw = ProcessInfo.processInfo.environment["BOS_PHONE_VIEW_FIXTURE_URL"] else { throw XCTSkip("start the phone-view fixture") }
+        let app = XCUIApplication()
+        app.launchArguments = ["-computer-preview", "-browser-preview-url", raw]
+        app.launch()
+        let switcher = app.buttons["switch-thread-computer"]
+        XCTAssertTrue(switcher.waitForExistence(timeout: 15))
+        switcher.tap()
+        let picker = app.buttons["thread-computer-picker"]
+        XCTAssertTrue(picker.waitForExistence(timeout: 10))
+        picker.tap()
+        app.buttons["Browser"].tap()
+        let use = app.buttons["Use Browser"]
+        XCTAssertTrue(use.waitForExistence(timeout: 5))
+        use.tap()
+        let readback = XCTNSPredicateExpectation(predicate: NSPredicate(format: "value == %@", "Browser"), object: picker)
+        XCTAssertEqual(XCTWaiter.wait(for: [readback], timeout: 10), .completed, "server readback is displayed")
+        let shot = XCTAttachment(screenshot: app.screenshot()); shot.name = "Thread computer selection"; shot.lifetime = .keepAlways; add(shot)
+        app.buttons["Done"].tap()
+        XCTAssertTrue(switcher.waitForExistence(timeout: 5))
+    }
+
+    @MainActor
     func testFramesStayCurrentWhileAcknowledgementIsSlow() async throws {
         guard let raw = ProcessInfo.processInfo.environment["BOS_PHONE_VIEW_FIXTURE_URL"] else { throw XCTSkip("start the phone-view fixture") }
         let app = XCUIApplication()

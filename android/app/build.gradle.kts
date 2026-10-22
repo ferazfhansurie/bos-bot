@@ -158,32 +158,16 @@ android {
             // handover build — and the "release" config whenever it was.
             signingConfig = signingConfigs.findByName("release")
 
-            // R8 is off deliberately, and this line says so rather than letting
-            // the default imply it.
-            //
-            // `:core` carries 66 `@Serializable` classes, and
-            // kotlinx.serialization reaches their generated serializers
-            // reflectively: `Foo.Companion.serializer()`, looked up by name at
-            // the moment a frame is decoded. R8 sees no call site for those
-            // companions and no reference to the field names its descriptors
-            // carry, so without keep rules it renames and strips them. What
-            // comes out builds, installs, opens — and then fails the first time
-            // the phone talks to the computer, as a SerializationException on a
-            // frame off the socket, in release only, with a stack trace made of
-            // one-letter class names.
-            //
-            // Turning it on means writing and *testing* keep rules: the
-            // serializable surface in `:core` and `:app`, ML Kit's native
-            // barcode entry points, and Tink under androidx.security.crypto.
-            // Testing them means installing the minified APK and driving a real
-            // pairing and a real session against a real computer. None of that
-            // failure mode shows up in a unit test, and a minified APK that
-            // launches proves nothing. Until someone does that work, `false` is
-            // the tested state and ~34 MB is its price.
-            isMinifyEnabled = false
-            // Resource shrinking is R8's, and AGP rejects the build if it is
-            // turned on while the line above is false.
-            isShrinkResources = false
+            // R8 is on since 2.1.3 (it was off at ~34 MB). kotlinx.serialization
+            // looks up `Foo.Companion.serializer()` reflectively, so R8 without
+            // keep rules builds an APK that opens and then fails its first
+            // decoded frame, in release only. proguard-rules.pro keeps that
+            // surface plus ML Kit and Tink. A minified APK that launches
+            // proves nothing: drive a real pairing and session on a device
+            // before shipping a change to these rules.
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
         }
     }
 

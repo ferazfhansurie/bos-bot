@@ -292,7 +292,13 @@ class CompanionClient(
 
     suspend fun logout() = sendUnit(makeRequest("POST", "/api/auth/logout"))
 
-    suspend fun environment(): ServerEnvironment = send(makeRequest("GET", "/.well-known/openmausbot/environment"))
+    suspend fun environment(phoneVersion: String? = null): ServerEnvironment {
+        val raw = send<JsonObject>(makeRequest("GET", "/.well-known/openmausbot/environment"))
+        phoneVersion?.let { PhoneCompatibility.requiredUpdate(raw, it)?.let { required -> throw required } }
+        return try { CompanionJson.decodeFromString(raw.toString()) } catch (error: SerializationException) {
+            throw APIError.Transport("The computer sent something this app couldn't read.", error)
+        }
+    }
 
     suspend fun providerUsage(): ProviderUsageResponse = send(makeRequest("GET", "/api/provider-usage"))
     suspend fun updateStatus(): UpdateStatusResponse = send(makeRequest("GET", "/api/update/status"))
@@ -792,6 +798,18 @@ class CompanionClient(
             body = jsonBody("emoji" to emoji),
         )).message
 
+    /** Saves a smart ui block's typed and toggled values onto a bot message. */
+    suspend fun setUiState(threadId: String, messageId: String, key: String, state: JsonObject) {
+        sendUnit(makeRequest(
+            "POST",
+            "/api/threads/${segment(threadId)}/messages/${segment(messageId)}/ui",
+            body = buildJsonObject {
+                put("key", key)
+                put("state", state)
+            },
+        ))
+    }
+
     suspend fun edit(botId: String, messageId: String, text: String, threadId: String? = null) {
         sendUnit(makeRequest(
             "POST",
@@ -1238,14 +1256,15 @@ class CompanionClient(
             deviceName: String,
             pairRequestId: String = UUID.randomUUID().toString(),
             client: OkHttpClient = OkHttpClient(),
+            phoneVersion: String? = null,
         ): PairingOutcome {
             normalizedServerCode(credential)?.let { code ->
                 val probe = CompanionClient(connection, token = null, baseClient = client)
-                val environment = try { probe.environment() } catch (error: APIError.Status) {
+                val environment = try { probe.environment(phoneVersion) } catch (error: APIError.Status) {
                     if (error.code == 404) throw APIError.Transport("${connection.displayAddress} isn't a BOS server. Check the address and try again.")
                     throw error
                 }
-                val response = pairWithServer(connection, code, deviceName, pairRequestId, client)
+                val response = pairWithServer(connection, code, deviceName, pairRequestId, client, phoneVersion)
                 if (response.environment.environmentId != environment.environmentId) {
                     throw APIError.Transport("The server changed during pairing. Start pairing again.")
                 }
@@ -1262,6 +1281,11 @@ class CompanionClient(
                     ?: throw PairingRouteError(attemptedRoutes)
                 val winner = remaining.removeAt(winnerIndex)
                 try {
+                    if (phoneVersion != null) {
+                        try { CompanionClient(winner, null, client).environment(phoneVersion) } catch (error: Exception) {
+                            if (error is CancellationException || error is PhoneUpdateRequired) throw error
+                        }
+                    }
                     val response = pair(
                         connection = winner,
                         credential = credential,
@@ -1274,6 +1298,8 @@ class CompanionClient(
                     throw error
                 } catch (error: APIError) {
                     if (ConnectionAdvice.shouldRetryPairingOnAnotherRoute(error)) continue
+                    throw error
+                } catch (error: PhoneUpdateRequired) {
                     throw error
                 } catch (_: Exception) {
                     // An unreadable/lost response is ambiguous. A newer sidecar replays the
@@ -1291,13 +1317,19 @@ class CompanionClient(
         }
 
         suspend fun pairWithServer(connection: Connection, code: String, label: String,
-            attemptId: String = UUID.randomUUID().toString(), client: OkHttpClient = OkHttpClient()): ServerPairResponse {
+            attemptId: String = UUID.randomUUID().toString(), client: OkHttpClient = OkHttpClient(), phoneVersion: String? = null): ServerPairResponse {
             val normalized = normalizedServerCode(code) ?: throw APIError.BadUrl
             val companion = CompanionClient(connection, token = null, baseClient = client)
             val pairClient = client.newBuilder().dns(companion.endpoint?.dns ?: client.dns)
                 .callTimeout(8, TimeUnit.SECONDS).build()
-            return companion.send(companion.makeRequest("POST", "/api/auth/pair", body = jsonBody(
+            val raw = companion.send<JsonObject>(companion.makeRequest("POST", "/api/auth/pair", body = jsonBody(
                 "code" to normalized, "label" to label, "attemptId" to attemptId)), pairClient)
+            phoneVersion?.let { version -> raw["environment"]?.let { environment ->
+                PhoneCompatibility.requiredUpdate(environment, version)?.let { throw it }
+            } }
+            return try { CompanionJson.decodeFromString(raw.toString()) } catch (error: SerializationException) {
+                throw APIError.Transport("The computer sent something this app couldn't read.", error)
+            }
         }
 
         private suspend fun firstHealthy(

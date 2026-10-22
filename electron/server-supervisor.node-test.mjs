@@ -163,3 +163,51 @@ test("repeated quit requests join the exact same child cleanup", async (t) => {
   await f.tick(1000);
   assert.equal(f.children.length, 1);
 });
+
+test("exhaustion boots safe mode once and never loops even after stable uptime", async (t) => {
+  let safeAttempts = 0;
+  const f = fixture(t, { restartSafeMode: async (reason) => {
+    assert.match(reason, /server/);
+    safeAttempts++;
+    return { proc: f.spawn() };
+  } });
+  f.supervisor.ready(f.spawn());
+  for (const delay of [10, 20, 40]) {
+    f.children.at(-1).emit("exit", 1);
+    await f.tick(delay);
+  }
+  f.children.at(-1).emit("exit", 1);
+  await f.tick(0);
+  assert.equal(safeAttempts, 1);
+  assert.equal(f.children.length, 5);
+  await f.tick(200);
+  f.children.at(-1).emit("exit", 1);
+  await f.tick(1000);
+  assert.equal(safeAttempts, 1);
+  assert.equal(f.children.length, 5);
+  assert.deepEqual(f.events.at(-1), ["exhausted"]);
+});
+
+test("initial boot can use the same one-shot safe recovery and quit owns its pending child", async (t) => {
+  let finish;
+  const f = fixture(t, { restartSafeMode: () => {
+    const proc = f.spawn();
+    return new Promise(resolve => { finish = () => resolve({ proc }); });
+  } });
+  const boot = f.supervisor.recoverInSafeMode("server startup failed");
+  const proc = f.children.at(-1);
+  await f.supervisor.shutdown();
+  finish();
+  assert.equal(await boot, false);
+  assert.ok(f.events.some(([event, child]) => event === "stop" && child === proc));
+  assert.equal(await f.supervisor.recoverInSafeMode("retry"), false);
+});
+
+test("unreaped failed child blocks safe recovery", async (t) => {
+  let safeAttempts = 0;
+  const f = fixture(t, { restartSafeMode: async () => { safeAttempts++; } });
+  f.spawn();
+  assert.equal(await f.supervisor.recoverInSafeMode("server stuck"), false);
+  assert.equal(safeAttempts, 0);
+  await f.supervisor.shutdown();
+});

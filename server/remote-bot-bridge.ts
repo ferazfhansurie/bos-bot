@@ -116,6 +116,10 @@ interface HomeState {
    * bridge skips them (roster, rooms, relayed frames) until added back. */
   removed: Record<string, RemovedBot>;
   attachments: string[];
+  /** Set by the operator when a home links to exactly the conversations
+   * already mapped here (one shared thread): no new thread is ever opened
+   * on B, whether a new chat, a first send or a room turn. */
+  locked?: true;
 }
 
 interface RemovedBot { name: string; removedAt: number }
@@ -293,6 +297,7 @@ function cleanState(value: unknown): HomeState {
   if (Array.isArray(value.attachments)) {
     state.attachments = value.attachments.filter((name): name is string => typeof name === "string" && ATTACHMENT_NAME.test(name)).slice(-MAX_ATTACHMENT_NAMES);
   }
+  if (value.locked === true) state.locked = true;
   return state;
 }
 
@@ -1340,6 +1345,7 @@ export class RemoteBotBridge {
   /** Open a thread on B for this home. B's create also selects it for B's
    * owner, so the owner's previous selection is put back straight after. */
   private async createThread(home: Home, botId: string, title: string | undefined, room = false): Promise<string> {
+    if (home.state.locked) throw new BridgeError(403, `${home.link.name} shares only this conversation; new chats are turned off`);
     const previous = home.remoteSelected.get(botId);
     const result = await this.call(home, "POST", `/api/bots/${botId}/tasks`, {
       ...(title ? { title } : {}),

@@ -1,0 +1,42 @@
+{
+  "id": "smart-ui",
+  "name": "Smart UI",
+  "version": "1.0.0",
+  "description": "Answer with live tables, charts, stat tiles and buttons in chat (a fenced openui block).",
+  "defaultEnabled": true,
+  "triggerTerms": [
+    "```openui",
+    "chart",
+    "graphs",
+    "a graph",
+    "plot",
+    "dashboard",
+    "stats",
+    "statistics",
+    "metrics",
+    "kpi",
+    "compare",
+    "comparison",
+    "breakdown",
+    "report",
+    "csv",
+    "spreadsheet",
+    "tables",
+    "a table",
+    "table of",
+    "trend",
+    "overview",
+    "how many",
+    "pipeline",
+    "leads",
+    "revenue",
+    "sales",
+    "numbers",
+    "top 5",
+    "top 10",
+    "smart ui"
+  ],
+  "requiredCapabilities": [
+    "smartUi"
+  ]
+}

@@ -1,0 +1,222 @@
+/* The notch page. Transparent everywhere except the black shape; nothing
+   here animates unless it is on its way somewhere. */
+html, body, #notch {
+  margin: 0;
+  width: 100%;
+  height: 100%;
+  background: transparent;
+  overflow: hidden;
+}
+body {
+  font: 13px/1.35 -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif;
+  color: #fff;
+  -webkit-font-smoothing: antialiased;
+  user-select: none;
+  cursor: default;
+}
+
+.notch-root { position: fixed; inset: 0; }
+.notch-root[data-off="1"] { visibility: hidden; }
+.notch-shape { position: absolute; inset: 0; overflow: visible; pointer-events: none; }
+.notch-fill { fill: #000; }
+/* a failure gets one red beat along the edge, then it is black again */
+.notch-failed { stroke: #ff453a; stroke-width: 0; animation: notch-edge 900ms ease-out; }
+@keyframes notch-edge {
+  0% { stroke-width: 0; filter: drop-shadow(0 0 0 rgba(255, 69, 58, 0)); }
+  25% { stroke-width: 1.5; filter: drop-shadow(0 0 6px rgba(255, 69, 58, .55)); }
+  100% { stroke-width: 0; filter: drop-shadow(0 0 0 rgba(255, 69, 58, 0)); }
+}
+.notch-clip { position: absolute; inset: 0; }
+
+/* heads sit in the band beside the camera; transform moves them, so they
+   stay on the compositor */
+.notch-head {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  background: none;
+  transform-origin: 0 0;
+  transition: transform 420ms cubic-bezier(.34, 1.36, .5, 1);
+  cursor: pointer;
+}
+.notch-head > span { display: block; width: 22px; height: 22px; }
+.notch-mascot { display: block; overflow: visible; }
+.notch-look { transition: transform 260ms cubic-bezier(.22, 1, .36, 1); }
+
+.notch-gesture-hop { animation: notch-hop 620ms cubic-bezier(.3, .7, .4, 1); }
+@keyframes notch-hop {
+  0% { transform: translateY(0) scale(1, 1); }
+  18% { transform: translateY(1px) scale(1.12, .86); }
+  45% { transform: translateY(-7px) scale(.94, 1.06); }
+  72% { transform: translateY(0) scale(1.08, .92); }
+  100% { transform: translateY(0) scale(1, 1); }
+}
+.notch-gesture-shake { animation: notch-shake 460ms ease-out; }
+@keyframes notch-shake {
+  0%, 100% { transform: translateX(0); }
+  15% { transform: translateX(-3px) rotate(-6deg); }
+  35% { transform: translateX(3px) rotate(5deg); }
+  55% { transform: translateX(-2px) rotate(-3deg); }
+  75% { transform: translateX(1px) rotate(1deg); }
+}
+.notch-gesture-climb { animation: notch-climb 520ms cubic-bezier(.34, 1.4, .5, 1); }
+@keyframes notch-climb {
+  0% { transform: translateY(-6px) scale(.8); }
+  60% { transform: translateY(1px) scale(1.04); }
+  100% { transform: none; }
+}
+
+.notch-overflow {
+  position: absolute;
+  display: flex;
+  align-items: center;
+  font-size: 11px;
+  font-weight: 600;
+  color: rgba(255, 255, 255, .62);
+  font-variant-numeric: tabular-nums;
+}
+.notch-dot {
+  position: absolute;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--dot);
+  box-shadow: 0 0 8px var(--dot);
+  animation: notch-dot-in 360ms cubic-bezier(.34, 1.5, .5, 1);
+}
+@keyframes notch-dot-in { from { transform: scale(0); } }
+
+.notch-panel { position: absolute; box-sizing: border-box; padding: 4px 12px 12px; }
+.notch-enter { animation: notch-enter 260ms cubic-bezier(.22, 1, .36, 1) both; }
+@keyframes notch-enter { from { opacity: 0; transform: translateY(-6px); } }
+
+.notch-name { font-weight: 600; color: #fff; white-space: nowrap; }
+.notch-sub { color: rgba(255, 255, 255, .55); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.notch-hint { color: rgba(255, 255, 255, .55); font-size: 12px; padding: 6px 4px 2px; text-align: center; }
+
+/* the ask: the bot that climbed out sits at its left */
+.notch-ask { display: flex; flex-direction: column; gap: 8px; padding: 6px 2px 0 48px; min-height: 40px; }
+.notch-ask-inline { padding: 8px 10px; margin-bottom: 6px; border-radius: 14px; background: rgba(255, 255, 255, .07); }
+.notch-ask-top { display: flex; align-items: center; gap: 9px; min-width: 0; }
+.notch-ask-face { flex: none; width: 28px; height: 28px; }
+.notch-ask-meta { display: flex; flex-direction: column; min-width: 0; }
+.notch-ask-text {
+  margin: 0;
+  color: rgba(255, 255, 255, .86);
+  font-size: 12.5px;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+}
+.notch-actions { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.notch-spacer { flex: 1; }
+.notch-button, .notch-link, .notch-more {
+  font: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  border: 0;
+  cursor: pointer;
+}
+.notch-button {
+  height: 26px;
+  padding: 0 13px;
+  border-radius: 13px;
+  color: #fff;
+  background: rgba(255, 255, 255, .1);
+  transition: background 120ms, transform 120ms;
+}
+.notch-button:hover { background: rgba(255, 255, 255, .17); }
+.notch-button:active { transform: scale(.96); }
+.notch-primary { background: #fff; color: #000; }
+.notch-primary:hover { background: rgba(255, 255, 255, .86); }
+.notch-primary:disabled { background: rgba(255, 255, 255, .22); color: rgba(0, 0, 0, .6); cursor: default; }
+.notch-option { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.notch-link { padding: 0 2px; background: none; color: rgba(255, 255, 255, .55); }
+.notch-link:hover { color: #fff; }
+.notch-more { display: block; width: 100%; padding: 2px 0 8px; background: none; color: rgba(255, 255, 255, .55); text-align: center; }
+.notch-more:hover { color: #fff; }
+.notch-reply { display: flex; gap: 6px; }
+.notch-reply input {
+  flex: 1;
+  min-width: 0;
+  height: 26px;
+  padding: 0 11px;
+  border: 0;
+  border-radius: 13px;
+  outline: none;
+  font: inherit;
+  font-size: 12.5px;
+  color: #fff;
+  background: rgba(255, 255, 255, .1);
+  user-select: text;
+}
+.notch-reply input::placeholder { color: rgba(255, 255, 255, .4); }
+.notch-reply input:focus { background: rgba(255, 255, 255, .14); }
+
+.notch-moment {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  width: 100%;
+  padding: 4px 4px 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.notch-moment-word { color: rgba(255, 255, 255, .7); white-space: nowrap; }
+.notch-moment-failed .notch-moment-word { color: #ff6961; }
+.notch-moment-title { flex: 1; }
+
+/* the shelf */
+.notch-shelf { display: flex; flex-direction: column; padding-top: 2px; }
+.notch-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  height: 38px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 11px;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background 120ms, opacity 160ms;
+}
+.notch-row:hover { background: rgba(255, 255, 255, .07); }
+.notch-row-rest { opacity: .55; }
+.notch-row-rest:hover { opacity: 1; }
+.notch-row-target { opacity: 1; background: rgba(255, 255, 255, .1); box-shadow: inset 0 0 0 1px var(--row); }
+.notch-row-face { flex: none; width: 26px; height: 26px; }
+.notch-row-text { display: flex; align-items: baseline; gap: 8px; flex: 1; min-width: 0; }
+.notch-state { flex: none; font-size: 11.5px; color: rgba(255, 255, 255, .55); font-variant-numeric: tabular-nums; }
+.notch-state-ask { color: #fff; font-weight: 600; }
+
+/* the glyph faces the app's mascots use (copied from src/styles.css; the
+   notch does not load the app's stylesheet) */
+@keyframes bos-avatar-blink { 50% { transform: scaleY(.08); } }
+.bos-avatar-blink { animation: bos-avatar-blink 180ms ease-in-out; }
+@keyframes bos-glyph-swap { from { transform: scaleY(.15); } }
+@keyframes bos-glyph-accent { from { opacity: 0; transform: scale(.55); } }
+.bos-glyph-swap { animation: bos-glyph-swap 120ms ease-out; }
+.bos-glyph-accent { animation: bos-glyph-accent 240ms cubic-bezier(0.22, 1, 0.36, 1) both; }
+
+@media (prefers-reduced-motion: reduce) {
+  .bos-avatar-blink, .bos-glyph-swap, .bos-glyph-accent,
+  .notch-gesture-hop, .notch-gesture-shake, .notch-gesture-climb, .notch-dot, .notch-failed { animation: none; }
+  .notch-head { transition: none; }
+  .notch-look { transition: none; }
+  .notch-enter { animation: notch-fade 160ms ease-out both; }
+  @keyframes notch-fade { from { opacity: 0; } }
+}

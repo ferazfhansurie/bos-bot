@@ -4,9 +4,11 @@ const release = (body: Input) => (body.type === "input_mouse" && body.eventType 
 const delta = (value: unknown) => typeof value === "number" && Number.isFinite(value) ? value : 0;
 const clamp = (value: number) => Math.max(-10_000, Math.min(10_000, value));
 
-/** One request at a time, with replaceable movement coalesced behind it.
- * Keyboard/button order is preserved; reconnect never replays old input. */
-export function createBrowserInputQueue(send: (body: Input) => Promise<void>, onError: (cause: unknown) => void) {
+/** One request at a time, carrying everything queued behind it as a batch, so
+ * a slow link (a tunnel at ~1s a round trip) costs one trip per burst, not
+ * per key. Replaceable movement is coalesced; keyboard/button order is
+ * preserved; reconnect never replays old input. */
+export function createBrowserInputQueue(send: (bodies: Input[]) => Promise<void>, onError: (cause: unknown) => void) {
   let queue: Input[] = [];
   let active: Promise<void> | null = null;
   let generation = 0;
@@ -20,8 +22,8 @@ export function createBrowserInputQueue(send: (body: Input) => Promise<void>, on
     const current = generation;
     active = (async () => {
       while (current === generation && queue.length) {
-        const body = queue.shift()!;
-        try { await send(body); }
+        const batch = queue.splice(0, 32);
+        try { await send(batch); }
         catch (cause) { if (current === generation) halt(cause); }
       }
     })().finally(() => { active = null; run(); });

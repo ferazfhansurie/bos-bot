@@ -228,7 +228,7 @@ final class ThreadNavigationUITests: XCTestCase {
         // Restart it so Session initializes with the offline fixture flags.
         app.terminate()
         app.launchArguments = [
-            "-store-preview", "-threads-preview",
+            "-store-preview", "-threads-preview", "-draft-fixture-scope", UUID().uuidString,
             "-AppleLanguages", "(en)", "-AppleLocale", "en_US",
             "-companion.prefs.islandIntro", islandIntro,
             "-companion.onboarding.welcomeSeen", "YES",

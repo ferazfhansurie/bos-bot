@@ -6,7 +6,16 @@
 // describing what is left to do, which the card renders.
 import { updateErrorMessage } from "./update-errors.mjs";
 
-export function createUpdaterCoordinator(updater, setState, { handOffInstall = null, nativeStaging = false, prepareInstall = null } = {}) {
+export function createUpdaterCoordinator(updater, setState, { handOffInstall = null, nativeStaging = false, prepareInstall = null, automaticDownload = false, onDownloaded = null, acceptUpdate = () => true, quitRetryMs: QUIT_RETRY_MS = 5_000, quitRetryLimit: QUIT_RETRY_LIMIT = 24, shutdownHoldMs: SHUTDOWN_HOLD_MS = 2 * 60 * 1000 } = {}) {
+  let lastStatus = "idle";
+  const publish = setState;
+  setState = patch => { lastStatus = patch.status ?? lastStatus; publish(patch); };
+  let quitOperation = null;
+  let quitAdmitted = false;
+  let quitPending = false;
+  let quitResume = null;
+  let quitRetries = 0;
+  let quitRetryTimer = null;
   let checkOperation = null;
   // Set from downloadUpdate's resolution: the paths electron-updater staged.
   // Only the hand-off needs them; quitAndInstall reads its own copy.
@@ -20,6 +29,12 @@ export function createUpdaterCoordinator(updater, setState, { handOffInstall = n
   // second attempt could consume the first attempt's late ready event.
   let recoveryRequired = false;
   let contractHeld = false;
+  // Quit-time hold: a late feed response must not start native staging while
+  // shutdown runs, but a quit cancelled after before-quit must not disable
+  // updates for the rest of the session. It lapses on its own.
+  let shutdownHeld = false;
+  let shutdownHoldTimer = null;
+  const held = () => contractHeld || shutdownHeld;
   // A staged update, install hand-off, or failed user action remains useful
   // until the user acts again. Hourly checks must not replace its controls.
   let actionOwnsState = false;
@@ -54,10 +69,6 @@ export function createUpdaterCoordinator(updater, setState, { handOffInstall = n
       });
       return;
     }
-    if (!manual) {
-      setState({ status: "idle" });
-      return;
-    }
     setState({ status: "error", message: updateErrorMessage(error) });
   };
 
@@ -75,7 +86,15 @@ export function createUpdaterCoordinator(updater, setState, { handOffInstall = n
   });
   updater.on("update-available", (info) => {
     if (checkOwnsState()) {
+      if (!acceptUpdate(info?.version)) {
+        contractHeld = true;
+        setState({status: "error", retryable: false, message: "No published update meets the required version. Download the latest installer."});
+        return;
+      }
       setState({ status: "available", version: info?.version, message: undefined });
+      // Own downloadUpdate's promise, including Squirrel's native staging.
+      // Vendor autoDownload would hide that promise from this coordinator.
+      if (typeof automaticDownload === "function" ? automaticDownload() : automaticDownload) queueMicrotask(() => void download());
     }
   });
   updater.on("update-not-available", () => {
@@ -93,7 +112,7 @@ export function createUpdaterCoordinator(updater, setState, { handOffInstall = n
     routeError(manual, error);
   });
   updater.on("download-progress", (progress) => {
-    if (contractHeld || recoveryRequired || installOperation || nativeStagingStarted) return;
+    if (quitOperation || held() || recoveryRequired || installOperation || nativeStagingStarted) return;
     setState({ status: "downloading", percent: Math.round(progress?.percent ?? 0) });
   });
   updater.on("update-downloaded", (info) => {
@@ -121,7 +140,7 @@ export function createUpdaterCoordinator(updater, setState, { handOffInstall = n
   });
 
   function check(manual = false) {
-    if (contractHeld || recoveryRequired || installOperation || (nativeStaging && (downloadOperation || nativeStagingStarted)) || (!manual && actionOwnsState)) return Promise.resolve();
+    if (quitOperation || held() || recoveryRequired || installOperation || (nativeStaging && (downloadOperation || nativeStagingStarted)) || (!manual && actionOwnsState)) return Promise.resolve();
     if (checkOperation) {
       // A manual caller upgrades the shared operation; a timer never downgrades it.
       if (manual) checkOperation.manual = true;
@@ -148,7 +167,7 @@ export function createUpdaterCoordinator(updater, setState, { handOffInstall = n
   }
 
   function download() {
-    if (contractHeld || recoveryRequired || installOperation || nativeStagingStarted) return Promise.resolve();
+    if (quitOperation || held() || recoveryRequired || installOperation || nativeStagingStarted) return Promise.resolve();
     if (checkOperation) checkOperation.supersededByDownload = true;
     if (downloadOperation) return downloadOperation.promise;
 
@@ -184,6 +203,7 @@ export function createUpdaterCoordinator(updater, setState, { handOffInstall = n
         .finally(() => {
           clearTimeout(operation.timer);
           if (downloadOperation === operation) downloadOperation = null;
+          if (!operation.failed && lastStatus === "downloaded") onDownloaded?.();
         });
     } catch (error) {
       handleRejectedOperation(true, error);
@@ -194,7 +214,7 @@ export function createUpdaterCoordinator(updater, setState, { handOffInstall = n
   }
 
   async function install({ prepareInstall: coordinatedPrepare = prepareInstall } = {}) {
-    if ((contractHeld && coordinatedPrepare === prepareInstall) || recoveryRequired || installOperation || downloadOperation || (nativeStaging && !nativeReady)) return { dispatched: false, error: "Update installation is held or in progress" };
+    if (quitOperation || shutdownHeld || (contractHeld && coordinatedPrepare === prepareInstall) || recoveryRequired || installOperation || downloadOperation || (nativeStaging && !nativeReady)) return { dispatched: false, error: "Update installation is held or in progress" };
     actionOwnsState = true;
     if (handOffInstall) {
       handOff();
@@ -254,8 +274,81 @@ export function createUpdaterCoordinator(updater, setState, { handOffInstall = n
   function candidate() { return stagedCandidate && !recoveryRequired ? { ...stagedCandidate } : null; }
   function admit(mode) {
     if (!["update", "restart"].includes(mode)) throw Object.assign(new Error("Invalid update mode"), { status: 400 });
-    if (contractHeld || recoveryRequired || installOperation || downloadOperation || checkOperation) throw Object.assign(new Error("Update installation is held or in progress"), { status: 409 });
+    if (quitOperation || held() || recoveryRequired || installOperation || downloadOperation || checkOperation) throw Object.assign(new Error("Update installation is held or in progress"), { status: 409 });
     if (mode === "update" && !candidate()) throw Object.assign(new Error("No verified Windows installer is staged"), { status: 409 });
   }
-  return { check, download, install, candidate, admit, hold: () => { contractHeld = true; } };
+  // Squirrel writes a persistent install request while staging: ordinary
+  // termination can apply it without quitAndInstall. Protect every exit from
+  // that point, even failed native readiness or failed idle admission.
+  // The guard is bounded: a refused admission retries quietly (the quit goes
+  // through once active tasks finish), and a repeated quit after a refusal
+  // tries once more, then quits without waiting. Cmd+Q must always work.
+  function finishQuit() {
+    clearTimeout(quitRetryTimer);
+    quitRetryTimer = null;
+    quitPending = false;
+    quitAdmitted = true;
+    const resume = quitResume;
+    quitResume = null;
+    resume?.();
+  }
+  function attemptQuit(insisted) {
+    const attempt = Promise.resolve()
+      .then(() => {
+        if (typeof prepareInstall !== "function") throw new Error("Update lifecycle protection is unavailable");
+        return prepareInstall();
+      })
+      .then(() => { quitOperation = null; finishQuit(); }, error => {
+        quitOperation = null;
+        if (quitAdmitted) return;
+        if (insisted) {
+          updater.logger?.warn?.(`Quit admission refused twice; quitting without waiting: ${updateErrorMessage(error)}`);
+          finishQuit();
+          return;
+        }
+        quitPending = true;
+        setState({status: "error", retryable: false, quitHeld: true, message: `${updateErrorMessage(error)} BOS Bot quits as soon as active tasks finish. Quit again to quit without waiting.`});
+        if (quitRetries >= QUIT_RETRY_LIMIT) return;
+        quitRetries++;
+        quitRetryTimer = setTimeout(() => {
+          quitRetryTimer = null;
+          if (!quitOperation && !quitAdmitted && quitPending) attemptQuit(false);
+        }, QUIT_RETRY_MS);
+        quitRetryTimer.unref?.();
+      });
+    quitOperation = attempt;
+  }
+  function protectQuit(event, resumeQuit) {
+    if (handOffInstall || quitAdmitted || installOperation?.dispatched) return false;
+    if (!nativeStagingStarted && !(nativeStaging && downloadOperation) && !installOperation && !quitOperation && !quitPending) return false;
+    event.preventDefault();
+    quitResume = resumeQuit;
+    if (installOperation || quitOperation) return true;
+    const insisted = quitPending;
+    clearTimeout(quitRetryTimer);
+    quitRetryTimer = null;
+    quitRetries = insisted ? quitRetries : 0;
+    attemptQuit(insisted);
+    return true;
+  }
+  // The held-quit card's "Quit without waiting". False when no quit is held.
+  function quitWithoutWaiting() {
+    if (quitAdmitted || (!quitPending && !quitOperation)) return false;
+    finishQuit();
+    return true;
+  }
+
+  function shouldInstallOnQuit() {
+    return !quitAdmitted && lastStatus === "downloaded" && !handOffInstall && !held() && !recoveryRequired &&
+      !installOperation && !downloadOperation && (!nativeStaging || nativeReady);
+  }
+  function holdForQuit(ms = SHUTDOWN_HOLD_MS) {
+    shutdownHeld = true;
+    clearTimeout(shutdownHoldTimer);
+    shutdownHoldTimer = setTimeout(() => { shutdownHeld = false; shutdownHoldTimer = null; }, ms);
+    shutdownHoldTimer.unref?.();
+  }
+  // True while a user-initiated check (Settings → Updates) is resolving.
+  const manualCheckActive = () => checkOperation?.manual === true;
+  return { check, download, install, candidate, admit, shouldInstallOnQuit, protectQuit, quitWithoutWaiting, manualCheckActive, hold: () => { contractHeld = true; }, holdForQuit };
 }

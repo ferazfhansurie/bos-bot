@@ -202,7 +202,7 @@ struct SharedChatView: View {
                         Button { jumpToLatest(proxy) } label: {
                             Label("Latest messages", systemImage: "arrow.down")
                                 .font(.caption.weight(.semibold)).padding(.horizontal, 14).padding(.vertical, 10)
-                                .background(.regularMaterial, in: Capsule())
+                                .glassCapsule()
                         }.buttonStyle(.plain).padding(12)
                     }
                 }

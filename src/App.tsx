@@ -1,3 +1,4 @@
+import { ModSurfaces } from "@/mods/ModSurfaces";
 import { HostedNextStep } from "@/components/HostedNextStep";
 import { RecruitmentWelcome } from "@/components/onboarding/RecruitmentWelcome";
 import { SayHiToFiraz } from "@/components/onboarding/SayHiToFiraz";
@@ -27,7 +28,9 @@ import { RemoteDesktopPanel } from "@/components/remote-desktop-panel";
 import { InspectorPanel } from "@/components/InspectorPanel";
 import { SettingsModal } from "@/components/SettingsModal";
 import { WorkspaceBackupRecovery } from "@/components/WorkspaceBackupSettings";
+import { RecoveryBanner } from "@/components/RecoveryBanner";
 import { UpdateBanner } from "@/components/UpdateBanner";
+import { ProductBanner } from "@/components/ProductBanner";
 import { BosUpdateToast } from "@/components/BosUpdate";
 import { DesktopCapabilitiesProvider, useDesktopCapabilities } from "@/components/DesktopCapabilities";
 import { WindowCaptionButtons } from "@/components/WindowCaptionButtons";
@@ -41,6 +44,7 @@ import { JobInboxPage } from "@/components/JobInbox";
 import { setLocale, t } from "@/lib/i18n";
 import { shouldOpenKeyboardShortcuts } from "@/lib/keyboard-shortcuts";
 import { readThreadPins, stepThread } from "@/components/CompactBotThreads";
+import { NotchFeed } from "@/notch/NotchFeed";
 
 function Shell() {
   const { state, dispatch } = useStore();
@@ -258,8 +262,11 @@ function Shell() {
     <div className="flex h-full flex-col">
       {window.ogb?.appChannel === "staging" && <div role="status" className="shrink-0 border-b border-amber-400/30 bg-amber-400/10 px-3 py-1 text-center text-xs text-amber-300">BOS Staging</div>}
       {/* fixed-position popup, bottom-left — outside the layout flow */}
+      <RecoveryBanner />
       <UpdateBanner />
+      <ProductBanner />
       <BosUpdateToast />
+      {!remoteClient && <NotchFeed />}
       <div className="relative flex min-h-0 flex-1">
       {!calendarFocus && <button
         type="button"
@@ -315,7 +322,7 @@ function Shell() {
           return cached
             ? <ChatView bot={{ ...bot, threadId: pending, messages: cached.messages, activeLeafId: cached.activeLeafId ?? null, hasMore: cached.hasMore }} />
             : <ConversationSkeleton title={bot.tasks?.find(task => task.threadId === pending)?.title} />;
-        })() : <ChatView bot={bot} />}</SplitWorkspace>
+        })() : <ChatView bot={bot} />}<ModSurfaces botId={bot.id} surface="panel" /></SplitWorkspace>
       ) : !state.rosterLoaded ? (
         <ConversationSkeleton />
       ) : (

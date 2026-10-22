@@ -192,6 +192,17 @@ struct ChatView: View {
     /// must not move a draft, approval, or Stop action to a different thread.
     private var threadId: String { current.threadId }
 
+    /// Smart ui buttons post here as the person; typed values save on the message.
+    private var smartUIThread: SmartUIThread {
+        let chat = current, threadId = threadId, session = session
+        return SmartUIThread(
+            send: { text in Task { await session.send(text, to: chat) } },
+            save: { messageId, key, state in
+                Task { await session.saveUiState(threadId: threadId, messageId: messageId, key: key, state: state) }
+            }
+        )
+    }
+
     private var selectedThreadWasRemoved: Bool {
         guard case let .bot(bot) = chat else { return false }
         guard let live = session.state.bot(bot.id) else { return true }
@@ -508,6 +519,7 @@ struct ChatView: View {
                     }
                     .scrollTargetLayout()
                     .environment(\.mentionContext, mentionContext)
+                    .environment(\.smartUIThread, smartUIThread)
                     .padding(.horizontal, 16)
                     .padding(.vertical, 12)
                     .frame(maxWidth: CompanionLayout.chatWidth, alignment: .leading)
@@ -1299,8 +1311,13 @@ struct ChatView: View {
     private func archiveToken(for connection: Connection) throws -> String? {
 #if DEBUG
         if ProcessInfo.processInfo.arguments.contains("-store-preview"),
-           ProcessInfo.processInfo.arguments.contains("-send-scroll-preview") || ProcessInfo.processInfo.arguments.contains("-chatgpt-preview"),
+           ProcessInfo.processInfo.arguments.contains("-send-scroll-preview") || ProcessInfo.processInfo.arguments.contains("-chatgpt-preview") || ProcessInfo.processInfo.arguments.contains("-threads-preview"),
            connection.id == "preview-current" {
+            if ProcessInfo.processInfo.arguments.contains("-threads-preview") {
+                let args = ProcessInfo.processInfo.arguments
+                let scope = args.firstIndex(of: "-draft-fixture-scope").flatMap { $0 + 1 < args.count ? args[$0 + 1] : nil } ?? "default"
+                return "isolated-thread-fixture-token-" + scope
+            }
             return "isolated-scroll-fixture-token"
         }
 #endif
@@ -1332,7 +1349,14 @@ struct ChatView: View {
                 archive.text = text
                 do { try archive.checkpoint() } catch { attachmentError = archive.error }
             }
-        } catch { attachmentError = "Couldn’t restore this draft. Unlock and reconnect before sending." }
+        } catch {
+            // The previous archive was checkpointed before switching. Detach
+            // it even when the next account's keychain lookup throws.
+            composerDraft.pendingCheckpoint?.cancel(); composerDraft.onEdit = nil
+            activeArchive = nil; activeScope = nil
+            draft = ""; attachments = []; replyTarget = nil
+            attachmentError = "Couldn’t restore this draft. Unlock and reconnect before sending."
+        }
     }
 
     private func submit(_ explicitText: String? = nil) {
@@ -2504,14 +2528,6 @@ struct MessageRow: View {
         }
     }
 
-    private func steeringLabel(_ status: SteeringStatus) -> String {
-        switch status {
-        case .sentDuringReply: return String(localized: "Sent during reply")
-        case .acceptedDuringReply: return String(localized: "Accepted during reply")
-        case .uncertain: return String(localized: "Delivery uncertain · check before resending")
-        }
-    }
-
     var body: some View {
         VStack(alignment: message.role == .user && !message.isFromAnotherPerson(selfID: selfID) ? .trailing : .leading, spacing: 6) {
             if let reference = message.replyToId {
@@ -2765,6 +2781,7 @@ struct TextBubble: View {
     var tailed = true
     let openLink: (URL, Message) -> OpenURLAction.Result
     @Environment(\.mentionContext) private var mentions
+    @Environment(\.smartUIThread) private var smartUIThread
     private let metrics = GPTMetrics()
 
     /// What you typed, as typed, with the names you tagged drawn as tokens.
@@ -2899,6 +2916,7 @@ struct TextBubble: View {
                     .foregroundStyle(Color.primary)
                     .textSelection(.enabled)
                     .fixedSize(horizontal: false, vertical: true)
+                    .environment(\.smartUIActions, smartUIThread?.actions(for: message))
             }
             if !media.isEmpty {
                 MessageMedia(attachments: media, threadId: chat.threadId, messageId: message.id)

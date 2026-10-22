@@ -118,6 +118,7 @@ node -e '
 
 run pnpm package:prepare
 run pnpm build:speech
+run pnpm build:notch
 run pnpm build:cua
 
 IDENTITY_ARGS=()

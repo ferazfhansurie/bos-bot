@@ -3,11 +3,14 @@
 // the app never ships image bytes through the prompt itself.
 import { createHash, randomUUID } from "node:crypto";
 import {
+  closeSync,
   createReadStream,
   existsSync,
   linkSync,
   mkdirSync,
+  openSync,
   readFileSync,
+  readSync,
   readdirSync,
   statSync,
   unlinkSync,
@@ -336,6 +339,27 @@ const KNOWN_ATTACHMENT_EXTENSIONS = Array.from(
   new Set([...Object.values(IMAGE_MIMES), ...Object.values(FILE_MIMES)]),
 );
 
+const RECOVERY_COPY = /^(?:messages\.db|bots\.json|groups\.json)\.(?:bak|corrupt-.+)$/;
+
+/** Chunked so a large quarantined database never sits in memory whole; the
+ * overlap keeps a name that straddles two chunks. latin1 maps bytes 1:1. */
+function collectRaw(path: string, collect: (value: string) => void): void {
+  const chunk = Buffer.alloc(1 << 20);
+  const overlap = 128;
+  const fd = openSync(path, "r");
+  try {
+    let carry = "";
+    for (let position = 0; ; ) {
+      const read = readSync(fd, chunk, 0, chunk.length, position);
+      if (!read) break;
+      position += read;
+      const text = carry + chunk.toString("latin1", 0, read);
+      collect(text);
+      carry = text.slice(-overlap);
+    }
+  } finally { closeSync(fd); }
+}
+
 /** Scan authoritative persisted references only under quota pressure. Include
  * every SQLite row, not a history page or active branch; top-level JSON also
  * covers legacy transcripts, profiles, routine/call snapshots and handoffs.
@@ -349,6 +373,10 @@ function retainedAttachmentNames(): Set<string> {
     }
   };
   for (const entry of readdirSync(DATA_DIR, { withFileTypes: true })) {
+    // Quarantined and backup copies of the stores are what recovery restores
+    // from; their attachments must outlive them. They may not parse or open,
+    // so scan their raw bytes instead (SQLite stores TEXT as plain UTF-8).
+    if (entry.isFile() && RECOVERY_COPY.test(entry.name)) { collectRaw(join(DATA_DIR, entry.name), collect); continue; }
     if (!entry.isFile() || !/\.json(?:\.imported)?$/.test(entry.name)) continue;
     const text = readFileSync(join(DATA_DIR, entry.name), "utf8");
     // Parsing also validates that reference enumeration did not silently

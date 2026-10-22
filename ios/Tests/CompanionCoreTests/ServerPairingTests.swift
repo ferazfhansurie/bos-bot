@@ -169,6 +169,37 @@ final class ServerPairingTests: XCTestCase {
         XCTAssertEqual(ServerRequestStub.captured().first?.url?.path, "/.well-known/openmausbot/environment")
     }
 
+    func testAnOldPhoneGetsAnUpdateRequirementBeforeDescriptorDecode() async throws {
+        // Future fields may no longer decode on the old phone. Only the small
+        // compatibility envelope must remain readable to explain the upgrade.
+        ServerRequestStub.reset { _ in (200, Data(#"{"minPhoneVersion":"2.1.3","phoneUpdateUrls":{"ios":"https://testflight.apple.com/join/fixture"},"environmentId":42}"#.utf8)) }
+        let connection = try XCTUnwrap(Connection.parse("https://fixture.invalid"))
+        do {
+            _ = try await CompanionClient(connection: connection, token: nil, session: session).environment(phoneVersion: "2.0.5")
+            XCTFail("old phone must stop before decoding incompatible fields")
+        } catch let update as PhoneUpdateRequired {
+            XCTAssertEqual(update.minimumVersion, "2.1.3")
+            XCTAssertEqual(update.url.absoluteString, "https://testflight.apple.com/join/fixture")
+        }
+    }
+
+    func testPhoneVersionsCompareNumericallyAndIgnoreInvalidMinimums() throws {
+        for version in ["2.1.3", "2.1.10", "3.0.0"] {
+            XCTAssertNil(PhoneUpdateRequired.check(data: Data(#"{"minPhoneVersion":"2.1.3"}"#.utf8), phoneVersion: version))
+        }
+        for minimum in ["", "latest", "2.1", "2.1.3.4", "999999999999999999999999.1.0"] {
+            let data = try JSONSerialization.data(withJSONObject: ["minPhoneVersion": minimum])
+            XCTAssertNil(PhoneUpdateRequired.check(data: data, phoneVersion: "2.0.5"))
+        }
+        XCTAssertNil(PhoneUpdateRequired.check(data: Data(#"{}"#.utf8), phoneVersion: "2.0.5"))
+        XCTAssertNil(PhoneUpdateRequired.check(data: Data(#"{"minPhoneVersion":"2.1.3"}"#.utf8), phoneVersion: nil))
+    }
+
+    func testPhoneUpdateRejectsUnsafeLinksAndUsesDownloadPageFallback() throws {
+        let data = Data(#"{"minPhoneVersion":"2.1.3","phoneUpdateUrls":{"ios":"javascript:alert(1)"}}"#.utf8)
+        XCTAssertEqual(try XCTUnwrap(PhoneUpdateRequired.check(data: data, phoneVersion: "2.1.2")).url.absoluteString, "https://bosbot.my/get")
+    }
+
     func testConnectionsSavedBeforeServerPairingStillDecodeAsCompanionOnes() throws {
         let legacy = Data(#"{"id":"c1","name":"Ada's computer","host":"192.168.1.9","port":8810}"#.utf8)
         let decoded = try JSONDecoder().decode(Connection.self, from: legacy)

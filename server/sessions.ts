@@ -70,6 +70,28 @@ const LAST_SEEN_WRITE_INTERVAL_MS = 60_000;
 
 const scopeSchema = z.enum(["admin", "client", "peer"]);
 
+/** Who a gateway-minted session acts for: the signed-in member of the
+ * client's own system (a CRM login, say). Set only by whoever may mint a
+ * pairing (an admin or the loopback), copied onto the session at exchange,
+ * and handed by the server to every tool call of turns that session starts.
+ * The model never sees a way to set it. */
+const claimValueSchema = z.union([
+  z.string().max(512),
+  z.number().finite(),
+  z.boolean(),
+  z.array(z.string().max(256)).max(32),
+]);
+export const memberSchema = z.object({
+  userId: z.string().trim().min(1).max(256),
+  name: z.string().max(120).optional(),
+  email: z.string().max(320).optional(),
+  roles: z.array(z.string().max(120)).max(32).optional(),
+  claims: z.record(z.string().regex(/^[A-Za-z_][A-Za-z0-9_.-]{0,63}$/), claimValueSchema)
+    .refine((claims) => Object.keys(claims).length <= 32, "at most 32 claims")
+    .optional(),
+}).strict();
+export type Member = z.infer<typeof memberSchema>;
+
 const sessionSchema = z.object({
   id: z.string().min(1),
   tokenHash: z.string().length(64),
@@ -83,6 +105,8 @@ const sessionSchema = z.object({
   email: z.string().max(320).optional(),
   /** Set only by the internal verified-portal issuance path, never by email or pairing input. */
   membershipAuthority: z.literal("portal").optional(),
+  /** The gateway member this session acts for (see memberSchema). */
+  member: memberSchema.optional(),
 });
 
 // Only reusable client invitations are durable. Ordinary admin invitations
@@ -114,6 +138,8 @@ export interface PublicSession {
   expiresAt: number;
   /** The account that signed in, when it was an account and not a code. */
   email?: string;
+  /** The gateway member this session acts for, when one was set. */
+  member?: Member;
 }
 
 export interface PairingCode {
@@ -127,6 +153,7 @@ export interface PairingCode {
   createdAt: number;
   expiresAt: number;
   reusable?: true;
+  member?: Member;
 }
 
 export interface PublicPairing {
@@ -203,6 +230,7 @@ function publicSession(record: SessionRecord): PublicSession {
     expiresAt: record.expiresAt,
   };
   if (record.email) view.email = record.email;
+  if (record.member) view.member = structuredClone(record.member);
   return view;
 }
 
@@ -332,8 +360,11 @@ export class SessionRegistry {
 
   // ── pairing ────────────────────────────────────────────────────────────
 
-  openPairing(input: { scopes?: Scope[]; label?: string; ttlMs?: number; reusable?: boolean } = {}): { id: string; code: string; credential: string; expiresAt: number } {
+  openPairing(input: { scopes?: Scope[]; label?: string; ttlMs?: number; reusable?: boolean; member?: Member } = {}): { id: string; code: string; credential: string; expiresAt: number } {
     this.prune();
+    // A member names one person; a reusable invitation is for anyone.
+    if (input.member && input.reusable) throw new Error("A member pairing cannot be reusable.");
+    const member = input.member ? memberSchema.parse(input.member) : undefined;
     const ttlMs = input.ttlMs ?? (input.reusable ? REVIEW_PAIRING_DEFAULT_TTL_MS : PAIRING_CODE_TTL_MS);
     if (input.reusable && (!Number.isSafeInteger(ttlMs) || ttlMs <= 0 || ttlMs > REVIEW_PAIRING_MAX_TTL_MS)) {
       throw new Error("Review pairing lifetime must be positive and at most 365 days.");
@@ -351,6 +382,7 @@ export class SessionRegistry {
       createdAt: now,
       expiresAt: now + ttlMs,
       ...(input.reusable ? { reusable: true as const } : {}),
+      ...(member ? { member } : {}),
     };
     this.pairings.push(pairing);
     if (pairing.reusable) {
@@ -455,6 +487,7 @@ export class SessionRegistry {
       // The absolute cap applies from the first term, so a TTL configured
       // longer than the cap does not hand out a session the cap forbids.
       expiresAt: now + Math.min(SESSION_TTL_MS, SESSION_MAX_AGE_MS),
+      ...(pairing.member ? { member: structuredClone(pairing.member) } : {}),
     };
     this.sessions.push(record);
     this.lastSeenWrites.set(record.id, now); // the exchange itself was the first sighting

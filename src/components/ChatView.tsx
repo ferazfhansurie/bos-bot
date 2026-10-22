@@ -1,3 +1,4 @@
+import { ModCommands, ModSurfaces } from "@/mods/ModSurfaces";
 import { OutputEditor } from "./OutputEditor";
 import { withoutMemorySourceMarkers } from "../../shared/memory-source";
 import { RequestPhoneLink } from "./RequestPhoneLink";
@@ -601,7 +602,7 @@ function Bubble({
           {viewRaw && text ? (
             <RawMarkdownView text={text} />
           ) : text ? (
-            <ChatMarkdown text={bodyText} mentionPeers={mentionPeers} message={{ threadId: bot.threadId, messageId: message.id }} />
+            <ChatMarkdown text={bodyText} mentionPeers={mentionPeers} message={{ threadId: bot.threadId, messageId: message.id, uiState: message.uiState }} />
           ) : null}
         </MessageBoundary>
         {editOutput && <OutputEditor bot={bot} message={message} onClose={() => setEditOutput(false)} />}
@@ -1729,6 +1730,7 @@ export function ChatView({ bot: profile, shared }: { bot: Bot; shared?: SharedCh
         onCancel={() => { if (!removePending) setRemoveTarget(null); }} onConfirm={removeSharedMessage} />
       {/* Call mode covers the thread while the bot is on the line */}
       <BotCallOverlay bot={bot} />
+      {local && <ModSurfaces botId={bot.id} surface="chip" />}
       {/* Header */}
       <ConversationHeader style={headerDragStyle}>
         {/* Grok's header: the bot as one pill in the middle, tools at the end.
@@ -2042,6 +2044,7 @@ export function ChatView({ bot: profile, shared }: { bot: Bot; shared?: SharedCh
           />
         </div>
       )}
+      {local && <><ModCommands botId={bot.id} threadId={bot.threadId} /><ModSurfaces botId={bot.id} surface="band" /></>}
       <Composer
         key={bot.threadId}
         bot={profile}

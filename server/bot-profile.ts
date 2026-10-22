@@ -122,7 +122,7 @@ export type BotProfilePatchResult =
  * Store persistence already omits undefined fields, while wireBot sends null
  * back to clients so Codable and object-spread clients both clear stale data.
  */
-export function parseBotProfilePatch(input: BotProfilePatchInput, strict = false): BotProfilePatchResult {
+export function parseBotProfilePatch(input: unknown, strict = false): BotProfilePatchResult {
   const parsed = (strict ? profilePatchSchema.strict() : profilePatchSchema).safeParse(input);
   if (!parsed.success) {
     const unsupported = parsed.error.issues.find((issue) => issue.code === "unrecognized_keys");

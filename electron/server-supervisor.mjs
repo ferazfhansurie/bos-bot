@@ -3,6 +3,7 @@
 // established port so existing renderer and Companion connections can recover.
 export function createServerSupervisor({
   restart,
+  restartSafeMode,
   stop,
   onReady,
   onUnavailable,
@@ -18,6 +19,7 @@ export function createServerSupervisor({
   let attempts = 0;
   let timer = null;
   let shutdownPromise = null;
+  let safeAttempted = false;
 
   const isCurrent = (proc) => !stopped && current === proc;
 
@@ -28,10 +30,26 @@ export function createServerSupervisor({
     return true;
   }
 
+  async function recoverInSafeMode(reason = "The server stopped repeatedly") {
+    if (stopped || current || safeAttempted || !restartSafeMode) return false;
+    safeAttempted = true;
+    try {
+      const result = await restartSafeMode(reason);
+      if (stopped) return false;
+      return Boolean(result?.proc && ready(result.proc));
+    } catch (error) {
+      log(`safe-mode recovery failed: ${error?.message ?? error}`);
+      return false;
+    }
+  }
+
   function schedule() {
     if (stopped) return;
-    if (attempts === retryDelaysMs.length) {
-      onExhausted();
+    if (safeAttempted || attempts === retryDelaysMs.length) {
+      if (!restartSafeMode || safeAttempted) { onExhausted(); return; }
+      void recoverInSafeMode("The server stopped after repeated recovery attempts").then(recovered => {
+        if (!recovered && !stopped) onExhausted();
+      });
       return;
     }
     const delay = retryDelaysMs[attempts++];
@@ -83,5 +101,5 @@ export function createServerSupervisor({
     return shutdownPromise;
   }
 
-  return { watch, ready, isCurrent, shutdown };
+  return { watch, ready, isCurrent, shutdown, recoverInSafeMode };
 }

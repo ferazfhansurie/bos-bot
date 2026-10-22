@@ -7,6 +7,7 @@ import { applySkin, readSkin } from "./lib/skins";
 import { PairPage } from "./pair/PairPage";
 import { AppErrorBoundary } from "./components/AppErrorBoundary";
 import { DetachedWorkspace, detachedSpecFromLocation } from "./components/workspace/DetachedWorkspace";
+import { PrimaryBrowser } from "./components/PrimaryBrowser";
 import "./styles.css";
 
 // Before the first paint, not inside a component: stamping the skin during
@@ -23,6 +24,11 @@ async function chooseRoot(): Promise<React.ReactNode> {
   if (location.pathname === "/pair") return <PairPage initialCode={takePairingCodeFromLocation()} initialEmail={takeInvitedEmailFromLocation()} />;
   const session = await readSessionState();
   if (session.kind === "unauthenticated") return <PairPage initialCode={null} reason={session.error} />;
+  // the window a paired workspace's bots drive on this computer: just the browser
+  if (window.ogb?.primaryBrowser && new URLSearchParams(location.search).has("bos-browser-window")) {
+    const noop = () => {};
+    return <div className="h-screen w-screen"><PrimaryBrowser visible expanded onExpand={noop} target={{ botId: "", threadId: "", name: "" }} onTool={noop} onClose={() => window.close()} /></div>;
+  }
   // a workspace tab moved into its own window draws only that tab
   const detached = window.ogb?.workspaceWindow ? detachedSpecFromLocation(location.search) : null;
   if (detached) return <DetachedWorkspace spec={detached} />;

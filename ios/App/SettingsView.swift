@@ -7,6 +7,9 @@ import UIKit
 struct SettingsView: View {
     @EnvironmentObject private var session: Session
     @State private var enablingNotifications = false
+    @State private var traceExport: ConnectionTraceExport?
+    @State private var traceExportError = false
+    @State private var usageEnabled = PhoneUsageTelemetry.shared.enabled
     @AppStorage(PrefKey.activityDetail) private var activityDetail = ActivityDetail.reduced.rawValue
     @AppStorage(PrefKey.islandIntro) private var islandIntro = IslandIntro.oncePerBot.rawValue
     @AppStorage(PrefKey.language) private var language = AppLanguage.system.rawValue
@@ -19,6 +22,12 @@ struct SettingsView: View {
 
     var body: some View {
         Form {
+            Section {
+                Toggle("Anonymous phone usage", isOn: $usageEnabled)
+                    .onChange(of: usageEnabled) { _, enabled in PhoneUsageTelemetry.shared.setEnabled(enabled) }
+            } footer: {
+                Text("Share anonymous install, open, pairing and notification setup events. No messages or personal details. Your computer's usage setting must also allow this.")
+            }
             Section("Computer") {
                 if let connection = session.connection {
                     NavigationLink {
@@ -43,6 +52,24 @@ struct SettingsView: View {
                     .disabled(onConnect == nil)
                 }
             }
+            .listRowBackground(Color.clear.glassSheet(cornerRadius: 22))
+
+            Section {
+                Button("Share connection trace") {
+                    do {
+                        traceExport = try ConnectionTrace.export()
+                        traceExportError = false
+                    } catch {
+                        traceExportError = true
+                    }
+                }
+                if traceExportError { Text("Could not prepare the trace. Please try again.").foregroundStyle(.secondary) }
+            } header: {
+                Text("Connection diagnostics")
+            } footer: {
+                Text("Connection events only. No addresses, tokens or conversations.")
+            }
+            .sheet(item: $traceExport) { ConnectionTraceShareSheet(url: $0.url) }
 
             if session.connection != nil {
                 Section {
@@ -70,6 +97,14 @@ struct SettingsView: View {
                 if notificationsAreEnabled {
                     notificationRow
                         .accessibilityHint(notificationAccessibilityHint)
+                    Button("Retry notification setup") {
+                        enablingNotifications = true
+                        Task {
+                            await session.refreshNotificationAuthorization()
+                            enablingNotifications = false
+                        }
+                    }
+                    .disabled(enablingNotifications)
                 } else {
                     Button {
                         enablingNotifications = true
@@ -87,7 +122,7 @@ struct SettingsView: View {
                     .accessibilityHint(notificationAccessibilityHint)
                 }
             } footer: {
-                Text("Alerts arrive while BOS is open or was recently in the background. Closed-app delivery is not available yet.")
+                Text(session.notificationRegistrationDetails)
             }
 
             Section {
@@ -249,7 +284,7 @@ struct SettingsView: View {
     }
 
     private var notificationAccessibilityHint: LocalizedStringKey {
-        if notificationsAreEnabled { return "Notifications are enabled" }
+        if notificationsAreEnabled { return "Shows registration status with your computers" }
         if session.notificationAuthorization == .denied { return "Opens device Settings" }
         return "Asks for permission to send notifications"
     }
@@ -534,7 +569,7 @@ private struct SettingsIcon: View {
             .font(.system(size: 15, weight: .semibold))
             .foregroundStyle(.white)
             .frame(width: 28, height: 28)
-            .background(color, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+            .glassSheet(cornerRadius: 7, tint: color)
             .accessibilityHidden(true)
     }
 }
@@ -831,7 +866,7 @@ struct ConnectionSecurityView: View {
         case let .offline(reason):
             return Text(verbatim: reason)
         case .unauthorized:
-            return Text("This device was removed from the computer. Pair it again to reconnect.")
+            return session.serverWasReset ? Text("This computer was reset, pair again.") : Text("This device was removed from the computer. Pair it again to reconnect.")
         case .unpaired:
             return Text("This device is not paired with a computer.")
         }

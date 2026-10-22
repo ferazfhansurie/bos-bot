@@ -333,6 +333,18 @@ describe("workspace", () => {
     expect(readMemoryFile(BOT).text).toBe("Keep this .");
   });
 
+  it("removing an entry's text drops its dated prefix and old husks too", () => {
+    writeMemoryFile(BOT, [
+      '- 2026-09-01 · from chat "Old" · ',
+      '- 2026-09-02 · from chat "Old" ·  · superseded 2026-09-09',
+      '- 2026-09-10 · from chat "Setup" · Shipping day: Friday · updated 2026-09-12',
+      '- 2026-09-11 · from chat "Setup" · Keep this one',
+      "",
+    ].join("\n"));
+    expect(updateMemory(BOT, { action: "remove", oldText: "Shipping day: Friday" })).toMatchObject({ ok: true });
+    expect(readMemoryFile(BOT).text).toBe('- 2026-09-11 · from chat "Setup" · Keep this one\n');
+  });
+
   it("redacts secrets on every server-side memory write, tool and editor alike", () => {
     const key = `sk-ant-api03-${"a".repeat(40)}`;
     const now = new Date(2026, 8, 10, 12);

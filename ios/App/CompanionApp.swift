@@ -22,6 +22,14 @@ final class PushAppDelegate: NSObject, UIApplicationDelegate {
         return true
     }
 
+    func application(_ application: UIApplication, didFailToRegisterForRemoteNotificationsWithError error: Error) {
+        Task { @MainActor in NotificationCoordinator.shared.pushRegistrationFailureHandler?() }
+    }
+
+    func applicationWillTerminate(_ application: UIApplication) {
+        PhoneUsageTelemetry.shared.background()
+    }
+
     func application(_ application: UIApplication, didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data) {
         let token = deviceToken.map { String(format: "%02x", $0) }.joined()
         UserDefaults.standard.set(token, forKey: "bos.apnsToken")
@@ -117,6 +125,8 @@ struct CompanionApp: App {
                     }
                 }
                 .onAppear {
+                    PhoneUsageTelemetry.shared.policy = { [weak session] in await session?.phoneUsagePolicy() ?? .unavailable }
+                    PhoneUsageTelemetry.shared.foreground()
                     BosSharedInbox.removeDirectories(olderThan: 60 * 60)
                     session.connectHomes()
                     liveActivities.attach(to: session)
@@ -130,10 +140,13 @@ struct CompanionApp: App {
                 .onChange(of: scenePhase) { _, phase in
                     switch phase {
                     case .active:
+                        PhoneUsageTelemetry.shared.foreground()
                         BosSharedInbox.removeDirectories(olderThan: 60 * 60)
                         session.connectHomes()
                         Task { await session.refreshNotificationAuthorization() }
-                    case .background: session.lingerHomes()
+                    case .background:
+                        PhoneUsageTelemetry.shared.background()
+                        session.lingerHomes()
                     case .inactive: break
                     @unknown default: break
                     }
@@ -151,7 +164,17 @@ struct RootView: View {
     private var notificationOnboardingPending = false
     var body: some View {
         Group {
-            if session.isRestoringSavedPairing {
+            if let update = session.phoneUpdateRequired ?? session.satellites.lazy.compactMap(\.phoneUpdateRequired).first {
+                ContentUnavailableView {
+                    Label("Update the app", systemImage: "arrow.down.app")
+                } description: {
+                    Text("This server needs BOS \(update.minimumVersion) or later on your phone.")
+                } actions: {
+                    Link("Get the update", destination: update.url)
+                        .accessibilityIdentifier("phone-update-link")
+                        .buttonStyle(.borderedProminent)
+                }
+            } else if session.isRestoringSavedPairing {
                 ProgressView("Restoring your saved Mac connection…")
             } else {
             switch route {

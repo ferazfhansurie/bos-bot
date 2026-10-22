@@ -2,7 +2,7 @@ import { compatEnv } from "../electron/branding-env.cjs";
 import { mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { JsonValue } from "./schema.ts";
 
 import { customMcpServers,
@@ -1218,6 +1218,14 @@ describe("workspace credential env strip", () => {
 describe("customMcpServers", () => {
   const cfg = (mcpServers: Record<string, unknown>) =>
     ({ mcpServers }) as Parameters<typeof customMcpServers>[0];
+
+  it("leaves optional MCP plugins unloaded in safe mode without changing their definitions", () => {
+    const config = cfg({ notes: { command: "npx", args: ["notes"] } });
+    vi.stubEnv("BOS_SAFE_MODE", "1");
+    try { expect(customMcpServers(config)).toEqual({}); }
+    finally { vi.unstubAllEnvs(); }
+    expect(customMcpServers(config)).toHaveProperty("notes");
+  });
 
   it("normalizes a valid stdio entry and defaults args/env", () => {
     expect(

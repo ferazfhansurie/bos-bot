@@ -1,0 +1,9 @@
+{
+  "id": "whatsapp-work-groups",
+  "name": "Morning Work-group Summary",
+  "version": "0.1.0",
+  "description": "A reviewed morning digest from the WhatsApp work groups you choose.",
+  "defaultEnabled": true,
+  "triggerTerms": ["work groups", "work group", "morning summary", "whatsapp digest", "summarise my groups", "summarize my groups"],
+  "requiredCapabilities": ["starterSkills"]
+}

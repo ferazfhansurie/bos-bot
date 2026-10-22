@@ -38,7 +38,13 @@ const SPILL_MAX_AGE_MS = 24 * 60 * 60_000;
 const SPILL_HINT = compatEnv.OMB_GATE_SPILL_HINT === "1";
 
 /** The gate's own settings never reach the upstream server's environment. */
-const GATE_ENV_KEYS = ["OMB_GATE_NAME", "OMB_GATE_SPILL_DIR", "OMB_GATE_BUDGET", "OMB_GATE_UPSTREAM", "OMB_GATE_SPILL_HINT"];
+const GATE_ENV_KEYS = ["OMB_GATE_NAME", "OMB_GATE_SPILL_DIR", "OMB_GATE_BUDGET", "OMB_GATE_UPSTREAM", "OMB_GATE_SPILL_HINT", "OMB_GATE_MEMBER"];
+/** The turn's signed-in member, set by the harness. Every tool call carries
+ * it as `_meta["bos/member"]`; a call that arrives without a member set has
+ * any claimed one removed, so the key always means the harness said so. */
+const MEMBER: unknown = (() => {
+  try { return compatEnv.OMB_GATE_MEMBER ? JSON.parse(compatEnv.OMB_GATE_MEMBER) : undefined; } catch { return undefined; }
+})();
 
 function fail(message: string): never {
   process.stderr.write(`mcp-gate(${NAME}): ${message}\n`);
@@ -198,6 +204,13 @@ createInterface({ input: process.stdin }).on("line", (line) => {
       if (message.method === "tools/call" && message.id !== undefined && message.id !== null) {
         const params = message.params as Json | undefined;
         pending.set(String(message.id), typeof params?.name === "string" ? params.name : "tool");
+        if (params && typeof params === "object") {
+          const meta = params._meta && typeof params._meta === "object" && !Array.isArray(params._meta) ? { ...(params._meta as Json) } : {};
+          delete meta["bos/member"];
+          if (MEMBER !== undefined) meta["bos/member"] = MEMBER;
+          params._meta = meta;
+          line = JSON.stringify(message);
+        }
       }
     } catch {
       /* not our business to validate the client's frames */

@@ -10,6 +10,7 @@ import { botMascotEyes, type MascotEyes } from "../../shared/mascot-eyes";
 import { glyphFaceMarkup, glyphFaceParts } from "./glyph-face";
 import { type MausColor } from "./mascot";
 import { attentionPreferences, type DoneNotifyMode, type NotifySound } from "./attention-preferences";
+import { notchActive } from "@/notch/active";
 
 export type NotifyFrame = Notification;
 
@@ -273,7 +274,8 @@ export function showNotification(
     body: frame.body,
     ...(avatarUrl?.startsWith("data:image/") ? { icon: avatarUrl } : {}),
     groupId: frame.groupId ?? frame.botId,
-    sound: prefs.sound,
+    // the notch already chimes for an ask; one sound, not two
+    sound: sticky && notchActive() ? "none" : prefs.sound,
     done: prefs.done,
     canReply,
     ...(canReply ? { replyPlaceholder: kind === "question" ? "answer" : "reply" } : {}),
