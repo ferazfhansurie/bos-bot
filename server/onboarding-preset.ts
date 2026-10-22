@@ -31,6 +31,9 @@ export const presetSchema = z.object({
   }).strict(),
   /** Apps offered after the greeting, each with the line that asks for it. */
   connect: z.array(z.object({ slug, text: z.string().trim().min(1).max(600) }).strict()).max(3).optional(),
+  /** The account the person already pays for: the first bot starts on that
+   * engine, so turn 1 waits for that sign-in instead of failing on another. */
+  engine: z.enum(["codex", "claude"]).optional(),
 }).strict();
 
 export type SetupPreset = z.infer<typeof presetSchema>;
@@ -52,6 +55,9 @@ export function soulWithPreset(soul: string, block: string): string {
   if (start >= 0 && end > start) return `${soul.slice(0, start)}${wrapped}${soul.slice(end + PRESET_SOUL_END.length)}`.trim();
   return text ? (soul.trim() ? `${wrapped}\n\n${soul.trim()}` : wrapped) : soul;
 }
+
+/** The driver a preset's engine names. */
+export const presetEngineDriver = (engine: NonNullable<SetupPreset["engine"]>) => engine === "claude" ? "claudeAgent" : "codex";
 
 /** The resume key of a preset's connector card, unique per app. */
 export const presetResumeKey = (app: string) => `preset-${app}`;

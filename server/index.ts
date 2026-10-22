@@ -95,7 +95,7 @@ async function federationOrigin(peer?: string): Promise<string | null> {
 }
 import { onboardingChief } from "./onboarding-chief.ts";
 import { applyOnboardingChatEvent, ONBOARDING_CONNECT_APPS, parseOnboardingChatEvent } from "./onboarding-chat.ts";
-import { parsePreset, presetResumeKey, soulWithPreset, type SetupPreset } from "./onboarding-preset.ts";
+import { parsePreset, presetEngineDriver, presetResumeKey, soulWithPreset, type SetupPreset } from "./onboarding-preset.ts";
 import { initialOnboardingState, ONBOARDING_APPS, type OnboardingChatEvent, type OnboardingChatMessage, type OnboardingChatState } from "../shared/onboarding-chat.ts";
 import { hostedFreeTokenValid, registerHostedFree, verifyFreeModelKey } from "./free-model-setup.ts";
 import { requestWelcome, welcomeInstallId, welcomeName } from "./welcome-chat.ts";
@@ -14459,6 +14459,7 @@ async function applySetupPreset(preset: SetupPreset): Promise<{ botId: string; t
     if (!("error" in enabled)) skills.push(installed.name);
   }
   applyOnboardingChat({ type: "prepared", ...preset.prepared });
+  if (preset.engine) await movePresetBotToEngine(bot.id, presetEngineDriver(preset.engine));
   const cards: string[] = [];
   if (composio.configured(cfg) && bot.composio !== false) {
     for (const item of preset.connect ?? []) {
@@ -14472,6 +14473,28 @@ async function applySetupPreset(preset: SetupPreset): Promise<{ botId: string; t
     }
   }
   return { botId: bot.id, threadId: chat.threadId, cards, skills };
+}
+
+/** The preset's bot starts on the engine the person already pays for. The
+ * preset marks setup done, so moveFirstBotOffSignedOutEngine no longer
+ * follows their sign-in; without this a ChatGPT user's first job runs on a
+ * Claude that was never installed. A bot already on a ready engine stays. */
+async function movePresetBotToEngine(botId: string, driverKind: string): Promise<void> {
+  const shipped = await registry.describe();
+  const target = shipped.find((item) => item.driverKind === driverKind);
+  const bot = store.bot(botId);
+  if (!target?.models.default || !bot || bot.busy) return;
+  const current = shipped.find((item) => item.instanceId === bot.modelSelection.instanceId);
+  if (current?.instanceId === target.instanceId || (current && instanceEngineReady(current))) return;
+  if (store.tasks(bot.id).some((task) => threadBusy(bot.id, task.threadId))) return;
+  if (!approvalCarriesAcrossModelSwitch(approvalModeFor(bot), current?.driverKind, target.driverKind, false)) return;
+  const previous = bot.modelSelection.instanceId;
+  const selection = { instanceId: target.instanceId, model: target.models.default };
+  const updated = store.patchBot(bot.id, { modelSelection: selection });
+  for (const task of store.tasks(bot.id)) {
+    if (task.modelSelection?.instanceId === previous) store.patchTask(bot.id, task.threadId, { modelSelection: { ...selection } });
+  }
+  if (updated) broadcast({ kind: "bot", bot: wireBot(updated) });
 }
 
 /** Apply one event to the stored record. Null when onboarding never started

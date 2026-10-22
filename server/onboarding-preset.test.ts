@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { PRESET_SOUL_END, PRESET_SOUL_START, parsePreset, presetResumeKey, soulWithPreset } from "./onboarding-preset.ts";
+import { PRESET_SOUL_END, PRESET_SOUL_START, parsePreset, presetEngineDriver, presetResumeKey, soulWithPreset } from "./onboarding-preset.ts";
 
 const preset = {
   id: "p_abc123",
@@ -30,6 +30,13 @@ describe("setup presets", () => {
     expect(second).toContain("Help Mei more.");
     expect(second.match(/bos preset: set up/g)).toHaveLength(1);
     expect(second.endsWith("I am bos.")).toBe(true);
+  });
+
+  it("names the engine the person already has, and only the ones BOS runs", () => {
+    expect(parsePreset({ ...preset, engine: "codex" })).toMatchObject({ ok: true, preset: { engine: "codex" } });
+    expect(parsePreset({ ...preset, engine: "gemini" }).ok).toBe(false);
+    expect(presetEngineDriver("codex")).toBe("codex");
+    expect(presetEngineDriver("claude")).toBe("claudeAgent");
   });
 
   it("keys connector cards by app, long enough for the connector contract", () => {
