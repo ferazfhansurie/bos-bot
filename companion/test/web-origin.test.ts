@@ -39,7 +39,7 @@ const ask = async (
 };
 
 beforeAll(async () => {
-  harness = createServer((req, res) => {
+  harness = createServer((_req, res) => {
     harnessHits += 1;
     res.writeHead(200, {
       "content-type": "application/json",
