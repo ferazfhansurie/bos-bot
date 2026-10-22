@@ -1,4 +1,5 @@
 import { isMarketerLink, marketerIntentStore } from "./marketer-link.mjs";
+import { claimPreset, presetTokenFromLink, withPresetBroker } from "./preset-link.mjs";
 import { configureAboutPanel } from "./about-panel.mjs";
 import { createComputerPreviewHandler } from "./computer-preview.mjs";
 import { createContentBlocker } from './content-blocker.mjs';
@@ -58,6 +59,7 @@ import {
   ensureManagedComposioCredentials,
   managedComposioAccess,
   managedComposioChildEnvironment,
+  normalizeManagedComposioBrokerUrl,
   resolveManagedComposioBrokerUrl,
 } from "./managed-composio.mjs";
 import {
@@ -316,8 +318,57 @@ function queueMarketerLink(raw) {
 }
 for (const arg of process.argv.slice(1)) queueMarketerLink(arg);
 
+// A setup preset link (electron/preset-link.mjs) waits for the server and the
+// credential store, is claimed once, then applied by the server.
+let pendingPresetToken = null;
+let presetRunning = false;
+function queuePresetLink(raw) {
+  const token = presetTokenFromLink(raw);
+  if (!token) return false;
+  pendingPresetToken = token;
+  activateExistingWindow(BrowserWindow.getAllWindows());
+  void runPendingPreset();
+  return true;
+}
+async function runPendingPreset() {
+  if (!pendingPresetToken || presetRunning || !app.isReady() || !serverReady || !serverProc || desktopRemoteAccess || !secureCredentialState) return;
+  presetRunning = true;
+  const token = pendingPresetToken;
+  pendingPresetToken = null;
+  try {
+    const claim = await claimPreset(token);
+    if (claim.composio && !credentialStoreUnavailable) {
+      let changed = false;
+      await updateSecureCredentialDocument((credentials) => { changed = withPresetBroker(credentials, claim.composio); return credentials; });
+      if (changed) syncManagedComposioCredentials();
+    }
+    const response = await fetch(`http://127.0.0.1:${SERVER_PORT}/api/onboarding/preset`, {
+      method: "POST",
+      headers: desktopServerHeaders({ "content-type": "application/json" }, { packaged: app.isPackaged, token: desktopMutationToken }),
+      body: JSON.stringify(claim.preset),
+      redirect: "error",
+      credentials: "omit",
+      signal: AbortSignal.timeout(60_000),
+    });
+    const body = await response.json().catch(() => null);
+    if (!response.ok) throw new Error(body?.error || `HTTP ${response.status}`);
+    slog(`setup preset applied: cards=${(body?.cards ?? []).join(",") || "-"} skills=${(body?.skills ?? []).length}`);
+    // the greeting is rewritten in place and an open chat keeps its first
+    // copy (seen on Windows 2.1.3): reload so the person sees what was set up
+    if (mainWindowShowsLocalUi()) mainWindow.webContents.reload();
+    activateExistingWindow(BrowserWindow.getAllWindows());
+  } catch (error) {
+    slog(`setup preset failed: ${error?.message ?? error}`);
+  } finally {
+    presetRunning = false;
+  }
+}
+// at launch only remember it: the server state below is not declared yet
+for (const arg of process.argv.slice(1)) pendingPresetToken = presetTokenFromLink(arg) ?? pendingPresetToken;
+
 app.on("open-url", (event, url) => {
   if (queueMarketerLink(url)) { event.preventDefault(); return; }
+  if (queuePresetLink(url)) { event.preventDefault(); return; }
   if (queueBrowserLink(url)) { event.preventDefault(); activateExistingWindow(BrowserWindow.getAllWindows()); return; }
   if (!queuePackageInstall(url)) return;
   event.preventDefault();
@@ -326,7 +377,7 @@ app.on("open-url", (event, url) => {
 for (const arg of process.argv.slice(1)) queueBrowserLink(arg);
 
 app.on("second-instance", (_event, commandLine) => {
-  for (const arg of commandLine) { queueMarketerLink(arg); queueBrowserLink(arg); }
+  for (const arg of commandLine) { queueMarketerLink(arg); queuePresetLink(arg); queueBrowserLink(arg); }
   const packageUrl = packageUrlFromCommandLine(commandLine);
   if (packageUrl) pendingPackageInstallUrl = packageUrl;
   activateExistingWindow(BrowserWindow.getAllWindows());
@@ -378,6 +429,7 @@ const serverSupervisor = createServerSupervisor({
     serverProc = proc;
     serverReady = true;
     serverStartConflictOnly = false;
+    void runPendingPreset();
     try { desktopHostLifecycle?.ready(proc.pid); }
     catch (error) { slog(`host recovery readiness held: ${error?.message ?? error}`); }
     slog(`server ready pid=${proc.pid} port=${SERVER_PORT}`);
@@ -561,7 +613,8 @@ async function secureWorkspaceConfig() {
 // operator points BOS_COMPOSIO_BROKER_URL (or legacy OMB_COMPOSIO_BROKER_URL)
 // at their own Worker. A Composio project key in settings still works without it.
 function composioBrokerUrl() {
-  return resolveManagedComposioBrokerUrl(compatEnv);
+  // a setup preset may bring its own broker (electron/preset-link.mjs)
+  return resolveManagedComposioBrokerUrl(compatEnv) || normalizeManagedComposioBrokerUrl(secureCredentials?.composioBrokerUrl);
 }
 
 // The packaged app has no terminal: everything about the server child's life

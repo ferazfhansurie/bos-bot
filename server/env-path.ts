@@ -62,6 +62,8 @@ function windowsKnownDirs(): string[] {
   const localAppData = compatEnv.LOCALAPPDATA ?? join(home, "AppData", "Local");
   return [
     join(appData, "npm"), // npm -g shims: claude, codex
+    join(compatEnv.ProgramFiles ?? "C:\\Program Files", "nodejs"), // node itself, which the npm shims run
+    join(localAppData, "Programs", "OpenAI", "Codex", "bin"), // OpenAI's Codex app for Windows ships codex.exe here
     join(home, ".grok", "bin"), // x.ai installer
     join(localAppData, "agy", "bin"), // Antigravity installer
     join(home, ".local", "bin"), // claude native installer

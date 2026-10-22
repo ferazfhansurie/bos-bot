@@ -441,9 +441,9 @@ function render(s) {
     (s.devices.length
       ? "<ul>" + s.devices.map((d) =>
           "<li><div class='grow'><div class=name>" + esc(d.name) + "</div>" +
-          "<div class=dim>Last seen " + ago(d.lastSeenAt) + "</div>" +
-          "<button data-cloud='" + esc(d.id) + "' data-allowed='" + (d.cloudDesktopAccess ? "1" : "0") + "'>" +
-          (d.cloudDesktopAccess ? "Cloud desktop on" : "Allow cloud desktop") + "</button></div>" +
+          "<div class=dim>" + (d.web ? "Browser · " : "") + "Last seen " + ago(d.lastSeenAt) + "</div>" +
+          (d.web ? "" : "<button data-cloud='" + esc(d.id) + "' data-allowed='" + (d.cloudDesktopAccess ? "1" : "0") + "'>" +
+          (d.cloudDesktopAccess ? "Cloud desktop on" : "Allow cloud desktop") + "</button>") + "</div>" +
           "<button data-revoke='" + esc(d.id) + "'>Remove</button></li>").join("") + "</ul>"
       : "<p class=dim>No phones are paired yet.</p>");
 

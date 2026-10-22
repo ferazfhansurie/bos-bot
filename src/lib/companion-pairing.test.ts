@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
+  companionWebEndpoint,
+  companionWebPairingLink,
   companionPairingLink,
   companionPairingRoute,
   companionPairingRoutePin,
@@ -357,3 +359,40 @@ describe("companionPairingLink", () => {
   });
 });
 // branding compatibility (electron/branding-compat.json): data-home: existing desktop and companion homes, backups and lease recovery must open the same data; pairing: old QR codes remain readable; server emission stays old until both native apps have shipped support; deployed-services: existing worker databases, service health identities and hosted addresses must not become a different service; paired-mdns-host: saved phone fallback routes continue resolving the same stable LAN hostname
+
+describe("companionWebPairingLink", () => {
+  const token = `omb_pair_${"a".repeat(43)}`;
+  const hosted = { url: "https://c-5cf7b3b64b5b33fe70efc22fd967b4b2.bosbot.my", kind: "hosted" as const, priority: 0 };
+  const lan = { url: "http://192.168.1.5:8810", kind: "lan" as const, priority: 1 };
+
+  it("carries the hosted route and credentials in the fragment only", () => {
+    const link = companionWebPairingLink({ endpoints: [lan, hosted], code: "123456", token, name: "Mac" });
+    expect(link).not.toBeNull();
+    const url = new URL(link!);
+    expect(`${url.origin}${url.pathname}`).toBe("https://app.bosbot.my/link");
+    expect(url.search).toBe("");
+    const fragment = new URLSearchParams(url.hash.slice(1));
+    expect(fragment.get("v")).toBe("1");
+    expect(fragment.get("u")).toBe(hosted.url);
+    expect(fragment.get("t")).toBe(token);
+    expect(fragment.get("c")).toBe("123456");
+    expect(fragment.get("n")).toBe("Mac");
+  });
+
+  it("is null without a bosbot.my hosted route", () => {
+    expect(companionWebPairingLink({ endpoints: [lan], code: "123456", token })).toBeNull();
+    expect(
+      companionWebPairingLink({
+        endpoints: [{ url: "https://evil.example", kind: "hosted", priority: 0 }],
+        code: "123456",
+        token,
+      }),
+    ).toBeNull();
+    expect(companionWebEndpoint([lan, hosted])).toBe(hosted.url);
+  });
+
+  it("refuses a malformed credential", () => {
+    expect(companionWebPairingLink({ endpoints: [hosted], code: "12345", token })).toBeNull();
+    expect(companionWebPairingLink({ endpoints: [hosted], code: "123456", token: "omb_pair_short" })).toBeNull();
+  });
+});

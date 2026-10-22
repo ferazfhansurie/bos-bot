@@ -21,6 +21,8 @@ import {
 import { QRCodeSVG } from "qrcode.react";
 import {
   companionPairingLink,
+  companionWebEndpoint,
+  companionWebPairingLink,
   companionPairingRoute,
   companionPairingRoutePin,
   companionPairingRoutePinAvailable,
@@ -65,6 +67,8 @@ export interface PhoneDevice {
   createdAt: number;
   lastSeenAt: number;
   cloudDesktopAccess: boolean;
+  /** paired from the phone browser (app.bosbot.my): chat only, never desktop control */
+  web?: boolean;
 }
 
 export interface CompanionState {
@@ -193,6 +197,10 @@ export interface PhoneSetupController {
   error: string | null;
   accountError: string | null;
   pairingLink: string | null;
+  /** Same pairing window, as a camera-scannable app.bosbot.my link for a
+   * phone without the native app. Null without a hosted route. */
+  webPairingLink: string | null;
+  webAddress: string | null;
   secondsLeft: number;
   address: string | undefined;
   pairingPort: number;
@@ -819,6 +827,16 @@ export function usePhoneSetupController(profileEmail = ""): PhoneSetupController
       secretPublicKey: state.secretPublicKey,
     });
   }, [pairingRoute, state]);
+  const webAddress = companionWebEndpoint(pairingRoute?.endpoints);
+  const webPairingLink = useMemo(() => {
+    if (!state?.pairing || !pairingRoute) return null;
+    return companionWebPairingLink({
+      endpoints: pairingRoute.endpoints,
+      code: state.pairing.code,
+      token: state.pairing.token,
+      name: state.discovery?.name,
+    });
+  }, [pairingRoute, state]);
 
   const cancel = useCallback(() => {
     const cancelledGeneration = setupGeneration.current;
@@ -861,6 +879,8 @@ export function usePhoneSetupController(profileEmail = ""): PhoneSetupController
     error,
     accountError,
     pairingLink,
+    webPairingLink,
+    webAddress,
     secondsLeft: state?.pairing
       ? Math.max(0, Math.round((state.pairing.expiresAt - now) / 1000))
       : 0,
@@ -954,6 +974,8 @@ export function PhoneSetupFlowView({
   compactHeader?: boolean;
 }) {
   const c = controller;
+  const [browserQr, setBrowserQr] = useState(false);
+  const showBrowserQr = browserQr && Boolean(c.webPairingLink);
   const actionError = companionAccountActionError(c.account, c.accountError);
   const manualCodeMode = phonePairingManualCodeMode(Boolean(c.state?.pairing), c.pairingLink);
 
@@ -1181,12 +1203,30 @@ export function PhoneSetupFlowView({
         {c.pairingExpired ? t("phone.code.expired") : t("phone.code.title")}
       </h2>
       <p className="mt-1 text-[13px] text-ink-secondary">
-        {c.pairingExpired ? t("phone.code.expiredDetail") : t("phone.code.detail")}
+        {c.pairingExpired
+          ? t("phone.code.expiredDetail")
+          : showBrowserQr
+            ? t("phone.code.browserDetail")
+            : t("phone.code.detail")}
       </p>
-      {!c.pairingExpired && c.pairingLink && (
+      {!c.pairingExpired && (showBrowserQr ? c.webPairingLink : c.pairingLink) && (
         <div className="mt-4 rounded-2xl bg-white p-3.5" aria-label={t("phone.code.qrAria")}>
-          <QRCodeSVG value={c.pairingLink} size={180} level="M" bgColor="#ffffff" fgColor="#111111" />
+          <QRCodeSVG
+            value={(showBrowserQr ? c.webPairingLink : c.pairingLink) ?? ""}
+            size={180}
+            level="M"
+            bgColor="#ffffff"
+            fgColor="#111111"
+          />
         </div>
+      )}
+      {!c.pairingExpired && c.webPairingLink && (
+        <button
+          onClick={() => setBrowserQr((value) => !value)}
+          className="mt-3 text-[12px] text-accent hover:underline"
+        >
+          {showBrowserQr ? t("phone.code.appToggle") : t("phone.code.browserToggle")}
+        </button>
       )}
       {!c.pairingExpired && manualCodeMode === "direct" && c.state?.pairing && (
         <div className="mt-4 w-full max-w-[320px] rounded-xl bg-inset px-4 py-3 text-[12.5px] text-ink-secondary">
@@ -1213,6 +1253,11 @@ export function PhoneSetupFlowView({
             {c.address && (
               <div className="mt-3">
                 <ConnectionDetail label={t("phone.code.address")} value={`${c.address}:${c.pairingPort}`} />
+              </div>
+            )}
+            {c.webAddress && (
+              <div className="mt-3">
+                <ConnectionDetail label={t("phone.code.browserAddress")} value={c.webAddress} />
               </div>
             )}
           </div>

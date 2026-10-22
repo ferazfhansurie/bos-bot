@@ -7,7 +7,7 @@
 // and the one that quietly stopped being true once before.
 import { describe, expect, it } from "vitest";
 
-import { denyReason, isBrowserAccess } from "../src/routes.ts";
+import { denyReason, isBrowserAccess, webDenyReason } from "../src/routes.ts";
 
 const ask = (method: string, path: string, authenticated = true) =>
   denyReason({ method, path, authenticated });
@@ -353,4 +353,48 @@ it("allows only read-only exact computer previews behind the computer capability
   expect(isCloudDesktopAccess("GET", "/api/bots/b/computer/preview")).toBe(true);
   expect(ask("POST", "/api/bots/b/computer/preview")).not.toBeNull();
   expect(ask("GET", "/api/bots/b/computer/preview", false)?.status).toBe(401);
+});
+
+describe("the phone-browser subset", () => {
+  const web = (method: string, path: string, authenticated = true) =>
+    webDenyReason({ method, path, authenticated });
+
+  it("covers chat, threads and cards", () => {
+    for (const [method, path] of [
+      ["GET", "/api/bots"],
+      ["GET", "/api/events"],
+      ["POST", "/api/bots/b-1/messages"],
+      ["POST", "/api/bots/b-1/tasks"],
+      ["POST", "/api/bots/b-1/tasks/t_2"],
+      ["POST", "/api/bots/b-1/read"],
+      ["POST", "/api/bots/b-1/interrupt"],
+      ["PATCH", "/api/bots/b-1/cards/m-3"],
+      ["GET", "/api/threads/t-1/messages"],
+      ["GET", "/api/threads/t-1/messages/m-1/image"],
+      ["POST", "/api/threads/t-1/respond"],
+      ["GET", "/api/attachments/shot.png"],
+    ]) expect(web(method, path), `${method} ${path}`).toBeNull();
+  });
+
+  it("is never wider than the native allowlist", () => {
+    // a route the native app may not use is not one the browser may use
+    expect(web("GET", "/api/not-a-route")?.status).toBe(denyReason({ method: "GET", path: "/api/not-a-route", authenticated: true })?.status);
+    expect(web("GET", "/api/bots", false)?.status).toBe(401);
+    expect(web("POST", "/api/pair", false)).toBeNull();
+    expect(web("GET", "/api/health", false)).toBeNull();
+  });
+
+  it("leaves out files, settings, computers and anything destructive", () => {
+    for (const [method, path] of [
+      ["POST", "/api/files"],
+      ["POST", "/api/bots/b-1/always-allow"],
+      ["DELETE", "/api/bots/b-1"],
+      ["DELETE", "/api/bots/b-1/tasks/t-1"],
+      ["GET", "/api/bots/b-1/computer/screenshot"],
+      ["POST", "/api/bots/b-1/browser/open"],
+      ["GET", "/api/attachments/../secret"],
+      ["GET", "/api/attachments/notes.txt"],
+      ["GET", "/api/bots/b-1/messages/x/files/y"],
+    ]) expect(web(method, path), `${method} ${path}`).not.toBeNull();
+  });
 });

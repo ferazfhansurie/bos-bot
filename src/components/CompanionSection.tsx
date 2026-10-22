@@ -145,7 +145,10 @@ export function CompanionSection({ profileEmail = "" }: { profileEmail?: string 
                   </div>
                   <div className="min-w-0 flex-1">
                     <div className="truncate text-[13.5px] font-medium text-ink">{device.name}</div>
-                    <div className="text-[11.5px] text-ink-secondary">{t("remote.devices.lastSeen", { when: relative(device.lastSeenAt) })}</div>
+                    <div className="text-[11.5px] text-ink-secondary">
+                      {device.web ? `${t("remote.devices.browser")} · ` : ""}
+                      {t("remote.devices.lastSeen", { when: relative(device.lastSeenAt) })}
+                    </div>
                   </div>
                   <button
                     disabled={c.busy}
@@ -156,7 +159,8 @@ export function CompanionSection({ profileEmail = "" }: { profileEmail?: string 
                     <Trash2 size={14} />
                   </button>
                 </div>
-                <div className="mt-3 flex items-center justify-between gap-3 border-t border-hairline/30 pt-3">
+                {/* a browser-held token never gets desktop control */}
+                {!device.web && <div className="mt-3 flex items-center justify-between gap-3 border-t border-hairline/30 pt-3">
                   <div>
                     <div className="text-[12px] text-ink">{t("remote.devices.allowView")}</div>
                     <div className="mt-0.5 text-[11px] text-ink-secondary">{t("remote.devices.allowViewDetail")}</div>
@@ -171,7 +175,7 @@ export function CompanionSection({ profileEmail = "" }: { profileEmail?: string 
                       )
                     }
                   />
-                </div>
+                </div>}
               </li>
             ))}
           </ul>

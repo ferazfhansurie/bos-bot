@@ -166,7 +166,7 @@ const proxy = createProxyHandler({
     // `authenticate` also stamps lastSeenAt, which is what makes the control
     // page able to say when a phone was last heard from.
     authenticate: (token) => devices.authenticate(token),
-    redeem: (code, deviceName, pairRequestId) => devices.redeem(code, deviceName, pairRequestId),
+    redeem: (code, deviceName, pairRequestId, scope) => devices.redeem(code, deviceName, pairRequestId, scope),
     serverName: machineName,
     // Recomputed per pairing rather than cached: addresses change when the
     // machine joins another network, and a pairing is exactly the moment the
@@ -181,7 +181,9 @@ const companion = createServer(proxy);
 // connection to WebSocket, so every server exposing this proxy must also
 // forward Node's separate `upgrade` event to the viewer relay.
 companion.on("upgrade", proxy.upgrade);
-const managedOrigin = PRIVATE_ORIGIN ? createServer(proxy) : null;
+// The hosted HTTPS route is the only one a browser can use, so it is the only
+// listener that may answer the phone-browser companion's origin.
+const managedOrigin = PRIVATE_ORIGIN ? createServer((req, res) => proxy(req, res, "hosted")) : null;
 managedOrigin?.on("upgrade", proxy.upgrade);
 
 const control = createControlServer({

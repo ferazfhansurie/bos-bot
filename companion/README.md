@@ -73,6 +73,12 @@ trusted-network-only rather than described as something it is not.
   request that carries one is a browser that has found this port. Refused
   before the token is even looked at — stricter than the harness's own rule,
   which allows loopback origins.
+  One exception, on the hosted HTTPS listener only: the phone-browser
+  companion at exactly `https://app.bosbot.my` gets CORS (no credentials
+  mode, bearer token still required) for the chat subset in
+  `webDenyReason` — bots, threads, messages, events, cards. No files,
+  viewers, computers, settings or websockets. The LAN/tailnet listener still
+  refuses every origin.
 - **Hold credentials, settings, or Local VM control.** Credential plaintext
   remains transient on the phone and desktop only: the sidecar can carry one
   QR-keyed HPKE envelope for an exact pending card, but cannot open or retain

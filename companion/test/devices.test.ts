@@ -282,6 +282,25 @@ describe("DeviceRegistry", () => {
     expect(new DeviceRegistry().authenticate(phone.token)).toBeNull();
   });
 
+  it("remembers a browser pairing and never gives it cloud desktop access", () => {
+    const registry = new DeviceRegistry();
+    const { code } = registry.openPairing();
+    const result = registry.redeem(code, "Safari", undefined, "web");
+    if ("error" in result) throw new Error(result.error);
+    expect(result.device.web).toBe(true);
+    expect(registry.setCloudDesktopAccess(result.device.id, true)).toBe(false);
+    expect(registry.authenticate(result.token)?.cloudDesktopAccess).toBe(false);
+    // survives a restart, and a hand-edited file cannot grant it either
+    const raw = JSON.parse(readFileSync(join(DATA_DIR, "devices.json"), "utf8"));
+    raw.devices[0].cloudDesktopAccess = true;
+    writeFileSync(join(DATA_DIR, "devices.json"), JSON.stringify(raw));
+    const reloaded = new DeviceRegistry().authenticate(result.token);
+    expect(reloaded?.web).toBe(true);
+    expect(reloaded?.cloudDesktopAccess).toBe(false);
+    // a native pairing is unchanged
+    expect(pair(registry, "iPhone").device.web).toBeUndefined();
+  });
+
   it("treats a corrupt devices.json as no paired devices", () => {
     pair(new DeviceRegistry());
     writeFileSync(join(DATA_DIR, "devices.json"), "{ not json");

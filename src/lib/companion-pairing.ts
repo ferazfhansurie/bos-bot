@@ -354,3 +354,33 @@ export function companionPairingLink({
   return url.toString();
 }
 // branding compatibility (electron/branding-compat.json): pairing: old QR codes remain readable; server emission stays old until both native apps have shipped support
+
+/** The phone-browser companion. A person without the native app scans this
+ * with the phone camera; the page pairs over the hosted HTTPS route. */
+export const COMPANION_WEB_LINK = "https://app.bosbot.my/link";
+
+/** The hosted route the browser companion can use, or null. It has to be the
+ * certificate-validated tunnel: a page served over HTTPS cannot reach the
+ * plain-HTTP LAN or tailnet routes, and the page only dials *.bosbot.my. */
+export function companionWebEndpoint(endpoints: CompanionEndpoint[] | undefined): string | null {
+  const hosted = qrEndpoints(endpoints).find((endpoint) => endpoint.kind === "hosted");
+  if (!hosted) return null;
+  const hostname = new URL(hosted.url).hostname.toLowerCase();
+  return hostname.endsWith(".bosbot.my") ? hosted.url : null;
+}
+
+/** The browser QR: everything after `#`, so the pairing credential never
+ * reaches a server log, a referrer or a CDN — the page reads it and clears
+ * it from the address bar before it pairs. */
+export function companionWebPairingLink({
+  endpoints,
+  code,
+  token,
+  name,
+}: Pick<CompanionPairingLinkOptions, "endpoints" | "code" | "token" | "name">): string | null {
+  const url = companionWebEndpoint(endpoints);
+  if (!url || !/^\d{6}$/.test(code) || !/^omb_pair_[A-Za-z0-9_-]{43}$/.test(token)) return null;
+  const fragment = new URLSearchParams({ v: "1", u: url, t: token, c: code });
+  if (name?.trim()) fragment.set("n", name.trim().slice(0, 60));
+  return `${COMPANION_WEB_LINK}#${fragment.toString()}`;
+}

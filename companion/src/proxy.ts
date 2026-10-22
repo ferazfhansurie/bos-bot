@@ -21,7 +21,14 @@ import {
   MAX_COMPANION_ENDPOINTS,
   type CompanionEndpoint,
 } from "./endpoints.ts";
-import { denyReason, isBrowserAccess, isCloudDesktopAccess, isMessageFileDownload } from "./routes.ts";
+import {
+  WEB_COMPANION_ORIGIN,
+  denyReason,
+  isBrowserAccess,
+  isCloudDesktopAccess,
+  isMessageFileDownload,
+  webDenyReason,
+} from "./routes.ts";
 import { companionStatusSnapshot, type CompanionStatus } from "./status.ts";
 import { CompanionViewerRelay } from "./viewer-relay.ts";
 import { createSseScrubber, isJson, scrub } from "./wire.ts";
@@ -34,7 +41,7 @@ export interface ProxyOptions {
    * Undefined keeps standalone sidecars compatible with a plain Node harness. */
   mutationToken?: () => string | null;
   /** Does this bearer token belong to a paired device? */
-  authenticate: (token: string | undefined) => { id?: string; cloudDesktopAccess: boolean } | null;
+  authenticate: (token: string | undefined) => { id?: string; cloudDesktopAccess: boolean; web?: boolean } | null;
   /** Redeem a pairing code. Handled here and never forwarded: the harness
    * has no such route and no idea devices exist — pairing is the sidecar's
    * own concern, and the one thing a device does before it has a token. */
@@ -42,6 +49,7 @@ export interface ProxyOptions {
     code: string,
     deviceName: unknown,
     pairRequestId?: unknown,
+    scope?: "native" | "web",
   ) => { token: string; device: unknown } | { error: string };
   /** What the phone should call this computer in its connection list. */
   serverName: () => string;
@@ -61,6 +69,10 @@ export interface ProxyOptions {
    * it synchronously when that device is revoked; the returned disposer is
    * called exactly once when either side closes it. */
   connected?: (deviceId: string, disconnect: () => void) => () => void;
+  /** Browser origins the hosted listener answers with CORS. Defaults to the
+   * one phone-browser companion; tests substitute their own. Never consulted
+   * on the LAN/tailnet listener, which refuses every Origin. */
+  webOrigins?: readonly string[];
   /** How long the harness may take to produce response *headers*. Optional,
    * and only ever set by tests — the default is the one that ships. */
   headersTimeoutMs?: number;
@@ -138,17 +150,27 @@ const PRIVATE_RESPONSE_HEADERS = {
   "cdn-cache-control": "no-store",
   "cloudflare-cdn-cache-control": "no-store",
   pragma: "no-cache",
-  vary: "Authorization",
+  vary: "Origin, Authorization",
 } as const;
 
 /** Device responses can cross a public CDN when the managed HTTPS endpoint
  * is enabled. Never let chat JSON, images, audio, pairing responses, or even
  * authorization failures become shared cache entries. These values override
  * anything the loopback harness supplied. */
-const privateHeaders = (headers: IncomingMessage["headers"] = {}): IncomingMessage["headers"] => ({
-  ...headers,
-  ...PRIVATE_RESPONSE_HEADERS,
-});
+const privateHeaders = (headers: IncomingMessage["headers"] = {}): IncomingMessage["headers"] => {
+  const out: IncomingMessage["headers"] = {};
+  for (const [name, value] of Object.entries(headers)) {
+    // CORS is the sidecar's decision alone. A loopback harness that ever
+    // answered with its own access-control headers must not widen it.
+    if (!name.toLowerCase().startsWith("access-control-")) out[name] = value;
+  }
+  return { ...out, ...PRIVATE_RESPONSE_HEADERS };
+};
+
+/** Headers a browser may send on a companion request. Bearer auth, a JSON or
+ * upload body type, and the SSE resume cursor; no cookies are ever involved,
+ * so credentials mode is never allowed. */
+const WEB_ALLOWED_REQUEST_HEADERS = "authorization, content-type, last-event-id";
 
 const sendJson = (res: ServerResponse, status: number, body: unknown): void => {
   if (res.headersSent) {
@@ -255,29 +277,71 @@ const forwardHeaders = (req: IncomingMessage, authenticatedDeviceId?: string, mu
   return out;
 };
 
+/** Which listener a request arrived on. `device` is the LAN/tailnet socket a
+ * native app dials directly; `hosted` is the private origin behind the
+ * certificate-validated HTTPS tunnel, the only place a browser can be. */
+export type ProxySurface = "device" | "hosted";
+
 /** The device-facing handler: refuse a browser, check the allowlist, check
  * the token, then replay the request to the harness over loopback and scrub
  * what comes back. Pairing is the one route that stops here. */
 export function createProxyHandler(options: ProxyOptions) {
   const viewers = new CompanionViewerRelay();
-  const handle = function handle(req: IncomingMessage, res: ServerResponse): void {
+  const webOrigins = options.webOrigins ?? [WEB_COMPANION_ORIGIN];
+  const handle = function handle(req: IncomingMessage, res: ServerResponse, surface: ProxySurface = "device"): void {
     const path = (req.url ?? "/").split("?")[0];
     const method = req.method ?? "GET";
 
     // A native app sends no Origin. Anything that does is a browser that has
     // found this port, and a browser has no business on it — refused before
     // the token is even looked at, and regardless of what the origin says.
-    if (req.headers.origin) {
+    //
+    // One exception, and only on the hosted HTTPS listener: the phone-browser
+    // companion's exact origin. A browser served over HTTPS cannot reach the
+    // plain-HTTP LAN listener anyway, so that listener keeps the blanket
+    // refusal. The browser still needs a paired device token for everything
+    // except pairing itself, never gets credentials mode, and is held to the
+    // narrower `webDenyReason` subset below.
+    const origin = req.headers.origin;
+    const webOrigin = origin && surface === "hosted" && webOrigins.includes(origin) ? origin : null;
+    if (origin && !webOrigin) {
       return sendJson(res, 403, { error: "forbidden: cross-origin request" });
+    }
+    if (webOrigin) {
+      if (method === "OPTIONS") {
+        // A preflight carries no token, so it is judged as if authenticated:
+        // it may only ever announce routes in the web subset, and the real
+        // request is still checked against the token afterwards.
+        const requested = String(req.headers["access-control-request-method"] ?? "").toUpperCase();
+        if (!requested || webDenyReason({ path, method: requested, authenticated: true })) {
+          return sendJson(res, 403, { error: "forbidden: cross-origin request" });
+        }
+        res.writeHead(204, {
+          ...PRIVATE_RESPONSE_HEADERS,
+          "access-control-allow-origin": webOrigin,
+          "access-control-allow-methods": requested,
+          "access-control-allow-headers": WEB_ALLOWED_REQUEST_HEADERS,
+          "access-control-max-age": "600",
+          vary: "Origin, Access-Control-Request-Method, Access-Control-Request-Headers",
+        });
+        res.end();
+        return;
+      }
+      res.setHeader("access-control-allow-origin", webOrigin);
     }
 
     const token = bearerToken(req.headers.authorization);
     const device = options.authenticate(token);
+    // The web subset follows the token, not just the header: a token paired
+    // from the browser and replayed without an Origin is still a web token.
+    const webScoped = Boolean(webOrigin || device?.web);
     if (viewers.isViewerPath(req.url)) {
+      // The desktop viewer relay is native-only.
+      if (webScoped) return sendJson(res, 404, { error: `no route: ${method} ${path}` });
       viewers.handleHttp(req, res, device);
       return;
     }
-    const denial = denyReason({
+    const denial = (webScoped ? webDenyReason : denyReason)({
       path,
       method,
       // `bearerToken` is the registry's own parser, imported rather than
@@ -311,6 +375,7 @@ export function createProxyHandler(options: ProxyOptions) {
             String(body.credential ?? body.code ?? ""),
             body.deviceName,
             body.pairRequestId,
+            webOrigin ? "web" : "native",
           );
           if ("error" in result) return sendJson(res, 401, { error: result.error });
           // `hosts` rides along whichever way the phone paired — QR, typed
@@ -675,6 +740,10 @@ export function createProxyHandler(options: ProxyOptions) {
     }
     const token = bearerToken(req.headers.authorization);
     const device = options.authenticate(token);
+    if (device?.web) {
+      socket.destroy();
+      return;
+    }
     viewers.handleUpgrade(req, socket, head, device);
   };
   handle.disconnectDevice = (deviceId: string): void => viewers.closeDevice(deviceId);

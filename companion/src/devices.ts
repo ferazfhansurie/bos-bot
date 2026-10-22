@@ -26,6 +26,11 @@ export interface DeviceRecord {
   /** Full interactive access to a bot's cloud desktop. Deliberately off on
    * every new and migrated device until the computer owner enables it. */
   cloudDesktopAccess: boolean;
+  /** Paired from the phone-browser companion (app.bosbot.my). A token kept
+   * in browser storage is one injected script away from leaking, so such a
+   * device is held to the narrower web route subset on every listener, with
+   * or without an Origin header, and never gets cloud desktop access. */
+  web?: boolean;
 }
 
 /** What the UI is allowed to see: a device without its secret. */
@@ -118,7 +123,8 @@ function normalizeDevice(record: Partial<DeviceRecord> & { id: string; tokenHash
     name: cleanDeviceName(record.name),
     createdAt,
     lastSeenAt: timestamp(record.lastSeenAt, createdAt),
-    cloudDesktopAccess: record.cloudDesktopAccess === true,
+    cloudDesktopAccess: record.web === true ? false : record.cloudDesktopAccess === true,
+    ...(record.web === true ? { web: true } : {}),
   };
 }
 
@@ -221,6 +227,7 @@ export class DeviceRegistry {
     credential: string,
     name: unknown,
     pairRequestId?: unknown,
+    scope: "native" | "web" = "native",
   ): { device: PublicDevice; token: string } | { error: string } {
     const presented = String(credential ?? "");
     const requestId =
@@ -272,6 +279,7 @@ export class DeviceRegistry {
       createdAt: Date.now(),
       lastSeenAt: Date.now(),
       cloudDesktopAccess: false,
+      ...(scope === "web" ? { web: true } : {}),
     };
     this.devices.push(device);
     // Unlike the lastSeenAt write below, this one must not be swallowed. A
@@ -346,6 +354,8 @@ export class DeviceRegistry {
   setCloudDesktopAccess(id: string, allowed: boolean): boolean {
     const device = this.devices.find((candidate) => candidate.id === id);
     if (!device) return false;
+    // A browser-held token never crosses into desktop control.
+    if (device.web && allowed) return false;
     const previous = device.cloudDesktopAccess;
     device.cloudDesktopAccess = allowed;
     try {

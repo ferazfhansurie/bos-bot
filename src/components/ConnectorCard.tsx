@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Check, Loader2, RefreshCw, X } from "lucide-react";
+import { QRCodeSVG } from "qrcode.react";
 
 import { api, type Message } from "@/state/store";
 import { t } from "@/lib/i18n";
@@ -7,6 +8,7 @@ import { cn } from "@/lib/cn";
 import { ServiceIcon } from "./PluginsPanel";
 import type { LocaleKey } from "@/locales";
 import { reserveConnectionWindow } from "@/lib/connection-window";
+import type { NativeWhatsAppSnapshot } from "./NativeWhatsAppTile";
 
 export function ConnectorCard({ botId, threadId, message }: { botId: string; threadId: string; message: Message }) {
   const connector = message.connector!;
@@ -14,6 +16,9 @@ export function ConnectorCard({ botId, threadId, message }: { botId: string; thr
   const [localError, setLocalError] = useState<string | { key: LocaleKey } | null>(null);
   const polling = useRef(false);
   const [pendingUrl, setPendingUrl] = useState<string | null>(null);
+  // a WhatsApp card links on this computer (server/whatsapp-service.ts): no
+  // sign-in page, the QR shows in the card until the phone scans it
+  const [native, setNative] = useState<NativeWhatsAppSnapshot | null>(null);
   const connectWindow = useRef<ReturnType<typeof reserveConnectionWindow> | null>(null);
   useEffect(() => () => { connectWindow.current?.cancel(); }, []);
   useEffect(() => {
@@ -51,9 +56,37 @@ export function ConnectorCard({ botId, threadId, message }: { botId: string; thr
     };
   }, [checkStatus, connector.dismissed, connector.status]);
 
+  useEffect(() => {
+    if (!native || connector.status === "connected" || connector.dismissed) return;
+    if (native.state !== "qr_pending" && native.state !== "linking") return;
+    const timer = setTimeout(() => {
+      void api("/api/whatsapp/native").then((result) => { if (result?.whatsapp) setNative(result.whatsapp); }).catch(() => {});
+    }, 2_000);
+    return () => clearTimeout(timer);
+  }, [native, connector.status, connector.dismissed]);
+
   if (connector.dismissed) return null;
 
   const connect = async () => {
+    if (connector.slug === "whatsapp") {
+      setBusy(true);
+      setLocalError(null);
+      try {
+        const result = await api(`${endpoint}/authorize`, { method: "POST", body: JSON.stringify({ threadId }) });
+        if (result?.native) {
+          setNative(result.whatsapp ?? null);
+          return;
+        }
+        // native WhatsApp is turned off here: the Composio sign-in page, behind
+        // the card's Continue link (no popup after an await)
+        setPendingUrl(String(result.url));
+      } catch (error) {
+        setLocalError(error instanceof Error ? error.message : String(error));
+      } finally {
+        setBusy(false);
+      }
+      return;
+    }
     const reserved = reserveConnectionWindow();
     connectWindow.current = reserved;
     setBusy(true);
@@ -149,6 +182,19 @@ export function ConnectorCard({ botId, threadId, message }: { botId: string; thr
             </span>
           )}
         </div>
+        {!connected && native?.state === "qr_pending" && native.qr && (
+          <div className="mt-3 flex items-center gap-4 ps-[70px]">
+            <div className="rounded-xl bg-white p-2.5">
+              <QRCodeSVG value={native.qr} size={168} />
+            </div>
+            <p className="text-[12.5px] leading-relaxed text-ink-secondary">
+              On your phone open WhatsApp → Settings → Linked devices → Link a device, and scan this code. Linking only lets your bot read; it can't send anything.
+            </p>
+          </div>
+        )}
+        {!connected && native && (native.state === "needs_rescan" || native.state === "disconnected") && native.reason && (
+          <p className="mt-2 ps-[70px] text-[12.5px] text-ink-secondary">{native.reason}</p>
+        )}
         {error && <p className="mt-2 ps-[70px] text-[12.5px] text-danger">{typeof error === "string" ? error : t(error.key)}</p>}
         {!connected && (
           <button

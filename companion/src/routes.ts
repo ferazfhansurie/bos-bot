@@ -274,6 +274,52 @@ const ALLOWED: ReadonlyArray<{ method: string; path: RegExp }> = [
   { method: "POST", path: /^\/api\/bots\/[\w-]+\/secret-cards\/[\w-]+\/(?:resume|dismiss)$/ },
 ];
 
+/** The one browser origin allowed to call this sidecar: the phone-browser
+ * companion at app.bosbot.my, for people who cannot install the native app.
+ * Exact match only, never a suffix or pattern, and only on the hosted HTTPS
+ * listener (see `createProxyHandler`'s `surface`). The LAN and tailnet
+ * listener still refuses every Origin. */
+export const WEB_COMPANION_ORIGIN = "https://app.bosbot.my";
+
+/** What the browser companion may call: chat, transcripts, live events and
+ * answering cards. A strict subset of `ALLOWED`, because a token kept in a
+ * browser's storage is a token one script injection away from leaking.
+ * Settings, connected apps, routines, files, credential envelopes, signed
+ * owner confirmations, computer control and the viewer relay all stay native
+ * only. Every entry here must also pass `denyReason`; `webDenyReason` checks
+ * both. */
+const WEB_ALLOWED: ReadonlyArray<{ method: string; path: RegExp }> = [
+  { method: "GET", path: /^\/api\/bots$/ },
+  { method: "GET", path: /^\/api\/events$/ },
+  { method: "GET", path: /^\/api\/inbox$/ },
+  { method: "GET", path: /^\/api\/companion\/endpoints$/ },
+  { method: "GET", path: /^\/api\/companion\/status$/ },
+  { method: "POST", path: /^\/api\/bots\/[\w-]+\/messages$/ },
+  { method: "POST", path: /^\/api\/bots\/[\w-]+\/tasks$/ },
+  { method: "POST", path: /^\/api\/bots\/[\w-]+\/tasks\/[\w-]+$/ },
+  { method: "POST", path: /^\/api\/bots\/[\w-]+\/read$/ },
+  { method: "POST", path: /^\/api\/bots\/[\w-]+\/interrupt$/ },
+  { method: "PATCH", path: /^\/api\/bots\/[\w-]+\/cards\/[\w-]+$/ },
+  { method: "GET", path: /^\/api\/threads\/[\w-]+\/messages$/ },
+  { method: "GET", path: /^\/api\/threads\/[\w-]+\/messages\/[\w-]+\/image$/ },
+  { method: "POST", path: /^\/api\/threads\/[\w-]+\/respond$/ },
+  { method: "GET", path: /^\/api\/attachments\/[\w-]+\.(?:png|jpe?g|gif|webp)$/i },
+];
+
+/** `denyReason` for a request from the browser companion: the device rules
+ * first, then the narrower web subset. A route outside the subset answers
+ * "no route", exactly as an unknown route does, so a leaked browser token
+ * cannot map the rest of the API either. */
+export function webDenyReason(request: RouteRequest): Denial | null {
+  const denial = denyReason(request);
+  if (denial) return denial;
+  const { method, path } = request;
+  if (method === "POST" && path === "/api/pair") return null;
+  if (method === "GET" && path === "/api/health") return null;
+  if (WEB_ALLOWED.some((route) => route.method === method && route.path.test(path))) return null;
+  return { status: 404, error: `no route: ${method} ${path}` };
+}
+
 /** Route families worth naming in the refusal.
  *
  * Everything not allowed is denied either way; this only decides whether the
