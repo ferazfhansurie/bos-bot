@@ -51,7 +51,7 @@ targets:
         DEVELOPMENT_TEAM: 4W9658Z948
         PRODUCT_BUNDLE_IDENTIFIER: com.aihlete.aios
         MARKETING_VERSION: "2.1.3"
-        CURRENT_PROJECT_VERSION: "142"
+        CURRENT_PROJECT_VERSION: "143"
         SWIFT_VERSION: "5.9"
         TARGETED_DEVICE_FAMILY: "1,2"
         # The catalog lives in App/, which is already a source path.
@@ -118,9 +118,10 @@ targets:
         NSCameraUsageDescription: >-
           BOS uses the camera only to scan a pairing QR code shown on
           your computer.
-        # a voice call keeps talking with the screen locked, like a phone call;
-        # voip lets a bot's ring (PushKit) wake the app into a CallKit call
-        UIBackgroundModes: [audio, voip]
+        # voip lets a bot's ring (PushKit) wake the app into a CallKit call.
+        # no "audio": app review rejected it (2.5.4) since the app plays no
+        # persistent background audio; a call started in-app ends when locked
+        UIBackgroundModes: [voip]
         NSMicrophoneUsageDescription: >-
           BOS listens while you dictate a message to a bot or talk
           to one on a voice call.
@@ -186,7 +187,7 @@ targets:
         DEVELOPMENT_TEAM: 4W9658Z948
         PRODUCT_BUNDLE_IDENTIFIER: com.aihlete.aios.notification-content
         MARKETING_VERSION: "2.1.3"
-        CURRENT_PROJECT_VERSION: "142"
+        CURRENT_PROJECT_VERSION: "143"
         SWIFT_VERSION: "5.9"
         SWIFT_ACTIVE_COMPILATION_CONDITIONS: "$(inherited) WIDGET_EXTENSION"
         APPLICATION_EXTENSION_API_ONLY: YES
@@ -228,7 +229,7 @@ targets:
         DEVELOPMENT_TEAM: 4W9658Z948
         PRODUCT_BUNDLE_IDENTIFIER: com.aihlete.aios.notification-service
         MARKETING_VERSION: "2.1.3"
-        CURRENT_PROJECT_VERSION: "142"
+        CURRENT_PROJECT_VERSION: "143"
         SWIFT_VERSION: "5.9"
         APPLICATION_EXTENSION_API_ONLY: YES
         SKIP_INSTALL: true
@@ -265,7 +266,7 @@ targets:
         DEVELOPMENT_TEAM: 4W9658Z948
         PRODUCT_BUNDLE_IDENTIFIER: com.aihlete.aios.share
         MARKETING_VERSION: "2.1.3"
-        CURRENT_PROJECT_VERSION: "142"
+        CURRENT_PROJECT_VERSION: "143"
         SWIFT_VERSION: "5.9"
         TARGETED_DEVICE_FAMILY: "1,2"
         APPLICATION_EXTENSION_API_ONLY: YES
@@ -327,7 +328,7 @@ targets:
         DEVELOPMENT_TEAM: 4W9658Z948
         PRODUCT_BUNDLE_IDENTIFIER: com.aihlete.aios.widgets
         MARKETING_VERSION: "2.1.3"
-        CURRENT_PROJECT_VERSION: "142"
+        CURRENT_PROJECT_VERSION: "143"
         SWIFT_VERSION: "5.9"
         SWIFT_ACTIVE_COMPILATION_CONDITIONS: "$(inherited) WIDGET_EXTENSION"
         TARGETED_DEVICE_FAMILY: "1,2"

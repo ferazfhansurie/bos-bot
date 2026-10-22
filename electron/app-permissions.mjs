@@ -59,6 +59,29 @@ export function appPermissionAllowed(permission, requestingUrlOrOrigin, renderer
   return ALLOWED_APP_PERMISSIONS.has(permission);
 }
 
+/**
+ * Microphone for a remote BOS server the user chose in the Server menu. That
+ * window loads the server's own origin, so the local-origin rule above refuses
+ * voice notes. Only audio capture is granted: no display capture (empty
+ * mediaTypes), camera, notifications or clipboard for remote pages.
+ *
+ * @param {string} permission The Electron/Chromium permission name
+ * @param {string} requestingUrlOrOrigin The URL or origin requesting the permission
+ * @param {string | null | undefined} remoteOrigin The active remote server origin, if any
+ * @param {{ mediaTypes?: string[], mediaType?: string }} [details] Optional request details
+ * @returns {boolean}
+ */
+export function remoteMicAllowed(permission, requestingUrlOrOrigin, remoteOrigin, details = {}) {
+  if (permission !== "media") return false;
+  const requesting = webOrigin(requestingUrlOrOrigin);
+  const allowed = webOrigin(remoteOrigin);
+  if (!requesting || !allowed || requesting !== allowed) return false;
+  if (details?.mediaTypes !== undefined) {
+    return Array.isArray(details.mediaTypes) && details.mediaTypes.length > 0 && details.mediaTypes.every((type) => type === "audio");
+  }
+  return details?.mediaType === "audio";
+}
+
 // Both explicit IPC links and window.open must use the same web-only policy.
 export function externalWebUrl(rawUrl) {
   if (typeof rawUrl !== "string") throw new Error("A web address is required");

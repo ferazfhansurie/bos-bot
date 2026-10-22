@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { readFileSync } from "node:fs";
-import { appPermissionAllowed, externalWebUrl } from "./app-permissions.mjs";
+import { appPermissionAllowed, externalWebUrl, remoteMicAllowed } from "./app-permissions.mjs";
 
 const LOCAL_ORIGIN = "http://127.0.0.1:5199";
 const LOCAL_PAGE = "http://127.0.0.1:5199/chat?botId=bot-1";
@@ -95,4 +95,24 @@ test("fails closed on unparsable or opaque origins", () => {
   // Opaque origins all serialise as "null"; two of them must never match.
   assert.equal(appPermissionAllowed("notifications", "data:text/html,x", "about:blank"), false);
   assert.equal(appPermissionAllowed("notifications", "javascript:alert(1)", LOCAL_ORIGIN), false);
+});
+
+test("remote server: microphone only, and only for the active server's origin", () => {
+  const REMOTE = "https://team.example.com";
+  const PAGE = `${REMOTE}/chat?botId=bot-1`;
+  assert.equal(remoteMicAllowed("media", PAGE, REMOTE, { mediaTypes: ["audio"] }), true);
+  assert.equal(remoteMicAllowed("media", PAGE, REMOTE, { mediaType: "audio" }), true);
+  // no display capture, camera or unknown media for remote pages
+  assert.equal(remoteMicAllowed("media", PAGE, REMOTE, { mediaTypes: [] }), false);
+  assert.equal(remoteMicAllowed("media", PAGE, REMOTE, { mediaTypes: ["audio", "video"] }), false);
+  assert.equal(remoteMicAllowed("media", PAGE, REMOTE, { mediaType: "video" }), false);
+  assert.equal(remoteMicAllowed("media", PAGE, REMOTE, {}), false);
+  // nothing else is granted to remote pages
+  for (const permission of ["notifications", "clipboard-read", "geolocation"]) {
+    assert.equal(remoteMicAllowed(permission, PAGE, REMOTE, { mediaType: "audio" }), false, permission);
+  }
+  // other origins, or no active server, get nothing
+  assert.equal(remoteMicAllowed("media", "https://evil.example/x", REMOTE, { mediaType: "audio" }), false);
+  assert.equal(remoteMicAllowed("media", PAGE, null, { mediaType: "audio" }), false);
+  assert.equal(remoteMicAllowed("media", PAGE, undefined, { mediaType: "audio" }), false);
 });

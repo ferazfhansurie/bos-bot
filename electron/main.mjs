@@ -54,7 +54,7 @@ import { createWorkspaceWindows } from "./workspace-window.mjs";
 import { collisionFreeDownloadPath, defaultSaveName, withSavableFile } from "./save-file.mjs";
 import { desktopViewerPermissionAllowed } from "./desktop-viewer-permissions.mjs";
 import { WELCOME_PARTITION, sameWelcomeOrigin, welcomePermissionAllowed, welcomeWindowUrl } from "./welcome-window.mjs";
-import { appPermissionAllowed, externalWebUrl } from "./app-permissions.mjs";
+import { appPermissionAllowed, externalWebUrl, remoteMicAllowed } from "./app-permissions.mjs";
 import {
   ensureManagedComposioCredentials,
   managedComposioAccess,
@@ -3745,11 +3745,13 @@ app.whenReady().then(async () => {
   // serial) stay off. Client mode's loopback relay is the local UI.
   session.defaultSession.setPermissionRequestHandler((contents, permission, callback, details) => {
     const requesting = details?.requestingUrl ?? contents?.getURL?.() ?? "";
-    callback(appPermissionAllowed(permission, requesting, rendererOrigin(), details));
+    callback(appPermissionAllowed(permission, requesting, rendererOrigin(), details)
+      || remoteMicAllowed(permission, requesting, activeEnvironment(environmentsState)?.origin, details));
   });
   session.defaultSession.setPermissionCheckHandler((contents, permission, requestingOrigin, details) => {
     const requesting = requestingOrigin || contents?.getURL?.() || "";
-    return appPermissionAllowed(permission, requesting, rendererOrigin(), details);
+    return appPermissionAllowed(permission, requesting, rendererOrigin(), details)
+      || remoteMicAllowed(permission, requesting, activeEnvironment(environmentsState)?.origin, details);
   });
   environmentsState = readEnvironments();
   // The outbound connector never starts while computer sharing is off: no
