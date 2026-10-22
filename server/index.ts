@@ -95,6 +95,7 @@ async function federationOrigin(peer?: string): Promise<string | null> {
 }
 import { onboardingChief } from "./onboarding-chief.ts";
 import { applyOnboardingChatEvent, ONBOARDING_CONNECT_APPS, parseOnboardingChatEvent } from "./onboarding-chat.ts";
+import { parsePreset, presetResumeKey, soulWithPreset, type SetupPreset } from "./onboarding-preset.ts";
 import { initialOnboardingState, ONBOARDING_APPS, type OnboardingChatEvent, type OnboardingChatMessage, type OnboardingChatState } from "../shared/onboarding-chat.ts";
 import { hostedFreeTokenValid, registerHostedFree, verifyFreeModelKey } from "./free-model-setup.ts";
 import { requestWelcome, welcomeInstallId, welcomeName } from "./welcome-chat.ts";
@@ -14398,6 +14399,81 @@ function saveOnboardingChat(state: OnboardingChatState): void {
   cfg.onboarding = { ...cfg.onboarding, chat: state };
 }
 
+/** Create the onboarding record in the first bot's thread, once. */
+async function beginOnboardingChat(): Promise<void> {
+  const existing = cfg.onboarding?.chat;
+  if (existing && store.botByThread(existing.threadId)) return;
+  let engineReady = (await describeInstances()).some(instanceEngineReady);
+  // a company-managed engine (the hosted free tier) needs no sign-in, it
+  // is only still starting: wait for it rather than ask for one
+  const managed = Object.values(instanceConfigs(cfg)).some((entry) => !!(entry?.config as { managed?: unknown } | undefined)?.managed);
+  for (let i = 0; managed && !engineReady && i < 16; i++) {
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    engineReady = (await describeInstances()).some(instanceEngineReady);
+  }
+  // re-read after the await: a concurrent start may have created it
+  if (!cfg.onboarding?.chat || !store.botByThread(cfg.onboarding.chat.threadId)) {
+    const bot = onboardingChatBot();
+    saveOnboardingChat(initialOnboardingState(bot.id, bot.threadId, bot.name, engineReady));
+  }
+}
+
+/** Apply a setup preset (server/onboarding-preset.ts) to the first bot and
+ * its conversation. Each part is safe to apply again: the soul block is
+ * replaced, memory notes are rewritten, skills already there are kept,
+ * the greeting is only rewritten before the person writes, and a connector
+ * card posts once per app. */
+async function applySetupPreset(preset: SetupPreset): Promise<{ botId: string; threadId: string; cards: string[]; skills: string[] }> {
+  if (preset.personName && !cfg.profile?.name?.trim()) {
+    saveConfig({ profile: { name: preset.personName } });
+    cfg.profile = { ...cfg.profile, name: preset.personName } as typeof cfg.profile;
+  }
+  await beginOnboardingChat();
+  const chat = cfg.onboarding?.chat;
+  if (!chat) throw new Error("Chat onboarding could not start.");
+  if (chat.step === "greet") applyOnboardingChat({ type: "start" });
+  const bot = store.botByThread(chat.threadId);
+  if (!bot) throw new Error("The onboarding conversation no longer exists.");
+  if (preset.soul !== undefined) {
+    const soul = soulWithPreset(bot.soul ?? "", preset.soul);
+    if (soul !== (bot.soul ?? "")) {
+      const parsed = parseBotProfilePatch({ soul });
+      if (!parsed.ok) throw new Error(parsed.error);
+      const before = profileSnapshot(bot);
+      const updated = store.patchBotProfile(bot.id, { soul: parsed.patch.soul ?? "" });
+      if (updated) {
+        recordProfileChange(bot.id, "user", "api", before, profileSnapshot(updated));
+        broadcast({ kind: "bot", bot: wireBot(updated) });
+      }
+    }
+  }
+  for (const note of preset.memory ?? []) journalMemoryWrite(bot.id, note.path, note.text, { actor: "person", via: "api" });
+  const skills: string[] = [];
+  const have = new Set(listSkills(bot.id).map((skill) => skill.name));
+  for (const skill of preset.skills ?? []) {
+    if (have.has(skill.name)) { skills.push(skill.name); continue; }
+    const installed = installSkill(bot.id, `bos:preset:${preset.id}`, [{ path: "SKILL.md", content: skill.md }]);
+    if ("error" in installed) { console.warn(`[preset] skill ${skill.name} refused: ${installed.error}`); continue; }
+    // the person opened a link made for them; its skills are the setup they asked for
+    const enabled = setSkillEnabled(bot.id, installed.name, true);
+    if (!("error" in enabled)) skills.push(installed.name);
+  }
+  applyOnboardingChat({ type: "prepared", ...preset.prepared });
+  const cards: string[] = [];
+  if (composio.configured(cfg) && bot.composio !== false) {
+    for (const item of preset.connect ?? []) {
+      const resumeKey = presetResumeKey(item.slug);
+      if (store.messagesFor(chat.threadId).some((message) => message.connector?.resumeKey === resumeKey)) { cards.push(item.slug); continue; }
+      const toolkit = await composio.toolkitCard(cfg, item.slug).catch(() => ({ label: item.slug, blurb: "" }));
+      store.appendMessage(chat.threadId, { role: "bot", kind: "text", text: item.text });
+      store.appendMessage(chat.threadId, { role: "bot", kind: "connector", text: "",
+        connector: { slug: item.slug, label: toolkit.label, description: toolkit.blurb || `Connect ${toolkit.label}`, status: "required", resumeKey } });
+      cards.push(item.slug);
+    }
+  }
+  return { botId: bot.id, threadId: chat.threadId, cards, skills };
+}
+
 /** Apply one event to the stored record. Null when onboarding never started
  * or its conversation is gone; the caller decides whether that is an error. */
 function applyOnboardingChat(event: OnboardingChatEvent): OnboardingChatState | null {
@@ -23796,27 +23872,29 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       if (!parsed.ok) return json(res, 400, { error: parsed.error });
       if (auth.kind === "session" && !sessions.isLive(auth.session.id)) return json(res, 401, { error: "Session ended" });
       const event = parsed.event;
-      const existing = cfg.onboarding?.chat;
-      if ((!existing || !store.botByThread(existing.threadId)) && event.type === "start") {
-        let engineReady = (await describeInstances()).some(instanceEngineReady);
-        // a company-managed engine (the hosted free tier) needs no sign-in, it
-        // is only still starting: wait for it rather than ask for one
-        const managed = Object.values(instanceConfigs(cfg)).some((entry) => !!(entry?.config as { managed?: unknown } | undefined)?.managed);
-        for (let i = 0; managed && !engineReady && i < 16; i++) {
-          await new Promise((resolve) => setTimeout(resolve, 500));
-          engineReady = (await describeInstances()).some(instanceEngineReady);
-        }
-        // re-read after the await: a concurrent start may have created it
-        if (!cfg.onboarding?.chat || !store.botByThread(cfg.onboarding.chat.threadId)) {
-          const bot = onboardingChatBot();
-          saveOnboardingChat(initialOnboardingState(bot.id, bot.threadId, bot.name, engineReady));
-        }
-      }
+      if (event.type === "start") await beginOnboardingChat();
       if (!cfg.onboarding?.chat) return json(res, 409, { error: "Chat onboarding has not started." });
       const state = applyOnboardingChat(event);
       if (!state) return json(res, 409, { error: "The onboarding conversation no longer exists." });
       res.setHeader("cache-control", "no-store");
       return json(res, 200, { state });
+    }
+
+    // A setup preset the desktop claimed for this person (bosbot://setup?for=).
+    // Owner only, like the digital marketer: a link never grants access by itself.
+    if (method === "POST" && path === "/api/onboarding/preset") {
+      if (auth.scopes.includes("peer") || workspaceActor(auth) !== multiplayerActors.ownerId || authorizedInternalCapability(req.headers.authorization)) return json(res, 403, { error: "Apply a setup preset in your own BOS workspace." });
+      if (!String(req.headers["content-type"] ?? "").toLowerCase().startsWith("application/json")) return json(res, 415, { error: "content-type must be application/json" });
+      const parsed = parsePreset(await readBody(req, 256 * 1024));
+      if (!parsed.ok) return json(res, 400, { error: parsed.error });
+      if (auth.kind === "session" && !sessions.isLive(auth.session.id)) return json(res, 401, { error: "Session ended" });
+      try {
+        const applied = await applySetupPreset(parsed.preset);
+        res.setHeader("cache-control", "no-store");
+        return json(res, 200, { ...applied, state: cfg.onboarding?.chat ?? null });
+      } catch (error) {
+        return json(res, 409, { error: error instanceof Error ? error.message : String(error) });
+      }
     }
 
     if (method === "POST" && path === "/api/onboarding/free-model") {
