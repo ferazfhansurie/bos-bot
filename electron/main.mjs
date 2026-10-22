@@ -353,6 +353,10 @@ async function runPendingPreset() {
     const body = await response.json().catch(() => null);
     if (!response.ok) throw new Error(body?.error || `HTTP ${response.status}`);
     slog(`setup preset applied: cards=${(body?.cards ?? []).join(",") || "-"} skills=${(body?.skills ?? []).length}`);
+    // the greeting is rewritten in place and an open chat keeps its first
+    // copy (seen on Windows 2.1.3): reload so the person sees what was set up
+    if (mainWindowShowsLocalUi()) mainWindow.webContents.reload();
+    activateExistingWindow(BrowserWindow.getAllWindows());
   } catch (error) {
     slog(`setup preset failed: ${error?.message ?? error}`);
   } finally {
