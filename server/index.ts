@@ -14732,14 +14732,14 @@ const REMOVED_DRIVER_KINDS: ReadonlySet<string> = new Set([
 // then their bosbot credit); when it can't tell who that is it returns a claim
 // link, and the server polls until the person signs in there.
 type BosAiPhase = "off" | "starting" | "claim" | "ready" | "error";
-let bosAi: { phase: BosAiPhase; claimUrl?: string; error?: string } = { phase: "off" };
+let bosAi: { phase: BosAiPhase; claimUrl?: string; pair?: string; error?: string } = { phase: "off" };
 let bosAiClaim: { code: string; until: number; link: boolean } | null = null;
 let bosAiStarting = false;
 const bosAiEntry = () => {
   const entry = persistableInstanceConfigs(cfg)["bos-free"] as { driver?: unknown; config?: { hosted?: unknown; key?: unknown } } | undefined;
   return entry?.driver === "openrouter-free" && entry.config?.hosted === true && typeof entry.config.key === "string" ? entry.config.key : null;
 };
-async function bosAiStatus(withCredit: boolean): Promise<{ phase: BosAiPhase; claimUrl?: string; error?: string; credit?: BosAiCredit | null; topup: string; enabled: boolean }> {
+async function bosAiStatus(withCredit: boolean): Promise<{ phase: BosAiPhase; claimUrl?: string; pair?: string; error?: string; credit?: BosAiCredit | null; topup: string; enabled: boolean }> {
   const enabled = appConfig.current().flags.freeEngine && !HOSTED_WORKSPACE;
   const key = bosAiEntry();
   // a saved token is ready before the boot check has looked at it
@@ -14749,7 +14749,7 @@ async function bosAiStatus(withCredit: boolean): Promise<{ phase: BosAiPhase; cl
     const read = await bosAiCredit(BOS_AI_URL, key);
     credit = read === "invalid" ? null : read;
   }
-  return { phase, ...(bosAi.claimUrl ? { claimUrl: bosAi.claimUrl } : {}), ...(bosAi.error ? { error: bosAi.error } : {}), ...(credit !== undefined ? { credit } : {}), topup: BOS_AI_TOPUP, enabled };
+  return { phase, ...(bosAi.claimUrl ? { claimUrl: bosAi.claimUrl } : {}), ...(bosAi.pair ? { pair: bosAi.pair } : {}), ...(bosAi.error ? { error: bosAi.error } : {}), ...(credit !== undefined ? { credit } : {}), topup: BOS_AI_TOPUP, enabled };
 }
 /** Boot: keep a working BOS AI token, replace a pre-BOS AI one, and give an
  * install with no ready engine its free start without asking. */
@@ -14772,7 +14772,7 @@ async function provisionBosAi({ link, manual }: { link: boolean; manual: boolean
     const started = await startBosAi(await welcomeInstallId(DATA_DIR), { link });
     if (started.kind === "token") await installBosAi(started);
     else {
-      bosAi = { phase: "claim", claimUrl: started.url };
+      bosAi = { phase: "claim", claimUrl: started.url, ...(started.pair ? { pair: started.pair } : {}) };
       bosAiClaim = { code: started.code, until: Date.now() + 30 * 60_000, link };
       void watchBosAiClaim(started.code);
     }

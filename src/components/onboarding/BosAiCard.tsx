@@ -12,6 +12,7 @@ import { cn } from "@/lib/cn";
 export type BosAiStatus = {
   phase: "off" | "starting" | "claim" | "ready" | "error";
   claimUrl?: string;
+  pair?: string;
   error?: string;
   credit?: { left: number; cap: number; monthFull: boolean } | null;
   topup: string;
@@ -110,6 +111,11 @@ export function BosAiCard({ compact = false, className }: { compact?: boolean; c
       {phase === "claim" && (
         <>
           <p className="mt-2 text-[13px] text-ink-secondary" aria-live="polite">Finish in your browser: sign in with google on bosbot.my. This page updates by itself.</p>
+          {status?.pair && (
+            <p className="mt-2 text-[12.5px] text-ink-secondary">
+              If bosbot.my asks for a code, type <span data-bos-ai-pair className="rounded bg-ink/5 px-1.5 py-0.5 font-mono text-[14px] font-semibold tracking-[0.2em] text-ink">{status.pair}</span>. Never share it.
+            </p>
+          )}
           <div className="mt-3 flex flex-wrap items-center gap-3">
             {status?.claimUrl && primary("Open the sign-in page", () => openLink(status.claimUrl!))}
           </div>

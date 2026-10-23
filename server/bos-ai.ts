@@ -10,9 +10,11 @@ import { compatEnv } from "../electron/branding-env.cjs";
 export const BOS_SITE = (compatEnv.BOS_SITE_URL || "https://bosbot.my").replace(/\/+$/, "");
 const TOKEN = /^bosf_[A-Za-z0-9_-]{20,200}$/;
 const CODE = /^[A-Za-z0-9_-]{16,64}$/;
+// the pairing code the claim page asks for when the link is opened on another network, or to link the bosbot wallet
+const PAIR = /^[A-HJ-NP-Z2-9]{6}$/;
 
 export type BosAiToken = { token: string; left: number | null; cap: number | null; model: string | null };
-export type BosAiStart = ({ kind: "token" } & BosAiToken) | { kind: "claim"; url: string; code: string };
+export type BosAiStart = ({ kind: "token" } & BosAiToken) | { kind: "claim"; url: string; code: string; pair?: string };
 
 const fail = (message: string, status = 502) => Object.assign(new Error(message), { status });
 
@@ -57,9 +59,10 @@ export async function startBosAi(installId: string, options: { link?: boolean; f
   if (token) return { kind: "token", ...token };
   const url = typeof body?.claim === "string" ? body.claim : "";
   const code = typeof body?.code === "string" ? body.code : "";
+  const pair = typeof body?.pair === "string" && PAIR.test(body.pair) ? body.pair : undefined;
   try {
     const parsed = new URL(url);
-    if (parsed.protocol === "https:" && parsed.origin === new URL(BOS_SITE).origin && CODE.test(code) && parsed.searchParams.get("c") === code) return { kind: "claim", url: parsed.toString(), code };
+    if (parsed.protocol === "https:" && parsed.origin === new URL(BOS_SITE).origin && CODE.test(code) && parsed.searchParams.get("c") === code) return { kind: "claim", url: parsed.toString(), code, ...(pair ? { pair } : {}) };
   } catch {}
   throw fail("bosbot.my returned an invalid response. Try again.");
 }

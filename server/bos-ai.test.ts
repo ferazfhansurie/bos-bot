@@ -25,6 +25,13 @@ it("takes a claim link only on bosbot.my with a matching code", async () => {
   await expect(startBosAi(id, { fetch: vi.fn().mockRejectedValue(new Error("offline")) })).rejects.toThrow("Could not reach bosbot.my");
 });
 
+it("keeps the claim's pairing code only when it looks like one", async () => {
+  const url = "https://bosbot.my/desktop/claim?c=abcdefghijklmnopqrstuvwx", code = "abcdefghijklmnopqrstuvwx";
+  const claim = (pair: unknown) => startBosAi(id, { fetch: vi.fn().mockResolvedValue(json({ claim: url, code, pair })) });
+  expect(await claim("9VQMSW")).toMatchObject({ kind: "claim", pair: "9VQMSW" });
+  for (const bad of ["9vqmsw", "9VQMS", "9VQMSW1", "<b>x</b>", 123, undefined]) expect(await claim(bad)).not.toHaveProperty("pair");
+});
+
 it("polls a claim to pending, token or expired", async () => {
   const code = "abcdefghijklmnopqrstuvwx";
   expect(await pollBosAiClaim(code, { fetch: vi.fn().mockResolvedValue(json({ pending: true })) })).toEqual({ state: "pending" });
