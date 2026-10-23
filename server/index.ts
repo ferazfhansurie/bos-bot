@@ -6243,7 +6243,7 @@ bus.subscribe((event: RuntimeEvent) => {
       pushMessage({
         role: "bot",
         kind: "activity",
-        tool: { name: `error: ${event.message.slice(0, 160)}`, ok: false, setup: event.setup, ...(event.terminal ? { terminal: true } : {}) },
+        tool: { name: `error: ${event.message.slice(0, 400)}`, ok: false, setup: event.setup, ...(event.terminal ? { terminal: true } : {}) },
         ...(liveTurnId ? { turnId: liveTurnId } : {}),
       });
       // a setup error means the engine could not even start: the bot is
