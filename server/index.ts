@@ -97,9 +97,10 @@ import { onboardingChief } from "./onboarding-chief.ts";
 import { applyOnboardingChatEvent, ONBOARDING_CONNECT_APPS, parseOnboardingChatEvent } from "./onboarding-chat.ts";
 import { parsePreset, presetEngineDriver, presetResumeKey, soulWithPreset, type SetupPreset } from "./onboarding-preset.ts";
 import { initialOnboardingState, ONBOARDING_APPS, type OnboardingChatEvent, type OnboardingChatMessage, type OnboardingChatState } from "../shared/onboarding-chat.ts";
-import { hostedFreeTokenValid, registerHostedFree, verifyFreeModelKey } from "./free-model-setup.ts";
+import { verifyFreeModelKey } from "./free-model-setup.ts";
+import { bosAiCredit, pollBosAiClaim, startBosAi, type BosAiCredit, type BosAiToken } from "./bos-ai.ts";
 import { requestWelcome, welcomeInstallId, welcomeName } from "./welcome-chat.ts";
-import { BOS_FREE_API, BOS_FREE_MODEL, BOS_FREE_NAME } from "./drivers/openrouter-free.ts";
+import { BOS_AI_MODEL, BOS_AI_NAME, BOS_AI_TOPUP, BOS_AI_URL } from "./drivers/openrouter-free.ts";
 import { SharedRoomRepository } from "./shared-room-repository.ts";
 import { SharedBotTasks } from "./shared-bot-tasks.ts";
 import { SharedRequestStore } from "./shared-request-store.ts";
@@ -14726,6 +14727,104 @@ const REMOVED_DRIVER_KINDS: ReadonlySet<string> = new Set([
   "qwenAgent", "hermesAgent", "customAcp", "piAgent", "openai-compat", "antigravityAgent", "boxAgent", "minimax",
 ].filter((kind) => !BUILT_IN_DRIVERS.some((driver) => driver.driverKind === kind)));
 
+// BOS AI: the desktop's free start. bosbot.my hands this install a relay
+// token for the person who downloaded it ($1 free credit per google account,
+// then their bosbot credit); when it can't tell who that is it returns a claim
+// link, and the server polls until the person signs in there.
+type BosAiPhase = "off" | "starting" | "claim" | "ready" | "error";
+let bosAi: { phase: BosAiPhase; claimUrl?: string; error?: string } = { phase: "off" };
+let bosAiClaim: { code: string; until: number; link: boolean } | null = null;
+let bosAiStarting = false;
+const bosAiEntry = () => {
+  const entry = persistableInstanceConfigs(cfg)["bos-free"] as { driver?: unknown; config?: { hosted?: unknown; key?: unknown } } | undefined;
+  return entry?.driver === "openrouter-free" && entry.config?.hosted === true && typeof entry.config.key === "string" ? entry.config.key : null;
+};
+async function bosAiStatus(withCredit: boolean): Promise<{ phase: BosAiPhase; claimUrl?: string; error?: string; credit?: BosAiCredit | null; topup: string; enabled: boolean }> {
+  const enabled = appConfig.current().flags.freeEngine && !HOSTED_WORKSPACE;
+  const key = bosAiEntry();
+  // a saved token is ready before the boot check has looked at it
+  const phase: BosAiPhase = key && (bosAi.phase === "off" || bosAi.phase === "error") ? "ready" : bosAi.phase;
+  let credit: BosAiCredit | null | undefined;
+  if (withCredit && key && phase === "ready") {
+    const read = await bosAiCredit(BOS_AI_URL, key);
+    credit = read === "invalid" ? null : read;
+  }
+  return { phase, ...(bosAi.claimUrl ? { claimUrl: bosAi.claimUrl } : {}), ...(bosAi.error ? { error: bosAi.error } : {}), ...(credit !== undefined ? { credit } : {}), topup: BOS_AI_TOPUP, enabled };
+}
+/** Boot: keep a working BOS AI token, replace a pre-BOS AI one, and give an
+ * install with no ready engine its free start without asking. */
+async function ensureBosAi() {
+  if (!appConfig.current().flags.freeEngine || HOSTED_WORKSPACE) return;
+  const key = bosAiEntry();
+  if (key) {
+    const credit = await bosAiCredit(BOS_AI_URL, key);
+    if (credit !== "invalid") { bosAi = { phase: "ready" }; return; }
+    return void await provisionBosAi({ link: false, manual: false });
+  }
+  if ((await describeInstances()).some(instanceEngineReady)) return;
+  await provisionBosAi({ link: false, manual: false });
+}
+async function provisionBosAi({ link, manual }: { link: boolean; manual: boolean }) {
+  if (bosAiStarting || (bosAiClaim && !link && Date.now() < bosAiClaim.until)) return;
+  bosAiStarting = true;
+  bosAi = { phase: "starting" };
+  try {
+    const started = await startBosAi(await welcomeInstallId(DATA_DIR), { link });
+    if (started.kind === "token") await installBosAi(started);
+    else {
+      bosAi = { phase: "claim", claimUrl: started.url };
+      bosAiClaim = { code: started.code, until: Date.now() + 30 * 60_000, link };
+      void watchBosAiClaim(started.code);
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "BOS AI is unavailable right now.";
+    console.error("[bos-ai] start:", message);
+    // a silent boot attempt leaves the button; a press shows why it failed
+    bosAi = manual ? { phase: "error", error: message } : bosAiEntry() ? { phase: "ready" } : { phase: "off" };
+  } finally { bosAiStarting = false; }
+}
+async function watchBosAiClaim(code: string) {
+  let misses = 0;
+  while (bosAiClaim?.code === code && Date.now() < bosAiClaim.until) {
+    await new Promise(done => setTimeout(done, 3_000).unref());
+    if (bosAiClaim?.code !== code) return;
+    try {
+      const polled = await pollBosAiClaim(code);
+      misses = 0;
+      if (polled.state === "pending") continue;
+      bosAiClaim = null;
+      if (polled.state === "expired") { bosAi = bosAiEntry() ? { phase: "ready" } : { phase: "off", error: "The sign-in link expired. Press Turn on free AI again." }; return; }
+      await installBosAi(polled);
+      return;
+    } catch {
+      // bosbot.my unreachable for a minute: keep the claim, it lives 30 minutes
+      if (++misses > 20) { bosAiClaim = null; bosAi = { phase: "error", error: "Lost touch with bosbot.my. Press Turn on free AI again." }; return; }
+    }
+  }
+  if (bosAiClaim?.code === code) { bosAiClaim = null; bosAi = bosAiEntry() ? { phase: "ready" } : { phase: "off", error: "The sign-in link expired. Press Turn on free AI again." }; }
+}
+async function installBosAi(token: BosAiToken) {
+  const instanceId = "bos-free";
+  // wait out another provider change or a running BOS AI turn; the token stays valid
+  for (let i = 0; providerConfigBusy || busyProviderSelectionsNow().some(selection => selection.instanceId === instanceId); i++) {
+    if (i > 360) throw new Error("BOS AI is ready but settings stayed busy. Press Turn on free AI again.");
+    await new Promise(done => setTimeout(done, 5_000).unref());
+  }
+  providerConfigBusy = true;
+  providerInstancesChanging.add(instanceId);
+  try {
+    const instances = persistableInstanceConfigs(cfg);
+    instances[instanceId] = { driver: "openrouter-free", displayName: BOS_AI_NAME, config: { key: token.token, model: token.model ?? BOS_AI_MODEL, hosted: true } };
+    await persistProviderInstance(instanceId, instances);
+    const firstProbe = await registry.describe();
+    moveUnusableBotsToFree([firstProbe, await registry.describe()], instanceId);
+  } finally { providerInstancesChanging.delete(instanceId); providerConfigBusy = false; }
+  bosAi = { phase: "ready" };
+  broadcast({ kind: "config", ...configStatus() });
+  // records engine_connected, moves onboarding on and answers held messages
+  await describeInstances();
+}
+
 async function describeInstances() {
   const configs = instanceConfigs(cfg);
   const shipped = (await registry.describe()).filter((instance) => !REMOVED_DRIVER_KINDS.has(instance.driverKind));
@@ -14745,8 +14844,7 @@ async function describeInstances() {
   }
   return shipped.map((instance) => {
     const entry = configs[instance.instanceId];
-    // hosted BOS Free set up before it carried an icon still shows the model it runs
-    const icon = entry?.icon ?? (entry?.driver === "openrouter-free" && (entry.config as { hosted?: unknown } | undefined)?.hosted === true ? { kind: "preset" as const, preset: "deepseek" as const } : undefined);
+    const icon = entry?.icon;
     const described = icon ? { ...instance, icon } : instance;
     if (managedDesktop.owns(instance.instanceId)) return {
       ...described, readOnly: true, managed: managedDesktop.info(instance.instanceId),
@@ -23937,15 +24035,12 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       providerConfigBusy=true;
       providerInstancesChanging.add(instanceId);
       try {
-        const hosted=body?.hosted===true;
-        // Reconnect keeps the existing install token; a fresh registration would reset caps.
-        const existing=persistableInstanceConfigs(cfg)[instanceId] as {config?:{hosted?:unknown;key?:unknown}}|undefined;
-        const reuse=hosted&&existing?.config?.hosted===true&&await hostedFreeTokenValid(BOS_FREE_API,existing.config.key);
-        const key=reuse?String(existing!.config!.key):hosted?await registerHostedFree(BOS_FREE_API):await verifyFreeModelKey(body?.key);
+        // BOS AI turns on through /api/bos-ai/start; this path keeps an own OpenRouter key working
+        const key=await verifyFreeModelKey(body?.key);
         if (auth.kind === "session" && !sessions.isLive(auth.session.id)) return json(res,401,{error:"Session ended"});
         if (busyProviderSelections().some(selection=>selection.instanceId===instanceId)) return json(res,409,{error:"Wait for your free-model tasks to finish before reconnecting."});
         const instances=persistableInstanceConfigs(cfg);
-        instances[instanceId]=hosted?{driver:"openrouter-free",displayName:BOS_FREE_NAME,icon:{kind:"preset",preset:"deepseek"},config:{key,model:BOS_FREE_MODEL,hosted:true}}:{driver:"openrouter-free",displayName:"BOS Free · OpenRouter",config:{key,model:"openrouter/free"}};
+        instances[instanceId]={driver:"openrouter-free",displayName:"BOS Free · OpenRouter",config:{key,model:"openrouter/free"}};
         await persistProviderInstance(instanceId,instances);
         // Two probes: one slow sign-in check must not move a working bot.
         const firstProbe=await registry.describe();
@@ -23954,6 +24049,22 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         res.setHeader("cache-control","no-store");
         return json(res,200,{instances:await describeInstances(),moved});
       } finally {providerInstancesChanging.delete(instanceId);providerConfigBusy=false;}
+    }
+
+    if (method === "GET" && path === "/api/bos-ai") {
+      if (!auth.scopes.includes("admin")) return json(res, 403, { error: "Owner only" });
+      res.setHeader("cache-control", "no-store");
+      return json(res, 200, await bosAiStatus(true));
+    }
+    // An explicit owner press: turn BOS AI on, or (link) attach the person's bosbot credit through a claim.
+    if (method === "POST" && path === "/api/bos-ai/start") {
+      if (!auth.scopes.includes("admin")) return json(res, 403, { error: "Owner only" });
+      if (!String(req.headers["content-type"] ?? "").toLowerCase().startsWith("application/json")) return json(res, 415, { error: "content-type must be application/json" });
+      const body = await readBody(req, 1024);
+      if (!appConfig.current().flags.freeEngine || HOSTED_WORKSPACE) return json(res, 503, { error: "BOS AI is unavailable right now. Sign in with Claude or ChatGPT to continue." });
+      await provisionBosAi({ link: body?.link === true, manual: true });
+      res.setHeader("cache-control", "no-store");
+      return json(res, 200, await bosAiStatus(false));
     }
 
     // "Say hi to firaz" at the end of first run: an explicit owner action
@@ -25913,6 +26024,8 @@ server.listen(PORT, "127.0.0.1", () => {
   productConnectionTimer.unref();
   anonymousUsagePing.start();
   companyRuntimeReady();
+  // after the fleet's first probe, so a ready Claude or ChatGPT is seen first
+  setTimeout(() => void ensureBosAi().catch(error => console.error("[bos-ai] boot:", error instanceof Error ? error.message : error)), 3_000).unref();
   console.log(`bosbot server on http://127.0.0.1:${PORT}`);
   followupsReady = true;
   drainQueuedSends();

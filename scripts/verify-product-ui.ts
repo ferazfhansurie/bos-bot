@@ -85,7 +85,7 @@ try {
       await new Promise(resolve => setTimeout(resolve, 200));
     }
   };
-  await wait('document.body.innerText.includes("BOS Free") && !!document.querySelector("input[aria-label=\\"Your BOS invitation link\\"]")');
+  await wait('document.body.innerText.includes("BOS AI") && !!document.querySelector("input[aria-label=\\"Your BOS invitation link\\"]")');
   assert.equal(records.length, 0, "render must never submit feedback, activation or a relay request");
   assert.equal(await evaluate('document.querySelector("aside[aria-label=\\"BOS announcement\\"] a").textContent'), "Synthetic product announcement");
   await click("View plans");
@@ -132,7 +132,7 @@ try {
   await ui("screenshot", "--out", join(screenshots, "mobile.png"));
   Object.assign(config.flags, { plans: false, invite: false, activationTelemetry: false, freeEngine: false, feedback: false });
   await evaluate("location.reload()");
-  await wait('document.body.innerText.includes("Open support") && !document.body.innerText.includes("View plans") && !document.body.innerText.includes("BOS Free")');
+  await wait('document.body.innerText.includes("Open support") && !document.body.innerText.includes("View plans") && !document.body.innerText.includes("BOS AI")');
   await click("Open support");
   assert.equal(await evaluate('document.body.innerText.includes("Tell Firaz")'), false);
   await click("Close");

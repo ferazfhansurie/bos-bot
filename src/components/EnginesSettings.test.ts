@@ -238,17 +238,17 @@ describe('Settings free cloud connection',()=>{
  it('offers setup before any free instance exists',()=>{
   vi.stubGlobal('window',{});fixture.instances=[];fixture.bots=[];
   const html=renderToStaticMarkup(createElement(EnginesSettings));
-  expect(html).toContain('Start free');expect(html).toContain('Use my own OpenRouter key');
-  expect(html.match(/aria-label="Free models"/g)).toHaveLength(1);
+  expect(html).toContain('Turn on free AI');expect(html).not.toContain('OpenRouter key');
+  expect(html.match(/aria-label="BOS AI"/g)).toHaveLength(1);
  });
  it.each(['available','unavailable'] as const)('uses one dedicated form without CLI controls when free runtime is %s',state=>{
   vi.stubGlobal('window',{});fixture.bots=[];
   fixture.instances=[{instanceId:'bos-free',driverKind:'openrouter-free',displayName:'BOS Free',access:'custom',snapshot:{state},models:{default:'openrouter/free',options:[]}}];
   const html=renderToStaticMarkup(createElement(EnginesSettings));
   expect(html).toContain('data-engine-card="bos-free"');
-  expect(html).toContain(state==='available'?'Reconnect BOS Free':'Start free');
-  expect(html.match(/aria-label="Free models"/g)).toHaveLength(1);
-  expect(html).toContain('OpenRouter · Free cloud models');
+  expect(html).toContain('BOS AI is managed in the card above');
+  expect(html.match(/aria-label="BOS AI"/g)).toHaveLength(1);
+  expect(html).toContain('Free credit to start');
   expect(html).not.toContain('Set CLI');expect(html).not.toContain('CLI path and updates');
  });
 });

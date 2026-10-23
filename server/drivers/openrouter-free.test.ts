@@ -35,25 +35,36 @@ describe('OpenRouter free driver',()=>{
   const key='synthetic-secret';const fetch=vi.fn(async(url:unknown)=>String(url).endsWith('/models')?response({data:[row]}):response({error:key},429));vi.stubGlobal('fetch',fetch);
   const inst=await create(key);await expect(inst.generateText!('synthetic')).rejects.toThrow('HTTP 429');expect(fetch.mock.calls.length).toBe(3);await inst.dispose();
  });
- it('hosted mode uses the BOS relay with the install token only',async()=>{
-  const fetch=vi.fn(async(url:unknown)=>String(url).endsWith('/models')?response({data:[row]}):response({choices:[{message:{content:'ok'}}]}));vi.stubGlobal('fetch',fetch);
-  expect(OpenRouterFreeDriver.decodeConfig({key:'bosf_x',hosted:true})).toEqual({model:'openrouter/free',hosted:true,key:'bosf_x'});
+ const trial={models:[],default:'gpt-6-luna',left:0.9,cap:1,data:[{id:'gpt-6-luna',label:'GPT-6 Luna · ~450 free messages left'},{id:'claude-opus-5.5',label:'Claude Opus 5.5 · ~11 free messages left'}]};
+ const hosted=(model?:string)=>OpenRouterFreeDriver.create({instanceId:'fixture-free',displayName:'BOS AI',enabled:true,config:{key:'bosf_fixture',hosted:true,...(model?{model}:{})},environment:{OPENROUTER_API_KEY:'must-not-use'}});
+ it('BOS AI uses the metered trial relay with the install token only',async()=>{
+  const fetch=vi.fn(async(url:unknown)=>String(url).endsWith('/models')?response(trial):response({choices:[{message:{content:'ok'}}]}));vi.stubGlobal('fetch',fetch);
+  expect(OpenRouterFreeDriver.decodeConfig({key:'bosf_x',hosted:true})).toEqual({model:'gpt-6-luna',hosted:true,key:'bosf_x'});
   expect(()=>OpenRouterFreeDriver.decodeConfig({hosted:'yes'})).toThrow();
-  const inst=await OpenRouterFreeDriver.create({instanceId:'fixture-free',displayName:'Free fixture',enabled:true,config:{key:'bosf_fixture',model:'openrouter/free',hosted:true},environment:{OPENROUTER_API_KEY:'must-not-use'}});
+  const inst=await hosted('gpt-6-luna');
+  expect(inst.models.options.map(x=>x.id)).toEqual(['gpt-6-luna','claude-opus-5.5']);
+  expect(inst.models.options[1]!.label).toBe('Claude Opus 5.5 · ~11 free messages left');
   expect(await inst.generateText!('synthetic')).toBe('ok');
   const calls=fetch.mock.calls as unknown as Array<[string,RequestInit]>;
-  expect(calls.every(([url])=>url.startsWith('https://bos-free.aihlete.com/api/v1/'))).toBe(true);
+  expect(calls.every(([url])=>url.startsWith('https://bos-free.aihlete.com/api/v1/trial/'))).toBe(true);
   const models=calls.find(x=>x[0].endsWith('/models'))!;expect((models[1].headers as Record<string,string>).Authorization).toBe('Bearer bosf_fixture');
+  const body=JSON.parse(String(calls.find(x=>x[0].endsWith('/chat/completions'))![1].body));
+  expect(body).toMatchObject({model:'gpt-6-luna',max_tokens:8192});expect(body.provider).toBeUndefined();
   expect(JSON.stringify(calls)).not.toContain('must-not-use');await inst.dispose();
  });
- it('hosted installs pinned to an old free id move to the relay\'s one model',async()=>{
-  const luna={id:'bos-free/deepseek-v4-flash:free',name:'DeepSeek V4 Flash',pricing:{prompt:'0',completion:'0',request:'0'},supported_parameters:['tools']};
-  const fetch=vi.fn(async(url:unknown)=>String(url).endsWith('/models')?response({data:[luna]}):response({error:{message:'busy'}},429));vi.stubGlobal('fetch',fetch);
-  const inst=await OpenRouterFreeDriver.create({instanceId:'fixture-free',displayName:'Free fixture',enabled:true,config:{key:'bosf_fixture',model:'qwen/qwen3.8-27b:free',hosted:true},environment:{}});
-  expect(await inst.snapshot()).toMatchObject({state:'available'});
-  expect(inst.models.default).toBe(luna.id);
-  await expect(inst.generateText!('synthetic')).rejects.toThrow('BOS Free is busy');
-  expect(fetch.mock.calls.some(x=>String(x[0]).endsWith('/chat/completions'))).toBe(true);
-  await inst.dispose();
+ it('installs from the deepseek relay move to the BOS AI default',async()=>{
+  vi.stubGlobal('fetch',vi.fn(async()=>response(trial)));
+  const inst=await hosted('bos-free/deepseek-v4-flash:free');
+  expect(await inst.snapshot()).toMatchObject({state:'available'});expect(inst.models.default).toBe('gpt-6-luna');await inst.dispose();
+ });
+ it('turns relay credit codes into a top-up link or connect-your-own, never the raw body',async()=>{
+  for(const [status,code,text] of [[402,'no_credit','free AI credit is used up'],[402,'month_full','at capacity this month'],[402,'too_big','too big for the free credit'],[402,'on_hold','on hold'],[429,'busy','already answering'],[401,'','turning on again']] as const){
+   vi.stubGlobal('fetch',vi.fn(async(url:unknown)=>String(url).endsWith('/models')?response(trial):response({error:{code,message:'synthetic-relay-body'}},status)));
+   const inst=await hosted();const failure=inst.generateText!('synthetic');
+   await expect(failure).rejects.toThrow(text);await expect(failure).rejects.not.toThrow('synthetic-relay-body');
+   if(status===402&&code!=='on_hold'&&code!=='too_big')await expect(failure).rejects.toThrow('https://app.bosbot.my/__bos/offer');
+   if(code==='no_credit')await expect(failure).rejects.toThrow('connect your own Claude or ChatGPT');
+   await inst.dispose();
+  }
  });
 });

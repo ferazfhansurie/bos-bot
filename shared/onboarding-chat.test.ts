@@ -17,10 +17,10 @@ describe("onboarding chat", () => {
       expect(onboardingScript(step, { ...ctx, starterJobs: [] })[0].card).toEqual({ kind: "suggestions", items: [] });
     }
   });
-  it("offers BOS Free alongside existing subscriptions only when enabled", () => {
+  it("offers BOS AI alongside existing subscriptions only when enabled", () => {
     const ctx = { personName: "", botName: "BOS", engineReady: false, connected: [] as const };
-    expect(onboardingScript("engine", ctx)[0].text).toContain("BOS Free");
-    expect(onboardingScript("engine", { ...ctx, freeEngine: false })[0].text).not.toContain("BOS Free");
+    expect(onboardingScript("engine", ctx)[0].text).toContain("BOS AI");
+    expect(onboardingScript("engine", { ...ctx, freeEngine: false })[0].text).not.toContain("BOS AI");
   });
   it("greets, asks for a sign-in, and finishes once an engine is ready", () => {
     let s = initialOnboardingState("b", "t", "BOS", false);

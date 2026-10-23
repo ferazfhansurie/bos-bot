@@ -41,9 +41,15 @@ globalThis.fetch=async(url,init={})=>{
   if(auth==='Bearer slow-fixture'||auth==='Bearer revoked-fixture'){writeFileSync(root+'/auth-waiting','yes');while(!existsSync(root+'/auth-release'))await new Promise(r=>setTimeout(r,10));}
   return auth==='Bearer bad-fixture'?json({error:'synthetic-private-response'},401):json({data:{limit_remaining:0}});
  }
- if(path==='https://relay.fixture.invalid/api/v1/register'){writeFileSync(root+'/registrations',String(Number(existsSync(root+'/registrations')?readFileSync(root+'/registrations','utf8'):0)+1));return json({token:'bosf_'+'r'.repeat(40)});}
- if(path==='https://relay.fixture.invalid/api/v1/usage')return json({install:20},init.headers?.Authorization==='Bearer bosf_'+'r'.repeat(40)?200:401);
- if(path==='https://relay.fixture.invalid/api/v1/models')return init.headers?.Authorization==='Bearer bosf_'+'r'.repeat(40)?json({data:[{id:'openrouter/free',pricing:{prompt:'0',completion:'0'},supported_parameters:['tools']}]}):json({error:'unauthorized'},401);
+ const relayToken=a=>a==='Bearer bosf_'+'r'.repeat(40)||a==='Bearer bosf_'+'s'.repeat(40);
+ if(path==='https://site.fixture.invalid/api/desktop-trial'){
+  writeFileSync(root+'/registrations',String(Number(existsSync(root+'/registrations')?readFileSync(root+'/registrations','utf8'):0)+1));
+  const body=JSON.parse(init.body);if(!/^[0-9a-f-]{36}$/.test(body.install))return json({error:'install'},400);
+  return body.link?json({claim:'https://site.fixture.invalid/desktop/claim?c=fixtureclaimcode123456',code:'fixtureclaimcode123456'}):json({token:'bosf_'+'r'.repeat(40),left:1,cap:1,model:'gpt-6-luna'});
+ }
+ if(path==='https://site.fixture.invalid/api/desktop-trial/claim?c=fixtureclaimcode123456')return existsSync(root+'/claim-done')?json({token:'bosf_'+'s'.repeat(40),left:1,cap:1,model:'gpt-6-luna'}):json({pending:true});
+ if(path==='https://relay.fixture.invalid/api/v1/trial/usage')return relayToken(init.headers?.Authorization)?json({usd:0.1,calls:3,cap:1,left:0.9,monthFull:false}):json({error:'trial token required'},403);
+ if(path==='https://relay.fixture.invalid/api/v1/trial/models')return relayToken(init.headers?.Authorization)?json({models:[],default:'gpt-6-luna',left:0.9,cap:1,data:[{id:'gpt-6-luna',label:'GPT-6 Luna · ~450 free messages left'},{id:'claude-opus-5.5',label:'Claude Opus 5.5 · ~11 free messages left'}]}):json({error:'unauthorized'},401);
  if(path==='https://openrouter.ai/api/v1/models')return json({data:[{id:'openrouter/free',pricing:{prompt:existsSync(root+'/catalog-bad')?'1':'0',completion:'0'},supported_parameters:['tools']}]});
  if(path==='https://openrouter.ai/api/v1/chat/completions'){
   writeFileSync(root+'/free-turn-active','yes');
@@ -52,7 +58,7 @@ globalThis.fetch=async(url,init={})=>{
  return json({error:'offline fixture'},503);
 };`);
  const port=await freePortBlock([0,1]);base=`http://127.0.0.1:${port}`;
- child=spawn(process.execPath,['--import',pathToFileURL(prelude).href,join(serverDir,'index.ts')],{cwd:join(serverDir,'..'),env:{PATH:compatEnv.PATH,...(compatEnv.PATHEXT?{PATHEXT:compatEnv.PATHEXT}:{}),...(compatEnv.SystemRoot?{SystemRoot:compatEnv.SystemRoot}:{}),HOME:home,USERPROFILE:home,OMB_DATA_DIR:dataDir,OMB_PORT:String(port),OMB_WEBHOOK_PORT:String(port+1),BOS_FREE_URL:'https://relay.fixture.invalid/api/v1'},stdio:['ignore','pipe','pipe']});
+ child=spawn(process.execPath,['--import',pathToFileURL(prelude).href,join(serverDir,'index.ts')],{cwd:join(serverDir,'..'),env:{PATH:compatEnv.PATH,...(compatEnv.PATHEXT?{PATHEXT:compatEnv.PATHEXT}:{}),...(compatEnv.SystemRoot?{SystemRoot:compatEnv.SystemRoot}:{}),HOME:home,USERPROFILE:home,OMB_DATA_DIR:dataDir,OMB_PORT:String(port),OMB_WEBHOOK_PORT:String(port+1),BOS_FREE_URL:'https://relay.fixture.invalid/api/v1',BOS_SITE_URL:'https://site.fixture.invalid'},stdio:['ignore','pipe','pipe']});
  child.stdout?.resume();child.stderr?.on('data',chunk=>{stderr=(stderr+chunk).slice(-16384);});
  const deadline=Date.now()+20000;
  for(;;){if(child.exitCode!==null)throw Error(stderr);try{if((await api('GET','/api/health')).body.pid===child.pid)break;}catch{}if(Date.now()>deadline)throw Error('fixture start timeout: '+stderr);await new Promise(resolve=>setTimeout(resolve,100));}
@@ -122,28 +128,34 @@ it('preserves a running sibling task and refuses replacement of an active free t
   expect((await api('POST',endpoint,{key:'replacement-fixture'})).status).toBe(409);expect(saved().instances['bos-free'].config.key).toBe(key);
  }finally{if(freeBot)await api('POST',`/api/bots/${freeBot.id}/interrupt`,{});await api('POST',`/api/bots/${bot.id}/interrupt`,{});}
 },20000);
-it('hosted start-free registers an install token without any user key',async()=>{
- expect((await api('POST',endpoint,{hosted:true},{authorization:`Bearer ${clientToken}`})).status).toBe(403);
- let result=await api('POST',endpoint,{hosted:true});
- for(let i=0;result.status===409&&i<50;i++){await new Promise(r=>setTimeout(r,100));result=await api('POST',endpoint,{hosted:true});}
- expect(result.status,JSON.stringify(result.body)).toBe(200);
- expect(freeInstance(result.body)).toMatchObject({driverKind:'openrouter-free',snapshot:{state:'available'}});
- expect(saved().instances['bos-free']).toMatchObject({displayName:'BOS Free · DeepSeek V4 Flash',icon:{kind:'preset',preset:'deepseek'},config:{model:'bos-free/deepseek-v4-flash:free',hosted:true}});
+it('BOS AI turns on with no key and no sign-in, and never shows its token',async()=>{
+ expect((await api('POST','/api/bos-ai/start',{},{authorization:`Bearer ${clientToken}`})).status).toBe(403);
+ const result=await api('POST','/api/bos-ai/start',{});
+ expect(result.status,JSON.stringify(result.body)).toBe(200);expect(result.body.phase).toBe('ready');
+ expect(saved().instances['bos-free']).toEqual({driver:'openrouter-free',displayName:'BOS AI',config:{key:'bosf_'+'r'.repeat(40),model:'gpt-6-luna',hosted:true}});
+ const status=await api('GET','/api/bos-ai');expect(status.body).toMatchObject({phase:'ready',credit:{left:0.9,cap:1},topup:'https://app.bosbot.my/__bos/offer'});
+ const instance=freeInstance((await api('GET','/api/instances')).body);
+ expect(instance).toMatchObject({driverKind:'openrouter-free',displayName:'BOS AI',snapshot:{state:'available'},models:{default:'gpt-6-luna'}});
+ expect(instance.models.options.map((x:any)=>x.label)).toContain('Claude Opus 5.5 · ~11 free messages left');
  const token='bosf_'+'r'.repeat(40);
- for(const path of ['/api/instances','/api/config'])expect(JSON.stringify((await api('GET',path)).body)).not.toContain(token);
+ for(const path of ['/api/instances','/api/config','/api/bos-ai'])expect(JSON.stringify((await api('GET',path)).body)).not.toContain(token);
  expect(JSON.stringify(result.body)).not.toContain(token);
- expect((await api('POST',endpoint,{hosted:true})).status).toBe(200);
- expect(readFileSync(join(home,'registrations'),'utf8')).toBe('1');
 });
-it('start free moves idle bots off engines that cannot run, keeps working ones',async()=>{
+it('using bosbot credit goes through a claim the person confirms, then swaps the token',async()=>{
+ const started=await api('POST','/api/bos-ai/start',{link:true});
+ expect(started.body).toMatchObject({phase:'claim',claimUrl:'https://site.fixture.invalid/desktop/claim?c=fixtureclaimcode123456'});
+ writeFileSync(join(home,'claim-done'),'yes');
+ await expect.poll(async()=>(await api('GET','/api/bos-ai')).body.phase,{timeout:12000,interval:250}).toBe('ready');
+ expect(saved().instances['bos-free'].config.key).toBe('bosf_'+'s'.repeat(40));
+},20000);
+it('BOS AI moves idle bots off engines that cannot run, keeps working ones',async()=>{
  const stuck=await api('POST','/api/bots',{name:'Fixture stuck',modelSelection:{instanceId:'codex',model:'gpt-fixture'}});
  expect(stuck.status,JSON.stringify(stuck.body)).toBe(201);
  const working=await api('POST','/api/bots',{name:'Fixture working',modelSelection:{instanceId:'claude',model:'claude-sonnet-5'}});
  expect(working.status,JSON.stringify(working.body)).toBe(201);
- const result=await api('POST',endpoint,{hosted:true});
- expect(result.status,JSON.stringify(result.body)).toBe(200);expect(result.body.moved).toBeGreaterThanOrEqual(1);
+ expect((await api('POST','/api/bos-ai/start',{})).status).toBe(200);
  const bots=(await api('GET','/api/bots')).body.bots;
- expect(bots.find((x:any)=>x.id===stuck.body.bot.id).modelSelection).toMatchObject({instanceId:'bos-free',model:'openrouter/free'});
+ expect(bots.find((x:any)=>x.id===stuck.body.bot.id).modelSelection).toMatchObject({instanceId:'bos-free',model:'gpt-6-luna'});
  expect(bots.find((x:any)=>x.id===working.body.bot.id).modelSelection.instanceId).toBe('claude');
 });
 // branding compatibility (electron/branding-compat.json): environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

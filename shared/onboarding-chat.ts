@@ -112,7 +112,7 @@ export function onboardingScript(step: OnboardingChatStep, ctx: OnboardingScript
     case "engine":
       return ctx.engineReady ? [] : [{ step, text: ctx.freeEngine === false
         ? "Connect the Claude or ChatGPT account you already have to get started. Your login stays on your BOS."
-        : "Start with BOS Free, or connect the Claude or ChatGPT account you already have. Choose an engine below to get started. Your login stays on your BOS.", card: { kind: "engine" } }];
+        : "Turn on BOS AI below to start free, no sign-in needed. Already pay for Claude or ChatGPT? Connect it instead. Your login stays on your BOS.", card: { kind: "engine" } }];
     case "apps":
       if (ctx.appsAvailable === false) {
         return [{ step, text: "I'm ready. Pick a job above or tell me what you need, and I'll get started." }];

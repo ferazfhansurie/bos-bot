@@ -14,7 +14,7 @@ import { cn } from "@/lib/cn";
 import { t } from "@/lib/i18n";
 import { EngineSetup, EngineUpdateNotice, EngineWarningNotice } from "./EngineSetup";
 import { AddClaudeAccount, ClaudeAccountSettings } from "./ClaudeAccountSettings";
-import { FreeModelSetup } from "./onboarding/FreeModelSetup";
+import { BosAiCard } from "./onboarding/BosAiCard";
 import { isFreeCloud } from "@/lib/engine-rail";
 import { CodexAccountSettings } from "./CodexAccountSettings";
 import { AddModelCard, RemoveApiConnection, isApiConnection } from "./AddModelCard";
@@ -284,7 +284,7 @@ function EngineRow({ instance }: { instance: InstanceInfo }) {
   </EngineCard>;
 
   if (isFreeCloud(instance)) return <EngineCard instance={instance}>
-    <p className="text-[13px] leading-relaxed text-ink-secondary">Use the free models connection above to connect or reconnect OpenRouter. Free models run in the cloud and have provider usage limits.</p>
+    <p className="text-[13px] leading-relaxed text-ink-secondary">BOS AI is managed in the card above: credit left, top-ups and linking your bosbot credit. Every model in the picker spends that credit, cheaper ones go further.</p>
   </EngineCard>;
 
   return (
@@ -402,7 +402,7 @@ export function EnginesSettings() {
         </div>
         <RefreshEngines />
       </div>
-      <FreeModelSetup />
+      <BosAiCard className="mt-0" />
       <EngineSections instances={rows} renderEngine={(instance) => <EngineRow instance={instance} />} />
       <section aria-labelledby="add-engine-title" className="flex min-w-0 flex-col gap-3 border-t border-hairline/40 pt-5">
         <div>

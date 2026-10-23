@@ -23,7 +23,7 @@ function EngineCard() {
     return (
       <div className="flex items-center gap-2 text-[13px] text-success">
         <Check size={14} strokeWidth={2.5} />
-        <span>Signed in with {name}</span>
+        <span>{ready.driverKind === "openrouter-free" ? `Using ${name}, free to start. Change the model any time.` : `Signed in with ${name}`}</span>
       </div>
     );
   }
@@ -49,7 +49,7 @@ function Suggestions({ bot, message }: { bot: Bot; message: Message }) {
           key={item.id}
           type="button"
           disabled={waiting}
-          title={waiting ? "Sign in with Claude or ChatGPT first" : undefined}
+          title={waiting ? "Turn on BOS AI or connect Claude or ChatGPT first" : undefined}
           onClick={() => dispatch({ type: "send", botId: bot.id, threadId: bot.threadId, text: item.prompt, sendId: `onb_${item.id}_${crypto.randomUUID()}` })}
           className="rounded-full border border-hairline px-3.5 py-1.5 text-left text-[13.5px] text-ink transition-[background-color,transform] hover:bg-raised active:scale-[0.97] disabled:pointer-events-none disabled:opacity-50"
         >

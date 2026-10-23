@@ -13,7 +13,7 @@ import { filterCustomModels, partitionCustomModels, suggestedModels } from "@/li
 import { isCustomOnly, isFreeCloud, splitEngineRail } from "@/lib/engine-rail";
 import { InstanceProviderMark } from "./ProviderIcons";
 import { EngineSetup, EngineUpdateNotice, needsCli, needsSignIn } from "./EngineSetup";
-import { FreeModelSetup } from "./onboarding/FreeModelSetup";
+import { BosAiCard } from "./onboarding/BosAiCard";
 import { EngineGroupLabel } from "./EngineGroupLabel";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { approvalCarriesAcrossModelSwitch, approvalModeFor } from "../../shared/approval-mode";
@@ -509,7 +509,7 @@ export function ModelPicker({
   const renderRow = (option: ModelOption) => (
     <ModelRow
       key={option.id}
-      option={freeCloud ? { ...option, provider: "OpenRouter · Free" } : option}
+      option={freeCloud ? { ...option, provider: railInstance?.displayName ?? "BOS AI" } : option}
       current={selection.instanceId === railInstance?.instanceId && selection.model === option.id}
       defaultId={railInstance?.models.default ?? ""}
       onPick={() => railInstance && pick(railInstance, option.id)}
@@ -673,7 +673,7 @@ export function ModelPicker({
                     </p>
                   )}
                   <div className="mt-0.5 text-[11.5px] text-ink-secondary">
-                    {freeCloud ? "Free cloud models via OpenRouter. Provider usage limits apply." : pane === "custom" ? t("model.localHint") : t(threadId && scope === "thread" ? "model.chooseThreadHint" : "model.chooseHint")}
+                    {freeCloud ? "Every model spends your free credit, then your bosbot credit. Cheaper models go further." : pane === "custom" ? t("model.localHint") : t(threadId && scope === "thread" ? "model.chooseThreadHint" : "model.chooseHint")}
                   </div>
                 </div>
 
@@ -692,7 +692,7 @@ export function ModelPicker({
 
                 {blocked ? (
                   <div className="min-h-0 flex-1 overflow-y-auto px-3 pb-3 pt-1">
-                    {bot.remote ? <p className="text-xs text-ink-secondary">Sign in or set up this engine on {bot.remote.homeName}. Accounts on this Mac are separate.</p> : freeCloud ? <FreeModelSetup /> : <EngineSetup instance={railInstance} intent={pane === "custom" ? "inject" : "cloud"} />}
+                    {bot.remote ? <p className="text-xs text-ink-secondary">Sign in or set up this engine on {bot.remote.homeName}. Accounts on this Mac are separate.</p> : freeCloud ? <BosAiCard compact /> : <EngineSetup instance={railInstance} intent={pane === "custom" ? "inject" : "cloud"} />}
                     {railInstance.claudeAccount && needsSignIn(railInstance) && pane !== "custom" && (
                       <p className="mt-2 text-[11.5px] leading-relaxed text-ink-secondary">
                         {railInstance.claudeAccount.signInShell === "powershell" && `${t("engines.account.powershell")} `}
@@ -810,7 +810,7 @@ export function ModelPicker({
                   />
                 )}
 
-                {!bot.remote && freeCloud && !blocked && <div className="max-h-48 shrink-0 overflow-y-auto px-3 pb-3"><FreeModelSetup compact /></div>}
+                {!bot.remote && freeCloud && !blocked && <div className="max-h-48 shrink-0 overflow-y-auto px-3 pb-3"><BosAiCard compact /></div>}
                 {pane === "main" && !freeCloud && (
                   <button
                     type="button"

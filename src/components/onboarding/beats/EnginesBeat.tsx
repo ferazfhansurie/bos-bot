@@ -4,11 +4,11 @@
 // they are right for this platform. A summary line says the whole story in
 // a glance and offers Check again, because the user often installs from a
 // terminal and comes back. The guide reacts to the result.
-// Most people already pay for Claude or ChatGPT, so those two sign-ins lead;
-// BOS Free is visible beside the sign-ins when no engine is ready.
+// BOS AI leads: every install starts free on it, with no sign-in. Claude and
+// ChatGPT sit under it for people who already pay for one.
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Check, ChevronDown, RefreshCw } from "lucide-react";
-import { FreeModelSetup } from "../FreeModelSetup";
+import { BosAiCard } from "../BosAiCard";
 import { EngineSetup } from "@/components/EngineSetup";
 import { engineReady } from "@/components/EngineLibrary";
 import { InstanceProviderMark } from "@/components/ProviderIcons";
@@ -224,8 +224,10 @@ export function EnginesBeat({ onNext, setMascot, bump, inline }: Omit<BeatProps,
   return (
     <div className="flex min-h-0 flex-col">
       <p className="animate-rise mt-1 text-[13.5px] text-ink-secondary">
-        {config.flags.freeEngine && ready.length === 0 ? "Choose BOS Free, or connect the Claude or ChatGPT account you already use." : t("onboarding.engines.loginIntro")}
+        {config.flags.freeEngine ? "BOS AI gets you started free. Already pay for Claude or ChatGPT? Connect it below." : t("onboarding.engines.loginIntro")}
       </p>
+
+      {config.flags.freeEngine && !waking && <BosAiCard className="mt-3" />}
 
       <div
         className="animate-rise mt-4 divide-y divide-hairline/40 rounded-xl border border-hairline/40 bg-card"
@@ -249,8 +251,6 @@ export function EnginesBeat({ onNext, setMascot, bump, inline }: Omit<BeatProps,
         )}
       </div>
 
-      {instances !== null && ready.length === 0 && !waking && config.flags.freeEngine && <FreeModelSetup />}
-
       <button
         type="button"
         onClick={() => setMore(!more)}
@@ -270,8 +270,6 @@ export function EnginesBeat({ onNext, setMascot, bump, inline }: Omit<BeatProps,
 
       {more && (
         <>
-          {ready.length > 0 && config.flags.freeEngine && <FreeModelSetup />}
-
           {/* the whole story in one line, and the way back after a terminal trip */}
           <div className="animate-rise mt-4 flex items-center justify-between gap-3">
             <div
