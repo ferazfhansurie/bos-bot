@@ -739,21 +739,27 @@ function processAlive(pid) {
 /** Expose attest() to server/local-computer.ts in this process. Installed once;
  * later code cannot replace it. */
 function trustedHost(sdk, binaryPath) {
-  if (typeof sdk?.EmbeddedCuaDriverHost?.withOptions !== "function" || typeof sdk?.EmbeddedDriverHostOptions?.create !== "function" ||
-      sdk?.EmbeddedPermissionMode?.Unrestricted === undefined) {
+  // The staged Windows bundle (scripts/prepare-cua-win.mjs) exports only the
+  // host class, not the options factory or the enum, so build the record here.
+  if (typeof sdk?.EmbeddedCuaDriverHost?.withOptions !== "function") {
     throw unavailable("sdk-load-failed", "Computer use SDK cannot start a trusted-browser daemon");
   }
-  return sdk.EmbeddedCuaDriverHost.withOptions(sdk.EmbeddedDriverHostOptions.create({
+  return sdk.EmbeddedCuaDriverHost.withOptions({
     binaryPath,
     hostBundleId: HOST_BUNDLE_ID,
-    permissionMode: sdk.EmbeddedPermissionMode.Unrestricted,
-    dangerouslyBypassApprovals: true,
+    socketPath: undefined,
+    startupTimeoutMs: undefined,
+    shutdownTimeoutMs: undefined,
+    permissionMode: sdk.EmbeddedPermissionMode?.Unrestricted ?? 2,
+    capabilityManifestPath: undefined,
     approveCapabilityManifest: false,
+    sessionPolicyPath: undefined,
     approveSessionPolicy: false,
+    dangerouslyBypassApprovals: true,
     environment: [],
     inheritStderr: false,
     noOverlay: false,
-  }));
+  });
 }
 
 export function installWindowsCuaAttestation(host, target = globalThis) {

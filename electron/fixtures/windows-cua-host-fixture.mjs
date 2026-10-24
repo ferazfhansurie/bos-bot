@@ -142,9 +142,8 @@ export function createFixture({ contractVersion } = {}) {
       return host;
     }
   }
-  const EmbeddedPermissionMode = { Standard: 0, Bounded: 1, Unrestricted: 2 };
-  const EmbeddedDriverHostOptions = { create: (options) => ({ ...options }) };
-  const sdk = { EmbeddedCuaDriverHost, EmbeddedDriverHostOptions, EmbeddedPermissionMode };
+  // Mirrors the staged Windows bundle, which exports only the host class.
+  const sdk = { EmbeddedCuaDriverHost };
   const loads = [];
   const loadSdk = async (staged) => {
     loads.push(staged);
