@@ -35,7 +35,8 @@ void app.whenReady().then(async () => {
  try{
   const chat1=await current();const dir1=await folder(chat1);
   fs.mkdirSync(path.join(dir1,'bos-pages'),{recursive:true});
-  fs.writeFileSync(path.join(dir1,'bos-pages/2026-10-25-sales-dashboard-a1b2.html'),page('Sales dashboard','sales from chat one'));
+  // tall, so the scroll check below has somewhere to go
+  fs.writeFileSync(path.join(dir1,'bos-pages/2026-10-25-sales-dashboard-a1b2.html'),page('Sales dashboard','sales from chat one').replace('</body>','<div style="height:5000px"></div></body>'));
   fs.writeFileSync(path.join(dir1,'bos-pages/2026-10-25-team-deck-c3d4.html'),page('Team deck','deck from chat one'));
   await win.loadURL(uiURL);
   await until(()=>evaluate('Boolean(document.querySelector("[aria-label=\\"New tab\\"]"))'),'header');
@@ -49,6 +50,14 @@ void app.whenReady().then(async () => {
   await until(()=>evaluate(`Boolean(${card})`),'library lists the dashboard');
   await evaluate(`${card}.click()`,true);
   await until(async()=>(await frameText())==='sales from chat one','dashboard renders');
+  // 1b. the app re-rendering around the tab (bot updates, polls) must not reload the page: no white flash, no jump to the top
+  const inFrame=code=>win.webContents.mainFrame.framesInSubtree.find(f=>f!==win.webContents.mainFrame&&f.url==='about:srcdoc')?.executeJavaScript(code);
+  await inFrame('scrollTo(0,1500);window.__same=1;0');
+  for(let i=0;i<4;i++){await call('PATCH',`/api/bots/${botId}`,{description:'scroll check '+i});await new Promise(r=>setTimeout(r,600));}
+  await evaluate(`window.fixtureDispatch({type:'select',id:${JSON.stringify(botId)}})`);
+  await new Promise(r=>setTimeout(r,9000));
+  result.scrollKept=await inFrame('[Math.round(scrollY),window.__same===1]');
+  assert.deepEqual(result.scrollKept,[1500,true],'page kept its scroll and was not reloaded');
   await until(()=>evaluate(`${visible('[data-testid=canvas-pin]')}.length===1`),'pin button');
   await evaluate(`${visible('[data-testid=canvas-pin]')}[0].click()`,true);
   await until(()=>evaluate(`${visible('[data-testid=canvas-pin]')}[0].getAttribute('aria-pressed')==='true'`),'pin toggles on');

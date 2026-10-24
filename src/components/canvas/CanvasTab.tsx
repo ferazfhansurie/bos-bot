@@ -97,7 +97,9 @@ const STARTER_ICON: Record<string, typeof FileText> = { presentation: Presentati
 
 function CanvasView({ path, title, target: here, from, active, setTab }: { path: string; title?: string; target: TerminalTarget; from?: string; active: boolean; setTab: Props["setTab"] }) {
   // a page pinned from another chat lives in that chat's folder
-  const target = useMemo(() => from ? { ...here, threadId: from } : here, [here, from]);
+  // keyed on ids, not identity: a new target object must not reload the page
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const target = useMemo(() => from ? { ...here, threadId: from } : here, [here.botId, here.threadId, from]);
   const busy = useThreadBusy(target);
   const page = { botId: target.botId, threadId: target.threadId, path };
   const pins = usePins(target.botId);
@@ -123,6 +125,9 @@ function CanvasView({ path, title, target: here, from, active, setTab }: { path:
   const frameId = useMemo(() => `canvas-${++frameCounter}`, []);
   const srcDoc = useMemo(() => html === null ? "" : canvasDocument(html, frameId), [html, frameId]);
   const titleRef = useRef(title); titleRef.current = title;
+  // setTab is a fresh function on every dock render; holding it in a ref keeps
+  // load stable, so the frame isn't torn down (white flash, scroll to top)
+  const setTabRef = useRef(setTab); setTabRef.current = setTab;
 
   const load = useCallback(async (force = false) => {
     try {
@@ -132,12 +137,12 @@ function CanvasView({ path, title, target: here, from, active, setTab }: { path:
       const text = await (await fetchRaw(target, path)).text();
       mtime.current = st.mtime; setHtml(text); setError("");
       const named = htmlTitle(text);
-      if (named && named !== titleRef.current) setTab({ title: named });
+      if (named && named !== titleRef.current) setTabRef.current({ title: named });
     } catch (e) {
       if (e instanceof WorkspaceFilesError && e.status === 404) setMissing(true);
       else setError(e instanceof Error ? e.message : String(e));
     }
-  }, [target, path, setTab]);
+  }, [target, path]);
   useEffect(() => { mtime.current = 0; setHtml(null); void load(true); }, [load]);
   useEffect(() => {
     if (!active) return;

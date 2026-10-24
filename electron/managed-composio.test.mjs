@@ -5,6 +5,8 @@ import {
   managedComposioChildEnvironment,
   normalizeManagedComposioBrokerUrl,
   resolveManagedComposioBrokerUrl,
+  desktopComposioBrokerUrl,
+  HOSTED_COMPOSIO_BROKER_URL,
 } from "./managed-composio.mjs";
 
 const TOKEN = "a".repeat(64);
@@ -22,6 +24,29 @@ describe("managed Composio desktop registration", () => {
       }),
     ).toBe("https://broker.example/root");
     expect(resolveManagedComposioBrokerUrl({ BOS_COMPOSIO_BROKER_URL: "http://broker.example" })).toBe("");
+  });
+
+  it("packaged desktop defaults to the hosted broker; env, then preset, win; =off disables", () => {
+    expect(HOSTED_COMPOSIO_BROKER_URL).toBe("https://bosbot.my/composio");
+    expect(desktopComposioBrokerUrl({ environment: {} })).toBe(HOSTED_COMPOSIO_BROKER_URL);
+    expect(desktopComposioBrokerUrl({ environment: {}, presetUrl: "https://preset.example/b/" })).toBe("https://preset.example/b");
+    expect(desktopComposioBrokerUrl({ environment: {}, presetUrl: "http://evil.example" })).toBe(HOSTED_COMPOSIO_BROKER_URL);
+    expect(
+      desktopComposioBrokerUrl({ environment: { BOS_COMPOSIO_BROKER_URL: "https://own.example" }, presetUrl: "https://preset.example" }),
+    ).toBe("https://own.example");
+    for (const off of ["off", "OFF", "0", "none", "false"]) {
+      expect(desktopComposioBrokerUrl({ environment: { BOS_COMPOSIO_BROKER_URL: off }, presetUrl: "https://preset.example" })).toBe("");
+    }
+    expect(desktopComposioBrokerUrl({ environment: { OMB_COMPOSIO_BROKER_URL: "off" } })).toBe("");
+  });
+
+  it("sends the anonymous install id, and only a well-formed one, when registering", async () => {
+    const id = "0f8b1c2d-3e4f-4a5b-8c6d-7e8f9a0b1c2d";
+    for (const [installId, expected] of [[id, { install: id }], [id.toUpperCase(), { install: id }], ["nope", {}], [undefined, {}]]) {
+      const fetchImpl = vi.fn(async () => new Response(JSON.stringify({ installationId: "i", token: TOKEN }), { status: 201 }));
+      await ensureManagedComposioCredentials({ brokerUrl: "https://broker.example", credentials: {}, fetchImpl, saveCredentials: async () => {}, installId });
+      expect(JSON.parse(fetchImpl.mock.calls[0][1].body)).toEqual(expected);
+    }
   });
 
   it("publishes only a complete broker credential", () => {

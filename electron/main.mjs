@@ -59,8 +59,7 @@ import {
   ensureManagedComposioCredentials,
   managedComposioAccess,
   managedComposioChildEnvironment,
-  normalizeManagedComposioBrokerUrl,
-  resolveManagedComposioBrokerUrl,
+  desktopComposioBrokerUrl,
 } from "./managed-composio.mjs";
 import {
   companionKeepAwakeWanted,
@@ -609,12 +608,26 @@ async function secureWorkspaceConfig() {
   }
 }
 
-// No hosted default: the managed connected-apps broker is off unless the
-// operator points BOS_COMPOSIO_BROKER_URL (or legacy OMB_COMPOSIO_BROKER_URL)
-// at their own Worker. A Composio project key in settings still works without it.
+// Connected apps work out of the box: an operator's BOS_COMPOSIO_BROKER_URL
+// (or legacy OMB_COMPOSIO_BROKER_URL), else a setup preset's broker
+// (electron/preset-link.mjs), else bos bot's hosted broker. =off turns it off.
+// A Composio project key in settings still wins over any broker.
 function composioBrokerUrl() {
-  // a setup preset may bring its own broker (electron/preset-link.mjs)
-  return resolveManagedComposioBrokerUrl(compatEnv) || normalizeManagedComposioBrokerUrl(secureCredentials?.composioBrokerUrl);
+  return desktopComposioBrokerUrl({ environment: compatEnv, presetUrl: secureCredentials?.composioBrokerUrl });
+}
+
+/** The anonymous install id the server keeps (server/welcome-chat.ts). On a
+ * first boot the server may not have written it yet, so wait a little: the
+ * broker token is cached, so an id missed now is never attached later. */
+async function anonymousInstallId() {
+  for (let attempt = 0; attempt < 20; attempt++) {
+    try {
+      const id = JSON.parse(fs.readFileSync(path.join(desktopDataDir(), "anonymous-usage.json"), "utf8"))?.install_id;
+      if (typeof id === "string") return id;
+    } catch {}
+    await new Promise((done) => setTimeout(done, 500));
+  }
+  return undefined;
 }
 
 // The packaged app has no terminal: everything about the server child's life
@@ -3795,17 +3808,20 @@ app.whenReady().then(async () => {
     slog("skipping connected-apps registration: the credential store was unreadable this launch");
   }
   if (!desktopRemoteAccess && app.isPackaged && composioBrokerUrl() && !credentialStoreUnavailable) {
-    void updateSecureCredentialDocument(async (credentials) => {
+    // read the install id before taking the credential document, so the
+    // first-boot wait for it never holds that document's lock
+    void (secureCredentials?.composioBrokerToken ? Promise.resolve(undefined) : anonymousInstallId()).then((installId) => updateSecureCredentialDocument(async (credentials) => {
       await ensureManagedComposioCredentials({
         brokerUrl: composioBrokerUrl(),
         credentials,
+        installId,
         // The shared credential state performs the one atomic encrypted
         // write after this registration has derived its complete document.
         saveCredentials: async () => {},
         log: slog,
       });
       return credentials;
-    }).finally(syncManagedComposioCredentials);
+    })).finally(syncManagedComposioCredentials);
   }
   // Quiet background downloads, with the same idle gate for quit and restart.
   const updateLifecycle = createUpdateLifecycleClient({

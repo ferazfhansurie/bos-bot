@@ -16,12 +16,28 @@ export function normalizeManagedComposioBrokerUrl(value) {
 }
 
 /** BOS_COMPOSIO_BROKER_URL wins over the legacy OMB_COMPOSIO_BROKER_URL.
- * There is deliberately no hosted default: unset means the managed broker is
- * off and no request is made to any broker. */
+ * Only the environment is read here; the packaged app's hosted default is
+ * desktopComposioBrokerUrl below. */
 export function resolveManagedComposioBrokerUrl(environment = compatEnv) {
   const configured =
     compatEnvironment(environment)?.BOS_COMPOSIO_BROKER_URL?.trim() || compatEnvironment(environment)?.OMB_COMPOSIO_BROKER_URL?.trim() || "";
   return normalizeManagedComposioBrokerUrl(configured);
+}
+
+/** bos bot's own connected-apps broker (bos-web broker/host.mjs behind
+ * bosbot.my). Each install registers its own revocable token there; the
+ * Composio project key never leaves the server. */
+export const HOSTED_COMPOSIO_BROKER_URL = "https://bosbot.my/composio";
+const OFF = /^(off|0|false|none|disabled)$/i;
+
+/** Which broker a packaged desktop app uses: an operator's environment URL,
+ * else a setup preset's broker, else the hosted one. BOS_COMPOSIO_BROKER_URL=off
+ * turns the managed broker off entirely (a Composio key in settings still works). */
+export function desktopComposioBrokerUrl({ environment = compatEnv, presetUrl } = {}) {
+  const env = compatEnvironment(environment);
+  const raw = env?.BOS_COMPOSIO_BROKER_URL?.trim() || env?.OMB_COMPOSIO_BROKER_URL?.trim() || "";
+  if (OFF.test(raw)) return "";
+  return resolveManagedComposioBrokerUrl(environment) || normalizeManagedComposioBrokerUrl(presetUrl) || HOSTED_COMPOSIO_BROKER_URL;
 }
 
 export function managedComposioAccess(brokerUrl, credentials) {
@@ -49,6 +65,7 @@ export async function ensureManagedComposioCredentials({
   credentials,
   fetchImpl = globalThis.fetch,
   saveCredentials,
+  installId,
   log = () => {},
   timeoutSignal = (milliseconds) => AbortSignal.timeout(milliseconds),
   existingCredentialTimeoutMs = 8_000,
@@ -81,7 +98,9 @@ export async function ensureManagedComposioCredentials({
     const response = await fetchImpl(`${url}/v1/installations`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: "{}",
+      // the anonymous install id (the one bos ai registration already sends)
+      // lets the operator see usage per install; the broker ignores it otherwise
+      body: JSON.stringify(typeof installId === "string" && /^[0-9a-f-]{36}$/i.test(installId) ? { install: installId.toLowerCase() } : {}),
       redirect: "error",
       signal: timeoutSignal(registrationTimeoutMs),
     });
