@@ -136,8 +136,15 @@ export function createFixture({ contractVersion } = {}) {
       if (this.connection) state.processes.delete(this.connection.pid);
     }
     uniffiDestroy() { this.destroyed = true; }
+    static withOptions(options) {
+      const host = new EmbeddedCuaDriverHost(options.binaryPath, options.hostBundleId);
+      host.options = options;
+      return host;
+    }
   }
-  const sdk = { EmbeddedCuaDriverHost };
+  const EmbeddedPermissionMode = { Standard: 0, Bounded: 1, Unrestricted: 2 };
+  const EmbeddedDriverHostOptions = { create: (options) => ({ ...options }) };
+  const sdk = { EmbeddedCuaDriverHost, EmbeddedDriverHostOptions, EmbeddedPermissionMode };
   const loads = [];
   const loadSdk = async (staged) => {
     loads.push(staged);

@@ -20,7 +20,8 @@
 // and moves from the old server tree to the new one.
 //
 // config.json: host, account, dataDir, resources, port, version, publicUrl,
-// logsDir, maintenanceMarker, computerUse?, label?, feed? (enterprise feed url)
+// logsDir, maintenanceMarker, computerUse?, trustedBrowser? (cua unrestricted mode,
+// lets bots attach to the signed-in Chrome), label?, feed? (enterprise feed url)
 import { spawn } from "node:child_process";
 import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { hostname, userInfo } from "node:os";

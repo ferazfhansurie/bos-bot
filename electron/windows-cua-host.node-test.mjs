@@ -60,6 +60,21 @@ test("happy path publishes one exact supervised descriptor that attest() accepts
   await host.stop();
 });
 
+test("default daemon starts in standard mode; trustedBrowser opts into unrestricted", async () => {
+  const plain = await ready();
+  assert.equal(fx.hosts[0].options, undefined, "default uses the plain constructor");
+  await plain.stop();
+  const trusted = await ready(fx.make({ trustedBrowser: true }));
+  const { options } = fx.hosts[1];
+  assert.equal(options.binaryPath, fx.binary);
+  assert.equal(options.hostBundleId, HOST_BUNDLE_ID);
+  assert.equal(options.permissionMode, 2);
+  assert.equal(options.dangerouslyBypassApprovals, true);
+  assert.equal(options.approveCapabilityManifest, false);
+  assert.equal(fx.readDescriptor().mcp.args[0], "mcp");
+  await trusted.stop();
+});
+
 test("missing SDK manifest or native library is unavailable without loading anything", async () => {
   unlinkSync(join(fx.resources, "cua-sdk", "native", "cua_driver_sdk.dll"));
   let status = await fx.make().start();
@@ -609,7 +624,7 @@ test("server-only launcher start is opt-in and wires env, attestation and signal
     createHost: (options) => { created.push(options); return fake; },
     install: (host) => events.push(host === fake ? "install" : "wrong"),
   });
-  assert.deepEqual(created, [{ dataDir: "C:\\data", resourcesPath: "C:\\res", environmentId: "partner-server-01", maintenanceMarker: "C:\\m.lock", relaunch: false }]);
+  assert.deepEqual(created, [{ dataDir: "C:\\data", resourcesPath: "C:\\res", environmentId: "partner-server-01", maintenanceMarker: "C:\\m.lock", relaunch: false, trustedBrowser: false }]);
   assert.deepEqual(result.env, { OMB_CUA_WINDOWS_SUPERVISED: "1", OMB_CUA_WINDOWS_DESCRIPTOR: fake.descriptorPath });
   assert.deepEqual(events, ["install", "start"]);
   processRef.emit("SIGTERM");

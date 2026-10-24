@@ -330,6 +330,12 @@ export function createWindowsCuaHost({
   // start. Server-only mode needs this: a relaunch after the server loaded would
   // inherit credentials the server has since written into process.env.
   relaunch = true,
+  // Owner opt-in from the launcher config (trustedBrowser: true). Starts the
+  // daemon in cua's unrestricted mode so a full-access bot can attach to the
+  // owner's signed-in Chrome (browser_prepare existing_profile). Standard mode
+  // refuses that with browser_consent_required and the server has no
+  // authorization host to approve it.
+  trustedBrowser = false,
   sessionPollMs = 15_000,
   setTimer = setTimeout,
   clearTimer = clearTimeout,
@@ -548,7 +554,7 @@ export function createWindowsCuaHost({
     }
     if (typeof sdk?.EmbeddedCuaDriverHost !== "function") throw unavailable("sdk-load-failed", "Computer use SDK does not export EmbeddedCuaDriverHost");
     assertCurrent(expected);
-    const owned = new sdk.EmbeddedCuaDriverHost(staged.binary, HOST_BUNDLE_ID);
+    const owned = trustedBrowser ? trustedHost(sdk, staged.binary) : new sdk.EmbeddedCuaDriverHost(staged.binary, HOST_BUNDLE_ID);
     const abort = new AbortController();
     host = owned;
     hostAbort = abort;
@@ -732,6 +738,24 @@ function processAlive(pid) {
 
 /** Expose attest() to server/local-computer.ts in this process. Installed once;
  * later code cannot replace it. */
+function trustedHost(sdk, binaryPath) {
+  if (typeof sdk?.EmbeddedCuaDriverHost?.withOptions !== "function" || typeof sdk?.EmbeddedDriverHostOptions?.create !== "function" ||
+      sdk?.EmbeddedPermissionMode?.Unrestricted === undefined) {
+    throw unavailable("sdk-load-failed", "Computer use SDK cannot start a trusted-browser daemon");
+  }
+  return sdk.EmbeddedCuaDriverHost.withOptions(sdk.EmbeddedDriverHostOptions.create({
+    binaryPath,
+    hostBundleId: HOST_BUNDLE_ID,
+    permissionMode: sdk.EmbeddedPermissionMode.Unrestricted,
+    dangerouslyBypassApprovals: true,
+    approveCapabilityManifest: false,
+    approveSessionPolicy: false,
+    environment: [],
+    inheritStderr: false,
+    noOverlay: false,
+  }));
+}
+
 export function installWindowsCuaAttestation(host, target = globalThis) {
   if (Object.prototype.hasOwnProperty.call(target, WINDOWS_CUA_ATTESTATION)) {
     throw new Error("Windows computer-use attestation is already installed in this process");
@@ -778,6 +802,7 @@ export async function startServerOnlyWindowsCua(config, {
     environmentId: config.environmentId,
     maintenanceMarker: config.maintenanceMarker,
     relaunch: false,
+    trustedBrowser: config.trustedBrowser === true,
   });
   install(host);
   const env = serverOnlyCuaEnvironment(host.descriptorPath);
