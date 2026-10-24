@@ -52,7 +52,7 @@ export interface ReadOnlyClientHandlers {
 
 /** The whole client. Deliberately nothing else. */
 export interface ReadOnlyWhatsAppClient {
-  history?: { accountId(): string | null; sync(chatId: string, accountId: string, authorized: () => boolean): Promise<{ requested: boolean; messages: CapturedMessage[]; warning?: string }> };
+  history?: { accountId(): string | null; titles?(chatIds: string[]): Promise<Record<string, string>>; sync(chatId: string, accountId: string, authorized: () => boolean): Promise<{ requested: boolean; messages: CapturedMessage[]; warning?: string }> };
   /** Narrow transport used only behind the owner-configured reply policy. */
   replies?: import("./whatsapp-replies.ts").ReplyTransport;
   initialize(): Promise<void>;

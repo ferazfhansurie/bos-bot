@@ -161,7 +161,7 @@ export class WhatsAppStore {
     `).all(...(chatIds ?? []), ...(accountId ? [accountId, accountId] : []), clampLimit(limit, 30)) as Array<{ chat_id: string; chat_name: string | null; body: string; from_me: number; timestamp: number; n: number }>;
     return rows.map((row) => ({
       chatId: row.chat_id,
-      chatName: row.chat_name ?? (accountId ? null : this.latestChatName(row.chat_id)),
+      chatName: row.chat_name ?? this.latestChatName(row.chat_id, accountId),
       messageCount: Number(row.n),
       lastTimestamp: row.timestamp,
       lastBody: row.body,
@@ -169,11 +169,23 @@ export class WhatsAppStore {
     }));
   }
 
-  private latestChatName(chatId: string): string | null {
+  private latestChatName(chatId: string, accountId?: string): string | null {
     const row = this.open().prepare(
-      "SELECT chat_name FROM whatsapp_messages WHERE chat_id = ? AND chat_name IS NOT NULL ORDER BY timestamp DESC LIMIT 1",
-    ).get(chatId) as { chat_name: string } | undefined;
+      `SELECT chat_name FROM whatsapp_messages WHERE chat_id = ? ${accountId ? "AND account_id = ?" : ""} AND chat_name IS NOT NULL ORDER BY timestamp DESC LIMIT 1`,
+    ).get(...(accountId ? [chatId, accountId] : [chatId])) as { chat_name: string } | undefined;
     return row?.chat_name ?? null;
+  }
+
+  /** Fill in chat names that capture could not resolve. Only rows of this
+   * account with no name are touched. Returns rows updated. */
+  nameChats(accountId: string, names: Record<string, string>): number {
+    const update = this.open().prepare("UPDATE whatsapp_messages SET chat_name = ? WHERE chat_id = ? AND account_id = ? AND chat_name IS NULL");
+    let changed = 0;
+    for (const [chatId, name] of Object.entries(names)) {
+      if (!name.trim()) continue;
+      changed += Number(update.run(name.trim().slice(0, 120), chatId, accountId).changes);
+    }
+    return changed;
   }
 
   /** newest first */

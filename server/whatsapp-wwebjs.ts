@@ -74,6 +74,16 @@ export function createReadOnlyClient(
   async function chatOf(message: RawMessage, fallbackId: string): Promise<{ chatId: string; chatName: string | null }> {
     const cached = chatNames.get(fallbackId);
     if (cached && Date.now() - cached.at < CHAT_NAME_TTL_MS) return { chatId: cached.chatId, chatName: cached.name };
+    // message.getChat() serializes the full chat model, which throws an
+    // IndexedDB DataError on current WhatsApp Web and left nearly every
+    // captured chat unnamed. The plain lookup (as in reply()) still works.
+    try {
+      const titled = (await chatTitles([fallbackId]))[fallbackId];
+      if (titled) {
+        chatNames.set(fallbackId, { chatId: fallbackId, name: titled, at: Date.now() });
+        return { chatId: fallbackId, chatName: titled };
+      }
+    } catch { /* fall back to the model lookup below */ }
     let timer: NodeJS.Timeout | null = null;
     try {
       // getChat() reads the chat model from the page. It does not mark the
@@ -89,6 +99,44 @@ export function createReadOnlyClient(
       return { chatId: entry.chatId, chatName: entry.name };
     } catch {
       return { chatId: fallbackId, chatName: cached?.name ?? null };
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  }
+
+  /** Display titles (contact/group name) for exact chat ids, read from the
+   * page's chat collection without serializing chat models or creating chats.
+   * Missing chats are left out. */
+  async function chatTitles(chatIds: string[]): Promise<Record<string, string>> {
+    const page = client.pupPage;
+    const ids = chatIds.filter((id) => /^(\d{6,20}@c\.us|\d{6,25}@lid|[\d-]{6,40}@g\.us)$/.test(id)).slice(0, 200);
+    if (!page || !ids.length) return {};
+    let timer: NodeJS.Timeout | null = null;
+    try {
+      const found = await Promise.race([
+        page.evaluate(`(async () => {
+          const out = {};
+          const chats = window.require("WAWebCollections").Chat;
+          const wid = window.require("WAWebWidFactory");
+          for (const id of ${JSON.stringify(ids)}) {
+            try {
+              // Chat.get only reads loaded chats; WWebJS.getChat may create one.
+              const c = chats.get(wid.createWid(id));
+              if (!c || !c.id || c.id._serialized !== id) continue;
+              const contact = c.contact || {};
+              const title = c.formattedTitle || c.name || contact.name || contact.pushname || contact.verifiedName || null;
+              if (typeof title === "string" && title.trim()) out[id] = title.trim().slice(0, 120);
+            } catch {}
+          }
+          return out;
+        })()`),
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(() => reject(new Error("chat titles timed out")), CHAT_LOOKUP_TIMEOUT_MS * 2);
+        }),
+      ]) as Record<string, unknown>;
+      const titles: Record<string, string> = {};
+      for (const id of ids) if (typeof found?.[id] === "string") titles[id] = found[id] as string;
+      return titles;
     } finally {
       if (timer) clearTimeout(timer);
     }
@@ -183,6 +231,7 @@ export function createReadOnlyClient(
   return {
     history: {
       accountId: () => serializedWid(client.info?.wid) || null,
+      titles: (chatIds) => chatTitles(chatIds),
       sync: async (chatId, accountId, authorized) => {
         if (serializedWid(client.info?.wid) !== accountId || !authorized()) throw new WhatsAppHistoryError(403, "account_or_scope_changed");
         const chat = await historyChatFor(chatId);

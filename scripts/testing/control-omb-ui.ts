@@ -38,6 +38,7 @@ export const UI_MUTATING = new Set(["click", "type", "press", "flag", "eval"]);
 
 const ENTRIES = {
   "voice-memos": { entry: "/scripts/testing/voice-memo-preview.tsx", route: "/__voice-memos.html", title: "Isolated Voice Memos" },
+  "whatsapp-permissions": { entry: "/scripts/testing/whatsapp-permissions-preview.tsx", route: "/__whatsapp-permissions.html", title: "Isolated WhatsApp Access" },
   threads: { entry: "/scripts/testing/threads-preview.tsx", route: "/__threads.html", title: "Isolated Bos Chat" },
 } as const satisfies Record<string, Parameters<typeof mountPreview>[1]>;
 const FAKE_MODES = ["happy", "exit-early", "hang", "malformed", "stream", "not-logged-in", "slow", "background-result"];

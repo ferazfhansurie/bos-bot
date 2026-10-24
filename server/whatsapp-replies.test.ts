@@ -106,3 +106,36 @@ it("replies and sends to privacy-id (@lid) chats in scope, never to unlisted one
   await expect(replies.send("money", { account_id: account, chat_id: stranger, send_key: "x", text: "hi" })).rejects.toThrow();
   expect(send).toHaveBeenCalledTimes(2);
 });
+it("read-all reads every chat on the account while sending stays limited to the named list", async () => {
+  replies.configure("money", { accountId: account, chatIds: [], readAll: true } as never);
+  expect(replies.readScope("money")).toBeUndefined();
+  expect(replies.canSend("money")).toBe(false);
+  expect(store.listChats(30, replies.readScope("money"), account).map(c => c.chatId).sort()).toEqual([client, privateChat].sort());
+  await expect(replies.reply("money", input)).rejects.toThrow("not authorized");
+  replies.configure("money", { accountId: account, chatIds: [client], readAll: true } as never);
+  expect(replies.readScope("money")).toBeUndefined();
+  await expect(replies.reply("money", { ...input, chat_id: privateChat, message_id: "private" })).rejects.toThrow("not authorized");
+  replies.configure("money", null);
+  expect(replies.readScope("money")).toEqual([]);
+  expect(() => replies.configure("money", { accountId: account, chatIds: [], readAll: "yes" } as never)).toThrow();
+  expect(send).not.toHaveBeenCalled();
+});
+it("read-only reads the named chats and can never send, even if a grant asks", async () => {
+  replies.configure("money", { accountId: account, chatIds: [client], readOnly: true } as never);
+  expect(replies.readScope("money")).toEqual([client]);
+  expect(replies.canSend("money")).toBe(false);
+  expect(replies.eligible("money", store.listMessages({ chatId: client }).find(m => m.id === "incoming")!)).toBe(false);
+  await expect(replies.reply("money", input)).rejects.toThrow();
+  await expect(replies.send("money", { account_id: account, chat_id: client, send_key: "ro", text: "hi" })).rejects.toThrow();
+  for (const bad of [{ autoDispatch: true }, { outreach: true }, { readOnly: "yes" }]) expect(() => replies.configure("money", { accountId: account, chatIds: [client], readOnly: true, ...bad } as never)).toThrow();
+  expect(send).not.toHaveBeenCalled();
+});
+it("names unnamed chats once, per account, without overwriting a real name", () => {
+  store.insert({ id: "nameless", chatId: "219920001234567@lid", fromMe: false, timestamp: now / 1000, accountId: account, chatName: null, from: "219920001234567@lid", author: null, type: "chat", body: "hi", hasMedia: false });
+  store.insert({ id: "other-acct", chatId: "219920001234567@lid", fromMe: false, timestamp: now / 1000, accountId: "60999999999@c.us", chatName: null, from: "219920001234567@lid", author: null, type: "chat", body: "hi", hasMedia: false });
+  expect(store.listChats(30, undefined, account).find(c => c.chatId === "219920001234567@lid")?.chatName).toBeNull();
+  expect(store.nameChats(account, { "219920001234567@lid": "Aina", [client]: "overwrite" })).toBe(1);
+  expect(store.listChats(30, undefined, account).find(c => c.chatId === "219920001234567@lid")?.chatName).toBe("Aina");
+  expect(store.listChats(30, undefined, account).find(c => c.chatId === client)?.chatName).toBe("fixture");
+  expect(store.listChats(30, undefined, "60999999999@c.us").find(c => c.chatId === "219920001234567@lid")?.chatName).toBeNull();
+});

@@ -152,7 +152,7 @@ const WHATSAPP_TOOLS = [
     },
     annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
   },
-  { name: "BOS_WHATSAPP_GET_ACCOUNT", description: "Verify the linked WhatsApp account and owner-configured reply scope.", inputSchema: { type: "object", properties: {}, additionalProperties: false }, annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false } },
+  { name: "BOS_WHATSAPP_GET_ACCOUNT", description: "Verify the linked WhatsApp account, the owner-configured reply scope and the read scope (all chats or a list).", inputSchema: { type: "object", properties: {}, additionalProperties: false }, annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false } },
   { name: "BOS_WHATSAPP_SYNC_HISTORY", description: "Request history for an exact chat on the verified linked account and capture up to 200 currently available messages. requested does not prove full history. Does not send a message, mark seen or trigger replies to imported history.", inputSchema: { type: "object", properties: { account_id: { type: "string" }, chat_id: { type: "string" } }, required: ["account_id", "chat_id"], additionalProperties: false }, annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: true } },
 ] as const;
 

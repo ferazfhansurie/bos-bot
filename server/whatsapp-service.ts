@@ -122,7 +122,7 @@ export class WhatsAppService {
     const policy = this.replies.policy(botId);
     const allowed = () => {
       const live = this.replies.policy(botId);
-      return authorized() && !!history && history.accountId() === input.account_id && typeof input.chat_id === "string" && /^(\d{6,20}@c\.us|\d{6,25}@lid|[\d-]{6,40}@g\.us)$/.test(input.chat_id) && (!live || (live.accountId === input.account_id && (live.chatIds === null || live.chatIds.includes(input.chat_id))));
+      return authorized() && !!history && history.accountId() === input.account_id && typeof input.chat_id === "string" && /^(\d{6,20}@c\.us|\d{6,25}@lid|[\d-]{6,40}@g\.us)$/.test(input.chat_id) && (!live || (live.accountId === input.account_id && (live.readAll === true || live.chatIds === null || live.chatIds.includes(input.chat_id))));
     };
     if (!history) throw new WhatsAppHistoryError(409, "not_linked");
     if (!input || typeof input.account_id !== "string" || typeof input.chat_id !== "string" || (policy && policy.accountId !== input.account_id) || !allowed()) throw new WhatsAppHistoryError(403, "account_or_scope_changed");
@@ -168,6 +168,23 @@ export class WhatsAppService {
     return { status: 405, body: { error: "method not allowed" } };
   }
 
+  private naming: Promise<number> | null = null;
+  /** Name captured chats stored without one (capture used to lose most
+   * names). One lookup at a time; a failure leaves names as they were. */
+  backfillChatNames(limit = 200): Promise<number> {
+    if (this.naming) return this.naming;
+    const history = this.native.historyTransport();
+    const accountId = history?.accountId();
+    if (!history?.titles || !accountId) return Promise.resolve(0);
+    const unnamed = this.store.listChats(limit, undefined, accountId).filter((chat) => !chat.chatName && chat.chatId !== accountId).map((chat) => chat.chatId);
+    if (!unnamed.length) return Promise.resolve(0);
+    this.naming = history.titles(unnamed)
+      .then((names) => history.accountId() === accountId ? this.store.nameChats(accountId, names) : 0)
+      .catch(() => 0)
+      .finally(() => { this.naming = null; });
+    return this.naming;
+  }
+
   /** Read-only routes for the connector bridge, under /api/internal/connectors/.
    * The caller has already authenticated the connector capability and checked
    * the bot's Connected-apps grant. */
@@ -178,12 +195,13 @@ export class WhatsAppService {
     const snapshot = this.native.snapshot();
     const status = { state: snapshot.state, reason: snapshot.reason, messageCount: snapshot.messageCount };
     const policy = botId ? this.replies.policy(botId) : undefined;
-    const chatIds = policy?.chatIds ?? undefined;
+    const chatIds = botId ? this.replies.readScope(botId) : undefined;
     if (policy && this.replies.account(botId!) === null) return { status: 403, body: { error: "configured WhatsApp account is not linked" } };
     if (path === "/api/internal/connectors/whatsapp/account") {
-      return { status: 200, body: { account_id: this.native.historyTransport()?.accountId() ?? null, reply_scope: policy ? policy.chatIds : "disabled", auto_dispatch: policy?.autoDispatch ?? false, outreach: policy?.outreach === true } };
+      return { status: 200, body: { account_id: this.native.historyTransport()?.accountId() ?? null, reply_scope: policy ? policy.chatIds : "disabled", read_scope: policy ? (chatIds ?? "all") : "all", auto_dispatch: policy?.autoDispatch ?? false, outreach: policy?.outreach === true } };
     }
     if (path === "/api/internal/connectors/whatsapp/chats") {
+      void this.backfillChatNames();
       return { status: 200, body: { status: policy ? { state: snapshot.state } : status, chats: this.store.listChats(intParam(params.get("limit")), chatIds, policy?.accountId) } };
     }
     if (path === "/api/internal/connectors/whatsapp/messages") {

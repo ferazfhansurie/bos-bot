@@ -5,7 +5,10 @@ import { join } from "node:path";
 import { createHash } from "node:crypto";
 import type { WhatsAppStore, WhatsAppStoredMessage } from "./whatsapp-store.ts";
 
-export interface ReplyPolicy { accountId: string; chatIds: string[] | null; autoDispatch: boolean; enabledAt: number; outreach?: boolean }
+// readAll: the bot may read every captured chat on the account (summaries),
+// while replies and outreach stay limited to chatIds, which may be empty.
+// readOnly: chatIds only widen reading; no reply, outreach or auto-dispatch.
+export interface ReplyPolicy { accountId: string; chatIds: string[] | null; autoDispatch: boolean; enabledAt: number; outreach?: boolean; readAll?: boolean; readOnly?: boolean }
 export interface SendInput { account_id: string; chat_id: string; text: string; send_key: string }
 export interface ReplyInput { account_id: string; chat_id: string; message_id: string; text: string }
 export interface ReplyReceipt { state: "sending" | "submitted" | "outcome_unknown"; messageId?: string; fingerprint: string }
@@ -49,13 +52,23 @@ export class WhatsAppReplies {
     const policies = this.policies();
     // Keep a restricted tombstone: revoking replies must not restore global
     // access to the owner's personal and Ops capture history.
-    if (value === null) { if (policies[botId]) policies[botId] = { ...policies[botId], chatIds: [], enabledAt: this.now() }; }
+    if (value === null) { if (policies[botId]) policies[botId] = { ...policies[botId], chatIds: [], readAll: false, enabledAt: this.now() }; }
     else {
       const p = value as ReplyPolicy;
-      if (!p || !individual.test(p.accountId) || (p.chatIds !== null && (!Array.isArray(p.chatIds) || p.chatIds.length > 200 || p.chatIds.some(id => typeof id !== "string" || !chat.test(id) || id === p.accountId))) || (p.autoDispatch !== undefined && typeof p.autoDispatch !== "boolean") || (p.chatIds === null && p.autoDispatch === true) || (p.outreach !== undefined && typeof p.outreach !== "boolean") || (p.chatIds === null && p.outreach === true)) throw new Error("accountId required; chatIds is an explicit list or null for owner-granted shared access. automatic dispatch and outreach require a named chat list");
-      policies[botId] = { accountId: p.accountId, chatIds: p.chatIds === null ? null : [...new Set(p.chatIds)], autoDispatch: p.autoDispatch === true, enabledAt: this.now(), ...(p.outreach === true ? { outreach: true } : {}) };
+      if (!p || !individual.test(p.accountId) || (p.chatIds !== null && (!Array.isArray(p.chatIds) || p.chatIds.length > 200 || p.chatIds.some(id => typeof id !== "string" || !chat.test(id) || id === p.accountId))) || (p.autoDispatch !== undefined && typeof p.autoDispatch !== "boolean") || (p.chatIds === null && p.autoDispatch === true) || (p.outreach !== undefined && typeof p.outreach !== "boolean") || (p.chatIds === null && p.outreach === true) || (p.readAll !== undefined && typeof p.readAll !== "boolean") || (p.readOnly !== undefined && typeof p.readOnly !== "boolean") || (p.readOnly === true && (p.autoDispatch === true || p.outreach === true))) throw new Error("accountId required; chatIds is an explicit list or null for owner-granted shared access. automatic dispatch and outreach require a named chat list");
+      policies[botId] = { accountId: p.accountId, chatIds: p.chatIds === null ? null : [...new Set(p.chatIds)], autoDispatch: p.autoDispatch === true, enabledAt: this.now(), ...(p.outreach === true ? { outreach: true } : {}), ...(p.readAll === true ? { readAll: true } : {}), ...(p.readOnly === true ? { readOnly: true } : {}) };
     }
     this.write("reply-policies.json", policies);
+  }
+  /** Chat ids the bot may read: undefined = every chat on the policy account. */
+  readScope(botId: string): string[] | undefined {
+    const p = this.policy(botId);
+    return !p || p.readAll === true || p.chatIds === null ? undefined : p.chatIds;
+  }
+  /** Whether the bot may send at all (named chats or owner-granted shared access). */
+  canSend(botId: string): boolean {
+    const p = this.policy(botId);
+    return !!p && p.readOnly !== true && (p.chatIds === null || p.chatIds.length > 0);
   }
   account(botId: string): string | null {
     const policy = this.policy(botId);
@@ -64,7 +77,7 @@ export class WhatsAppReplies {
   }
   eligible(botId: string, message: WhatsAppStoredMessage): boolean {
     const p = this.policy(botId);
-    return !!p && message.accountId === p.accountId && this.account(botId) === p.accountId && (p.chatIds === null || p.chatIds.includes(message.chatId)) && !message.fromMe && message.type === "chat" && (!p.autoDispatch || message.timestamp * 1000 >= p.enabledAt - 1000) && message.timestamp <= this.now() / 1000 + 60 && message.timestamp >= this.now() / 1000 - 86400;
+    return !!p && p.readOnly !== true && message.accountId === p.accountId && this.account(botId) === p.accountId && (p.chatIds === null || p.chatIds.includes(message.chatId)) && !message.fromMe && message.type === "chat" && (!p.autoDispatch || message.timestamp * 1000 >= p.enabledAt - 1000) && message.timestamp <= this.now() / 1000 + 60 && message.timestamp >= this.now() / 1000 - 86400;
   }
   claimInbound(botId: string, message: WhatsAppStoredMessage): boolean {
     if (!this.policy(botId)?.autoDispatch || !this.eligible(botId, message)) return false;
@@ -79,7 +92,7 @@ export class WhatsAppReplies {
     if (!input || typeof input.account_id !== "string" || typeof input.chat_id !== "string" || typeof input.message_id !== "string" || typeof input.text !== "string" || !input.text.trim() || input.text.length > 4000) throw new Error("account_id, chat_id, message_id and text (1–4000 characters) required");
     const p = this.policy(botId);
     const transport = this.transport();
-    if (!p || !transport || transport.accountId() !== p.accountId || input.account_id !== p.accountId || !chat.test(input.chat_id) || input.chat_id === p.accountId || (p.chatIds !== null && !p.chatIds.includes(input.chat_id))) throw new Error("reply account or client recipient is not authorized");
+    if (!p || p.readOnly === true || !transport || transport.accountId() !== p.accountId || input.account_id !== p.accountId || !chat.test(input.chat_id) || input.chat_id === p.accountId || (p.chatIds !== null && !p.chatIds.includes(input.chat_id))) throw new Error("reply account or client recipient is not authorized");
     const source = this.store.message(input.message_id);
     if (!source || source.chatId !== input.chat_id || !this.eligible(botId, source)) throw new Error("reply must reference a captured incoming client text from the last 24 hours");
     // Cross-bot dedupe: at most one outbound reply per inbound message/account.
@@ -113,7 +126,7 @@ export class WhatsAppReplies {
       throw new Error("account_id, chat_id, send_key (1–120 word characters) and text (1–4000 characters) required");
     const granted = () => {
       const p = this.policy(botId);
-      return !!p && p.outreach === true && Array.isArray(p.chatIds) && p.chatIds.includes(input.chat_id) && p.accountId === input.account_id;
+      return !!p && p.readOnly !== true && p.outreach === true && Array.isArray(p.chatIds) && p.chatIds.includes(input.chat_id) && p.accountId === input.account_id;
     };
     const transport = this.transport();
     if (!granted() || !transport || transport.accountId() !== input.account_id || !person.test(input.chat_id) || input.chat_id === input.account_id)

@@ -2018,7 +2018,7 @@ function connectedAppsIntegration(botId: string, threadId: string, generation: s
     botId,
     threadId,
     whatsappNative: whatsapp.toolsAvailable(),
-    whatsappReplies: !!whatsapp.replies.policy(botId),
+    whatsappReplies: whatsapp.replies.canSend(botId),
   });
 }
 
@@ -2668,7 +2668,7 @@ function previewSystemPrompt(bot: BotRecord) {
       browser: previewPlan.computer === undefined ? false : previewPlan.browser,
     }, { note: previewPlan.note }) },
     { id: "composio", label: "Connected apps", text: caps?.composioMcp && bot.composio !== false
-      ? `${composio.configured(cfg) ? COMPOSIO_PROMPT : ""}${whatsapp.toolsAvailable() ? (whatsapp.replies.policy(bot.id) ? WHATSAPP_REPLY_PROMPT : WHATSAPP_NATIVE_PROMPT) : ""}`
+      ? `${composio.configured(cfg) ? COMPOSIO_PROMPT : ""}${whatsapp.toolsAvailable() ? (whatsapp.replies.canSend(bot.id) ? WHATSAPP_REPLY_PROMPT : WHATSAPP_NATIVE_PROMPT) : ""}`
       : "" },
     { id: "mcp", label: "MCP servers", text: caps?.customMcp ? customMcpPrompt(Object.keys(customMcpServers(cfg, bot.mcpServers))) : "" },
     { id: "browser", label: "Browser", text: previewPlan.browser ? (utilityParentPort ? desktopBrowserPrompt(approvalModeForTurn(bot) === "full") : BUILT_IN_BROWSER_SYSTEM_PROMPT) : "" },
@@ -25101,9 +25101,15 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
     if (path === "/api/whatsapp/permissions" && method === "GET") {
       if (!auth.scopes.includes("admin") || authorizedInternalCapability(req.headers.authorization)) return json(res, 403, { error: "owner access required" });
       const accountId = whatsapp.native.historyTransport()?.accountId() ?? null;
+      if (accountId) {
+        // Name chats WhatsApp Web left untitled, but never hold the panel up for long.
+        let timer: NodeJS.Timeout | undefined;
+        await Promise.race([whatsapp.backfillChatNames(), new Promise((resolve) => { timer = setTimeout(resolve, 8_000); })]);
+        clearTimeout(timer);
+      }
       const chats = accountId ? whatsapp.store.listChats(200, undefined, accountId)
         .filter((chat) => chat.chatId !== accountId)
-        .map((chat) => ({ id: chat.chatId, name: chat.chatName || chat.chatId, preview: chat.lastBody.slice(0, 90) })) : [];
+        .map((chat) => ({ id: chat.chatId, name: chat.chatName || null, preview: chat.lastBody.slice(0, 90), group: chat.chatId.endsWith("@g.us"), lastAt: chat.lastTimestamp, fromMe: chat.lastFromMe })) : [];
       return json(res, 200, { accountId, chats });
     }
     m = path.match(/^\/api\/bots\/([\w-]+)\/whatsapp-replies$/);
