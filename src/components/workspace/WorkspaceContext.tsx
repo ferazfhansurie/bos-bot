@@ -18,7 +18,7 @@ import { WORKSPACE_COMMAND_EVENT, workspaceCommandForEvent, type WorkspaceComman
 import { locatePath, type WorkspaceChanges, type WorkspaceLocation } from "@/lib/workspace-files-client";
 import { api, useStore, type Bot } from "@/state/store";
 
-export interface OpenOptions { pane?: WorkspacePane; path?: string; fresh?: boolean; ref?: string; title?: string }
+export interface OpenOptions { pane?: WorkspacePane; path?: string; fresh?: boolean; ref?: string; title?: string; from?: string }
 
 interface WorkspaceValue {
   available: boolean;
@@ -38,7 +38,7 @@ interface WorkspaceValue {
   setTabTitle: (id: string, title: string | undefined) => void;
   setTabRef: (id: string, ref: string) => void;
   /** Turn a tab into another kind in place (a new tab picking a tool). */
-  replaceTab: (id: string, kind: WorkspaceTabKind, options?: { ref?: string; title?: string; path?: string }) => void;
+  replaceTab: (id: string, kind: WorkspaceTabKind, options?: { ref?: string; title?: string; path?: string; from?: string }) => void;
   /** A new thread of the same bot, opened in a side chat tab (or in place of `replacing`). */
   openSideChat: (replacing?: string) => Promise<void>;
   openFile: (path: string, threadId?: string) => Promise<boolean>;
@@ -142,7 +142,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   const setTabPath = useCallback((id: string, path: string | undefined) => update((state) => setFilePath(state, id, path)), [update]);
   const setTabTitle = useCallback((id: string, title: string | undefined) => update((state) => setTabTitleState(state, id, title)), [update]);
   const setTabRef = useCallback((id: string, ref: string) => update((state) => ({ ...state, tabs: state.tabs.map((tab) => (tab.id === id ? { ...tab, ref } : tab)) })), [update]);
-  const replaceTab = useCallback((id: string, kind: WorkspaceTabKind, options: { ref?: string; title?: string; path?: string } = {}) => {
+  const replaceTab = useCallback((id: string, kind: WorkspaceTabKind, options: { ref?: string; title?: string; path?: string; from?: string } = {}) => {
     update((current) => {
       const result = replaceTabState(current, id, kind, options);
       if (kind === "terminal") markTerminalStarted(result.id);

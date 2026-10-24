@@ -5,7 +5,7 @@
 // live, sandboxed like a chat html preview. Later messages edit the same
 // file. A deck presents fullscreen, one top-level section per screen.
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Clapperboard, FileText, FolderOpen, LayoutDashboard, Loader2, Play, Presentation, RefreshCw, SquareDashed, X } from "lucide-react";
+import { Clapperboard, FileText, FolderOpen, LayoutDashboard, Loader2, Pin, PinOff, Play, Presentation, RefreshCw, SquareDashed, X } from "lucide-react";
 
 import { ARTIFACT_FRAME_NAME } from "@/components/HtmlArtifact";
 import { videoApi } from "@/components/videos/video-api";
@@ -16,6 +16,7 @@ import { fetchRaw, statPath, WorkspaceFilesError } from "@/lib/workspace-files-c
 import { useStore } from "@/state/store";
 import type { WorkspaceTab, WorkspaceTabKind } from "@/lib/thread-workspace";
 import { CanvasLibrary } from "./CanvasLibrary";
+import { isPinned, pinPage, unpinPage, usePins } from "./pins";
 import { CANVAS_STARTERS, COMPOSER_INSERT_EVENT, type ComposerInsertDetail, type LibraryItem, type LibraryKind, canvasDocument, htmlTitle } from "./canvas";
 
 interface Props {
@@ -23,7 +24,7 @@ interface Props {
   target: TerminalTarget;
   active: boolean;
   setTab: (patch: { title?: string; ref?: string }) => void;
-  replace: (kind: WorkspaceTabKind, options?: { ref?: string; title?: string; path?: string }) => void;
+  replace: (kind: WorkspaceTabKind, options?: { ref?: string; title?: string; path?: string; from?: string }) => void;
 }
 
 const FAST_POLL = 1200, SLOW_POLL = 4000;
@@ -44,7 +45,7 @@ function typeInChat(target: TerminalTarget, text: string) {
 
 export function CanvasTab({ tab, target, active, setTab, replace }: Props) {
   if (!tab.ref) return <BlankPrompt target={target} setTab={setTab} replace={replace} />;
-  return <CanvasView path={tab.ref} title={tab.title} target={target} active={active} setTab={setTab} />;
+  return <CanvasView path={tab.ref} title={tab.title} target={target} from={tab.from} active={active} setTab={setTab} />;
 }
 
 function BlankPrompt({ target, setTab, replace }: { target: TerminalTarget } & Pick<Props, "setTab" | "replace">) {
@@ -94,8 +95,17 @@ function BlankPrompt({ target, setTab, replace }: { target: TerminalTarget } & P
 
 const STARTER_ICON: Record<string, typeof FileText> = { presentation: Presentation, dashboard: LayoutDashboard, doc: FileText, video: Clapperboard };
 
-function CanvasView({ path, title, target, active, setTab }: { path: string; title?: string; target: TerminalTarget; active: boolean; setTab: Props["setTab"] }) {
+function CanvasView({ path, title, target: here, from, active, setTab }: { path: string; title?: string; target: TerminalTarget; from?: string; active: boolean; setTab: Props["setTab"] }) {
+  // a page pinned from another chat lives in that chat's folder
+  const target = useMemo(() => from ? { ...here, threadId: from } : here, [here, from]);
   const busy = useThreadBusy(target);
+  const page = { botId: target.botId, threadId: target.threadId, path };
+  const pins = usePins(target.botId);
+  const pinned = isPinned(pins, page);
+  const togglePin = () => pinned ? unpinPage(page) : pinPage({ ...page, title: title || "Blank tab" });
+  // a pin added from the new tab's chooser carries the file name; the page's own title replaces it once it loads
+  const stale = Boolean(title) && pins.some(p => p.threadId === page.threadId && p.path === path && p.title !== title);
+  useEffect(() => { if (stale && title) pinPage({ botId: target.botId, threadId: target.threadId, path, title }); }, [stale, title, target, path]);
   const { openTab } = useWorkspace();
   const [html, setHtml] = useState<string | null>(null);
   const [missing, setMissing] = useState(false);
@@ -192,8 +202,11 @@ function CanvasView({ path, title, target, active, setTab }: { path: string; tit
       <div className="flex h-10 shrink-0 items-center gap-1 border-b border-hairline/60 px-2">
         <span className="min-w-0 flex-1 truncate px-1.5 text-[13px] font-medium text-ink">{title || "Blank tab"}</span>
         {busy && <span className="inline-flex items-center gap-1.5 px-1.5 text-[12px] text-ink/55"><Loader2 size={13} className="animate-spin" />bos is drawing</span>}
-        <button type="button" title="Show in files" aria-label="Show in files" onClick={() => openTab("files", { path })}
-          className="flex size-8 items-center justify-center rounded-md text-ink/60 hover:bg-ink/[.06] hover:text-ink"><FolderOpen size={15} /></button>
+        <button type="button" title={pinned ? "Unpin from new tab" : "Pin to new tab"} aria-label={pinned ? "Unpin from new tab" : "Pin to new tab"} aria-pressed={pinned}
+          onClick={togglePin} data-testid="canvas-pin"
+          className="flex size-8 items-center justify-center rounded-md text-ink/60 hover:bg-ink/[.06] hover:text-ink">{pinned ? <PinOff size={15} /> : <Pin size={15} />}</button>
+        {!from && <button type="button" title="Show in files" aria-label="Show in files" onClick={() => openTab("files", { path })}
+          className="flex size-8 items-center justify-center rounded-md text-ink/60 hover:bg-ink/[.06] hover:text-ink"><FolderOpen size={15} /></button>}
         <button type="button" title="Reload" aria-label="Reload" onClick={() => void load(true)}
           className="flex size-8 items-center justify-center rounded-md text-ink/60 hover:bg-ink/[.06] hover:text-ink"><RefreshCw size={15} /></button>
         <button type="button" onClick={() => void present()} disabled={waiting} data-testid="canvas-present"

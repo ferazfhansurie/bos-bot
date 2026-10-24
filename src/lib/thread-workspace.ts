@@ -23,6 +23,9 @@ export interface WorkspaceTab {
   ref?: string;
   /** A title the tab's renderer chose (a page's name, a side chat's topic). */
   title?: string;
+  /** Blank tab: the conversation whose folder holds the page, when it is not
+   * this one (a page pinned to new tabs, opened from another chat). */
+  from?: string;
 }
 
 export interface ThreadWorkspace {
@@ -67,6 +70,8 @@ function safePath(value: unknown): string | undefined {
   return value.split("/").includes("..") ? undefined : value;
 }
 
+const threadRef = (value: unknown) => (typeof value === "string" && /^[\w:.-]{1,128}$/.test(value) ? value : undefined);
+
 /** Whatever came out of storage, make it a valid workspace or an empty one. */
 export function sanitizeWorkspace(value: unknown): ThreadWorkspace {
   if (!value || typeof value !== "object") return emptyWorkspace();
@@ -82,10 +87,12 @@ export function sanitizeWorkspace(value: unknown): ThreadWorkspace {
     seen.add(tab.id);
     const pane: WorkspacePane = tab.pane === "bottom" ? "bottom" : "right";
     const path = kind === "files" ? safePath(tab.path) : undefined;
-    const ref = typeof tab.ref === "string" && /^[\w:.-]{1,128}$/.test(tab.ref) ? tab.ref : undefined;
+    // a blank tab's ref is the page's path in the working folder
+    const ref = kind === "canvas" ? safePath(tab.ref) : typeof tab.ref === "string" && /^[\w:.-]{1,128}$/.test(tab.ref) ? tab.ref : undefined;
+    const from = kind === "canvas" && ref ? threadRef(tab.from) : undefined;
     const title = typeof tab.title === "string" && tab.title.trim() ? tab.title.trim().slice(0, 120) : undefined;
     if (kind === "sidechat" && !ref) continue;
-    tabs.push({ id: tab.id, kind, pane, ...(path ? { path } : {}), ...(ref ? { ref } : {}), ...(title ? { title } : {}) });
+    tabs.push({ id: tab.id, kind, pane, ...(path ? { path } : {}), ...(ref ? { ref } : {}), ...(title ? { title } : {}), ...(from ? { from } : {}) });
     if (tabs.length >= MAX_TABS) break;
   }
   const active = (raw.active && typeof raw.active === "object" ? raw.active : {}) as Record<string, unknown>;
@@ -148,7 +155,7 @@ export function defaultPane(kind: WorkspaceTabKind): WorkspacePane {
 }
 
 /** Open (or focus, for single-instance kinds) a tab. Returns the tab's id. */
-export function openTab(state: ThreadWorkspace, kind: WorkspaceTabKind, options: { pane?: WorkspacePane; path?: string; id?: string; fresh?: boolean; ref?: string; title?: string } = {}): { state: ThreadWorkspace; id: string } {
+export function openTab(state: ThreadWorkspace, kind: WorkspaceTabKind, options: { pane?: WorkspacePane; path?: string; id?: string; fresh?: boolean; ref?: string; title?: string; from?: string } = {}): { state: ThreadWorkspace; id: string } {
   const existing = SINGLE.has(kind) || (kind === "terminal" && !options.fresh && !options.id)
     ? state.tabs.find((tab) => tab.kind === kind && (!options.pane || tab.pane === options.pane))
     : undefined;
@@ -164,7 +171,7 @@ export function openTab(state: ThreadWorkspace, kind: WorkspaceTabKind, options:
   }
   const id = options.id && /^[\w-]{1,64}$/.test(options.id) && !state.tabs.some((tab) => tab.id === options.id) ? options.id : newTabId(kind);
   const path = kind === "files" ? safePath(options.path) : undefined;
-  const tab: WorkspaceTab = { id, kind, pane: options.pane ?? defaultPane(kind), ...(path ? { path } : {}), ...(options.ref ? { ref: options.ref } : {}), ...(options.title ? { title: options.title.slice(0, 120) } : {}) };
+  const tab: WorkspaceTab = { id, kind, pane: options.pane ?? defaultPane(kind), ...(path ? { path } : {}), ...(options.ref ? { ref: options.ref } : {}), ...(options.title ? { title: options.title.slice(0, 120) } : {}), ...(kind === "canvas" && threadRef(options.from) ? { from: options.from } : {}) };
   const tabs = [...state.tabs, tab].slice(-MAX_TABS);
   return { state: focusTab({ ...state, tabs }, id), id };
 }
@@ -196,7 +203,7 @@ export function setTabTitle(state: ThreadWorkspace, id: string, title: string | 
 
 /** Swap a tab for another kind in the same slot, the way picking a tool on
  * a new tab turns that tab into the tool. */
-export function replaceTab(state: ThreadWorkspace, id: string, kind: WorkspaceTabKind, options: { ref?: string; title?: string; path?: string } = {}): { state: ThreadWorkspace; id: string } {
+export function replaceTab(state: ThreadWorkspace, id: string, kind: WorkspaceTabKind, options: { ref?: string; title?: string; path?: string; from?: string } = {}): { state: ThreadWorkspace; id: string } {
   const index = state.tabs.findIndex((tab) => tab.id === id);
   if (index < 0 || (SINGLE.has(kind) && state.tabs.some((tab) => tab.kind === kind))) {
     const removed = index < 0 ? state : closeTab(state, id).state;
@@ -204,7 +211,7 @@ export function replaceTab(state: ThreadWorkspace, id: string, kind: WorkspaceTa
   }
   const old = state.tabs[index]!;
   const path = kind === "files" ? safePath(options.path) : undefined;
-  const tab: WorkspaceTab = { id: newTabId(kind), kind, pane: old.pane, ...(path ? { path } : {}), ...(options.ref ? { ref: options.ref } : {}), ...(options.title ? { title: options.title.slice(0, 120) } : {}) };
+  const tab: WorkspaceTab = { id: newTabId(kind), kind, pane: old.pane, ...(path ? { path } : {}), ...(options.ref ? { ref: options.ref } : {}), ...(options.title ? { title: options.title.slice(0, 120) } : {}), ...(kind === "canvas" && threadRef(options.from) ? { from: options.from } : {}) };
   const tabs = state.tabs.map((candidate, at) => (at === index ? tab : candidate));
   return { state: focusTab({ ...state, tabs, active: { ...state.active, [old.pane]: tab.id } }, tab.id), id: tab.id };
 }

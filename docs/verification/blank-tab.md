@@ -31,3 +31,16 @@ chart" edits the same file in place, slide 2 re-renders and no new tab
 opens; Present goes fullscreen with one slide on screen, arrow and space
 advance, esc exits; the library lists the deck in grid and list view and
 reopens it.
+
+## Pinning pages to the new tab
+
+```sh
+node --experimental-strip-types scripts/verify-newtab-pins.ts [evidence-dir]
+```
+
+No model: two pages are written straight into the first chat's folder. Checks
+that the pin button in a page's header puts it under Tools in the next new
+tab and one click opens it there; "Add a tab you made" lists this chat's
+pages minus the pinned ones and pins the pick; a second chat (its own folder)
+shows the same pins and opens the first chat's page; the open tab survives a
+reload; unpin removes the row. Pins are per device (localStorage) and per bot.

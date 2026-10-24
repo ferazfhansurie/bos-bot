@@ -7,6 +7,14 @@ describe('conversation workbench persistence and transitions',()=>{
   expect(restored.tabs[0].path).toBeUndefined();
   expect(restored.tabs[1].ref).toBe('thread-1');expect(restored.active.right).toBe('page');
  });
+ it('keeps a blank tab\'s page path and source chat across reloads',()=>{
+  const restored=sanitizeWorkspace({layout:'split',tabs:[{id:'c1',kind:'canvas',ref:'bos-pages/deck.html',title:'Deck'},{id:'c2',kind:'canvas',ref:'bos-pages/x.html',from:'thread-2'},{id:'c3',kind:'canvas',ref:'../etc/passwd',from:'thread-3'},{id:'c4',kind:'canvas',ref:'a.html',from:'bad thread/id'}],active:{right:'c1'}});
+  expect(restored.tabs.map(tab=>[tab.ref,tab.from])).toEqual([['bos-pages/deck.html',undefined],['bos-pages/x.html','thread-2'],[undefined,undefined],['a.html',undefined]]);
+  const opened=openTab(emptyWorkspace(),'canvas',{ref:'bos-pages/x.html',from:'thread-2'});
+  expect(opened.state.tabs[0].from).toBe('thread-2');
+  const swapped=replaceTab(openTab(emptyWorkspace(),'newtab',{id:'n'}).state,'n','canvas',{ref:'bos-pages/y.html',from:'thread-9'});
+  expect(swapped.state.tabs[0]).toMatchObject({kind:'canvas',ref:'bos-pages/y.html',from:'thread-9'});
+ });
  it('replaces a tools tab in place and reuses an existing files tab',()=>{
   const first=openTab(emptyWorkspace(),'files',{id:'files'});
   const second=openTab(first.state,'newtab',{id:'new'});

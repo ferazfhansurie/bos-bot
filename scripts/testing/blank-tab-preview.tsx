@@ -12,6 +12,8 @@ import {applySkin} from '../../src/lib/skins';
 import '../../src/styles.css';
 function Fixture(){
  const {state,dispatch}=useStore();const bot=state.bots[0];
+ // fixture drivers start a new chat the way the sidebar does
+ (window as unknown as {fixtureDispatch:typeof dispatch}).fixtureDispatch=dispatch;
  useEffect(()=>{if(bot&&state.selectedId!==bot.id)dispatch({type:'select',id:bot.id});},[bot?.id,state.selectedId,dispatch]);
  return <div className="flex h-screen bg-app text-ink"><SplitWorkspace>{bot&&<ChatView bot={bot}/>}</SplitWorkspace></div>;
 }

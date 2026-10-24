@@ -1,6 +1,6 @@
 import { Menu, anchorOf, type MenuAnchor, type MenuEntry } from '@/components/workbench/Menu';
 import { NewTabPage } from '@/components/workbench/NewTabPage';
-import { usePickTool, useNewTabExtras } from '@/components/workbench/builtins';
+import { usePickTool, useNewTabExtras, useNewTabPins } from '@/components/workbench/builtins';
 import { browserTabsSnapshot, handleBrowserCommands, publishBrowserTabs, sendBrowserCommand } from '@/components/workbench/browser-tabs';
 import { useWorkspace } from '@/components/workspace/WorkspaceContext';
 import { useTabKinds } from '@/components/workbench/registry';
@@ -309,11 +309,12 @@ function IntegratedNewTab() {
   useTabKinds();
   const pick = usePickTool();
   const extras = useNewTabExtras();
-  const {workspace, closeTab} = useWorkspace();
-  return <NewTabPage {...extras} onPick={tool => {
-    const browser = browserTabsSnapshot();
-    pick(tool);
+  const {workspace, closeTab, openTab} = useWorkspace();
+  // whatever opens from here replaces this blank browser tab
+  const leave = (browser = browserTabsSnapshot()) => {
     if (browser.tabs.length > 1) sendBrowserCommand({op:'close',id:browser.active});
     else {const tab=workspace.tabs.find(tab=>tab.kind==='browser');if(tab)closeTab(tab.id);}
-  }}/>;
+  };
+  const pins = useNewTabPins((kind, options) => {const browser = browserTabsSnapshot(); openTab(kind, {pane:'right', ...options}); leave(browser);});
+  return <NewTabPage {...extras} pins={extras.blank ? pins : undefined} onPick={tool => {const browser = browserTabsSnapshot(); pick(tool); leave(browser);}}/>;
 }

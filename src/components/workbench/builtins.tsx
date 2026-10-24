@@ -4,7 +4,9 @@
 import { Folders, GitCompare, Globe, MessageCircle, NotebookText, Plus, SquareTerminal } from "lucide-react";
 
 import { BrowserPanel } from "@/components/BrowserPanel";
-import { NewTabPage, type NewTabTool } from "@/components/workbench/NewTabPage";
+import { CANVAS_DIR, canvasFileTitle } from "@/components/canvas/canvas";
+import { isPinned, pinPage, unpinPage, usePins, type PinnedPage } from "@/components/canvas/pins";
+import { NewTabPage, type NewTabPins, type NewTabTool } from "@/components/workbench/NewTabPage";
 import { SideChatTab } from "@/components/workbench/SideChatTab";
 import { registerTabKind, tabKind, useTabKinds, type TabRenderProps } from "@/components/workbench/registry";
 import { ChangesTab } from "@/components/workspace/ChangesTab";
@@ -13,6 +15,7 @@ import { TerminalTab } from "@/components/workspace/TerminalTab";
 import { useWorkspace } from "@/components/workspace/WorkspaceContext";
 import { browserAvailable as serverBrowserAvailable } from "@/lib/feature-flags";
 import { remoteBotHint } from "@/lib/remote-bot";
+import { listFolder } from "@/lib/workspace-files-client";
 import { useStore } from "@/state/store";
 
 function FilesKind({ tab, target, active }: TabRenderProps) {
@@ -79,11 +82,44 @@ export function useNewTabExtras() {
   return { blank: blankReady() && direct, changes: git === true, botBrowser };
 }
 
+const pinKey = (pin: Pick<PinnedPage, "threadId" | "path">) => `${pin.threadId}:${pin.path}`;
+
+/** Pages pinned to the Tools list, and the chooser that adds this chat's
+ * pages to it. open turns a page into a tab (the caller says where). */
+export function useNewTabPins(open: (kind: "canvas", options: { ref: string; title: string; from?: string }) => void): NewTabPins | undefined {
+  const { target } = useWorkspace();
+  const pins = usePins(target?.botId);
+  if (!target) return undefined;
+  const find = (key: string) => pins.find(pin => pinKey(pin) === key);
+  return {
+    pinned: pins.map(pin => ({ key: pinKey(pin), title: pin.title })),
+    open: (key) => {
+      const pin = find(key);
+      if (pin) open("canvas", { ref: pin.path, title: pin.title, ...(pin.threadId !== target.threadId ? { from: pin.threadId } : {}) });
+    },
+    unpin: (key) => { const pin = find(key); if (pin) unpinPage(pin); },
+    // this chat's pages, newest first, minus the ones already pinned
+    choices: async () => {
+      const listing = await listFolder(target, CANVAS_DIR).catch(() => null);
+      return (listing?.entries ?? [])
+        .filter(entry => entry.kind === "file" && /\.html?$/i.test(entry.name) && !isPinned(pins, { botId: target.botId, threadId: target.threadId, path: entry.path }))
+        .sort((a, b) => (b.mtime ?? 0) - (a.mtime ?? 0))
+        .map(entry => ({ key: pinKey({ threadId: target.threadId, path: entry.path }), title: canvasFileTitle(entry.name) }));
+    },
+    pin: (choice) => {
+      const path = choice.key.slice(target.threadId.length + 1);
+      pinPage({ botId: target.botId, threadId: target.threadId, path, title: choice.title });
+    },
+  };
+}
+
 function NewTabKind({ tab }: TabRenderProps) {
   useTabKinds();
   const pick = usePickTool();
   const extras = useNewTabExtras();
-  return <NewTabPage {...extras} onPick={(tool) => pick(tool, tab.id)} />;
+  const { replaceTab } = useWorkspace();
+  const pins = useNewTabPins((kind, options) => replaceTab(tab.id, kind, options));
+  return <NewTabPage {...extras} pins={extras.blank ? pins : undefined} onPick={(tool) => pick(tool, tab.id)} />;
 }
 
 function SideChatKind({ tab, target }: TabRenderProps) {

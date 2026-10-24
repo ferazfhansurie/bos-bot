@@ -1,8 +1,8 @@
 /** What a fresh tab shows: the "Tools" list. Picking a tool turns the tab
  * into it. The browser draws this on a blank page; a computer without the
  * browser gets it as its own "newtab" kind. */
-import { useState } from "react";
-import { Folders, GitCompare, Globe, MessageCirclePlus, MoreHorizontal, SquareDashed, SquareTerminal } from "lucide-react";
+import { Fragment, useState } from "react";
+import { Folders, GitCompare, Globe, LayoutTemplate, MessageCirclePlus, MoreHorizontal, PinOff, Plus, SquareDashed, SquareTerminal } from "lucide-react";
 
 import { Menu, anchorOf, type MenuAnchor } from "@/components/workbench/Menu";
 import type { TabIcon } from "@/components/workbench/registry";
@@ -19,8 +19,23 @@ export function Keycap({ keys, className }: { keys: string; className?: string }
   return <kbd className={cn("inline-flex h-[22px] shrink-0 items-center rounded-full bg-ink/[.08] px-2 font-sans text-[12px] tracking-wide text-ink/70", className)}>{keys}</kbd>;
 }
 
-export function NewTabPage({ onPick, blank = true, changes = false, botBrowser = false, className }: {
+/** A page bos made, as the new tab lists it: its pin, or a choice to pin. */
+export interface NewTabPinned { key: string; title: string }
+
+/** Pages pinned into the Tools list, and the chooser that adds more. */
+export interface NewTabPins {
+  pinned: NewTabPinned[];
+  open: (key: string) => void;
+  unpin: (key: string) => void;
+  /** The pages that can be pinned (not already pinned), newest first. */
+  choices: () => Promise<NewTabPinned[]>;
+  pin: (choice: NewTabPinned) => void;
+}
+
+export function NewTabPage({ onPick, blank = true, changes = false, botBrowser = false, pins, className }: {
   onPick: (tool: NewTabTool) => void;
+  /** Pinned pages; absent where blank tabs can't open. */
+  pins?: NewTabPins;
   /** Whether a blank tab can open (direct conversations, kind registered). */
   blank?: boolean;
   /** bos extras ChatGPT lacks: the git diff and the server browser's live view. */
@@ -30,6 +45,12 @@ export function NewTabPage({ onPick, blank = true, changes = false, botBrowser =
 }) {
   const isMac = mac();
   const [more, setMore] = useState<MenuAnchor | null>(null);
+  const [adding, setAdding] = useState<{ anchor: MenuAnchor; choices: NewTabPinned[] | null } | null>(null);
+  const choose = (anchor: MenuAnchor) => {
+    if (!pins) return;
+    setAdding({ anchor, choices: null });
+    pins.choices().then(choices => setAdding(a => a && { ...a, choices }), () => setAdding(a => a && { ...a, choices: [] }));
+  };
   const rows: { tool: NewTabTool; label: string; icon: TabIcon; keys?: string }[] = [
     ...(blank ? [{ tool: "blank" as const, label: "Blank tab", icon: SquareDashed }] : []),
     { tool: "files", label: "Files", icon: Folders, keys: isMac ? "⌘P" : "Ctrl P" },
@@ -43,23 +64,50 @@ export function NewTabPage({ onPick, blank = true, changes = false, botBrowser =
       <h2 className="mb-4 text-[13px] font-medium text-ink">Tools</h2>
       <div role="list" className="flex flex-col gap-1">
         {rows.map(({ tool, label, icon: Icon, keys }) => (
-          <div key={tool} role="listitem" className="group relative">
-            <button type="button" onClick={() => onPick(tool)}
-              className="flex h-10 w-full items-center gap-2 rounded-lg bg-ink/[.04] pe-2 ps-2.5 text-left text-[14px] text-ink transition-colors duration-150 ease-out hover:bg-ink/[.078] focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent">
-              <Icon size={16} strokeWidth={1.75} className="shrink-0 text-ink/80" />
-              <span className="min-w-0 flex-1 truncate">{label}</span>
-              {keys && <Keycap keys={keys} className={tool === "terminal" ? "me-9" : undefined} />}
-            </button>
-            {tool === "terminal" && (
-              <button type="button" aria-label="Terminal options" title="Terminal options"
-                onClick={(event) => setMore(anchorOf(event.currentTarget))}
-                className="absolute end-1.5 top-1/2 flex size-7 -translate-y-1/2 items-center justify-center rounded-md text-ink/70 hover:bg-ink/[.078] hover:text-ink">
-                <MoreHorizontal size={16} />
+          <Fragment key={tool}>
+            <div role="listitem" className="group relative">
+              <button type="button" onClick={() => onPick(tool)}
+                className="flex h-10 w-full items-center gap-2 rounded-lg bg-ink/[.04] pe-2 ps-2.5 text-left text-[14px] text-ink transition-colors duration-150 ease-out hover:bg-ink/[.078] focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent">
+                <Icon size={16} strokeWidth={1.75} className="shrink-0 text-ink/80" />
+                <span className="min-w-0 flex-1 truncate">{label}</span>
+                {keys && <Keycap keys={keys} className={tool === "terminal" ? "me-9" : undefined} />}
               </button>
-            )}
-          </div>
+              {tool === "terminal" && (
+                <button type="button" aria-label="Terminal options" title="Terminal options"
+                  onClick={(event) => setMore(anchorOf(event.currentTarget))}
+                  className="absolute end-1.5 top-1/2 flex size-7 -translate-y-1/2 items-center justify-center rounded-md text-ink/70 hover:bg-ink/[.078] hover:text-ink">
+                  <MoreHorizontal size={16} />
+                </button>
+              )}
+            </div>
+            {tool === "blank" && pins?.pinned.map(page => (
+              <div key={page.key} role="listitem" className="group/pin relative" data-testid="new-tab-pinned">
+                <button type="button" onClick={() => pins.open(page.key)} title={page.title}
+                  className="flex h-10 w-full items-center gap-2 rounded-lg bg-ink/[.04] pe-10 ps-2.5 text-left text-[14px] text-ink transition-colors duration-150 ease-out hover:bg-ink/[.078] focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent">
+                  <LayoutTemplate size={16} strokeWidth={1.75} className="shrink-0 text-ink/80" />
+                  <span className="min-w-0 flex-1 truncate">{page.title}</span>
+                </button>
+                <button type="button" aria-label={`Unpin ${page.title}`} title="Unpin" onClick={() => pins.unpin(page.key)}
+                  className="absolute end-1.5 top-1/2 flex size-7 -translate-y-1/2 items-center justify-center rounded-md text-ink/60 opacity-0 transition-opacity hover:bg-ink/[.078] hover:text-ink focus-visible:opacity-100 group-hover/pin:opacity-100">
+                  <PinOff size={15} />
+                </button>
+              </div>
+            ))}
+          </Fragment>
         ))}
       </div>
+      {pins && (
+        <button type="button" onClick={(event) => choose(anchorOf(event.currentTarget))} data-testid="new-tab-add-pin"
+          className="mt-2 inline-flex h-8 items-center gap-1.5 rounded-lg px-2.5 text-[13px] text-ink/60 transition-colors hover:bg-ink/[.06] hover:text-ink">
+          <Plus size={15} />Add a tab you made
+        </button>
+      )}
+      {adding && pins && (
+        <Menu anchor={adding.anchor} label="Add a tab you made" width={300} onClose={() => setAdding(null)}
+          entries={adding.choices === null ? [{ key: "loading", label: "Loading…", disabled: true, onSelect: () => undefined }]
+            : adding.choices.length === 0 ? [{ key: "none", label: "No other pages yet. Ask bos to make one.", disabled: true, onSelect: () => undefined }]
+            : adding.choices.slice(0, 40).map(choice => ({ key: choice.key, label: choice.title, icon: LayoutTemplate, onSelect: () => pins.pin(choice) }))} />
+      )}
       {more && (
         <Menu anchor={more} align="end" label="Terminal options" width={232} onClose={() => setMore(null)}
           entries={[{ key: "bottom", label: "Open bottom terminal", shortcut: isMac ? "⌘J" : "Ctrl J", onSelect: () => onPick("terminal-bottom") }]} />

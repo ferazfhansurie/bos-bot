@@ -40,7 +40,7 @@ export interface TabRenderProps {
   /** Rename the tab or remember what it shows (a page id, a thread id). */
   setTab: (patch: { title?: string; ref?: string }) => void;
   /** Turn this tab into another kind in the same place (a new tab picking a tool). */
-  replace: (kind: WorkspaceTabKind, options?: { ref?: string; title?: string; path?: string }) => void;
+  replace: (kind: WorkspaceTabKind, options?: { ref?: string; title?: string; path?: string; from?: string }) => void;
   close: () => void;
 }
 
