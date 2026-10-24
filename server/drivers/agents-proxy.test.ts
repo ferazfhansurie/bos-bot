@@ -44,6 +44,7 @@ let lastPostBody: any = null;
 let postCalls = 0;
 let ringBody: unknown = null;
 let ringStatus = 202;
+let tabBody: unknown = null;
 let postResponse: unknown = { ok: true, messageId: "msg-1", roomName: "Launch" };
 const DEFAULT_AGENTS = { bots: [{ id: "bot-helper", name: "Helper", model: "fake-model", busy: false }] };
 let agentsResponse: unknown = DEFAULT_AGENTS;
@@ -187,6 +188,17 @@ beforeAll(async () => {
     if (req.method === "GET" && req.url === "/api/internal/doctor") {
       res.writeHead(200, { "content-type": "application/json" });
       return res.end(JSON.stringify({ checkedAt: 1, checks: [{ id: "push", status: "warning", detail: "Push is not set up on this BOS." }], notices: [], safeMode: { enabled: false, reason: null } }));
+    }
+    if (req.method === "POST" && req.url === "/api/internal/tabs") {
+      let raw = "";
+      req.on("data", chunk => { raw += chunk; });
+      req.on("end", () => {
+        tabBody = JSON.parse(raw);
+        const missing = String((tabBody as { path?: string }).path).includes("missing");
+        res.writeHead(missing ? 404 : 200, { "content-type": "application/json" });
+        res.end(JSON.stringify(missing ? { error: "No file at bos-pages/missing.html in your working folder. Write it first." } : { path: "bos-pages/deck.html" }));
+      });
+      return;
     }
     if (req.method === "POST" && req.url === "/api/voice/ring") {
       let raw = "";
@@ -473,6 +485,7 @@ beforeAll(async () => {
       OMB_SKILL_AUTHORING_ENABLED: "1",
       OMB_SHARED_COMPUTERS_ENABLED: "1",
       OMB_WORK_CONTINUITY: "1",
+      OMB_PAGE_TABS: "1",
     },
     stdio: ["pipe", "pipe", "inherit"],
   });
@@ -515,6 +528,16 @@ describe("agents-proxy MCP surface", () => {
     expect(refused.result.isError).toBe(true);
     expect(refused.result.content[0].text).toContain("wait ten minutes");
     ringStatus = 202;
+  });
+  it("opens a page tab beside this conversation and passes the server's refusal through", async () => {
+    const opened = await callTool("open_tab", { path: "bos-pages/deck.html", title: "bos deck" });
+    expect(opened.result.isError).toBe(false);
+    expect(opened.result.content[0].text).toContain("don't call open_tab again");
+    expect(tabBody).toEqual({ path: "bos-pages/deck.html", title: "bos deck" });
+    expect((await callTool("open_tab", { path: "bos-pages/x.html", botId: "victim" })).result.isError).toBe(true);
+    const missing = await callTool("open_tab", { path: "bos-pages/missing.html" });
+    expect(missing.result.isError).toBe(true);
+    expect(missing.result.content[0].text).toContain("Write it first");
   });
   it("describes all configuration tools as result-aware without changing credential requirements", async () => {
     const list = await rpc("tools/list");
@@ -654,6 +677,7 @@ describe("agents-proxy MCP surface", () => {
       "list_shared_computers",
       "shared_computer",
       "set_next_wake",
+      "open_tab",
       "ring_owner",
       "health_check",
       "list_bots",
@@ -2009,6 +2033,7 @@ describe("with computer sharing off (the default)", () => {
         OMB_TURN_DEPTH: "0",
         OMB_SKILL_AUTHORING_ENABLED: "1",
         // deliberately no OMB_SHARED_COMPUTERS_ENABLED
+        OMB_COMPUTER_SELECT: "0",
       },
       stdio: ["pipe", "pipe", "inherit"],
     });
@@ -2040,6 +2065,13 @@ describe("with computer sharing off (the default)", () => {
     // the rest of the surface is untouched — this is a gate, not a removal
     expect(names).toContain("list_bots");
     expect(names).toContain("skills_list");
+  });
+
+  it("hides select_computer when the bot has no computer or browser to pick", async () => {
+    const list = await gatedRpc("tools/list");
+    const names = list.result.tools.map((tool: { name: string }) => tool.name);
+    expect(names).not.toContain("select_computer");
+    expect(names).toContain("list_threads");
   });
 
   it("refuses the handlers if a model calls them by name anyway", async () => {
@@ -2103,6 +2135,7 @@ describe("coordinate_bots arguments (room turn)", () => {
     const list = await roomRpc("tools/list");
     expect(list.result.tools.map((tool: { name: string }) => tool.name)).not.toContain("page_read");
     expect(list.result.tools.map((tool: { name: string }) => tool.name)).not.toContain("video_read");
+    expect(list.result.tools.map((tool: { name: string }) => tool.name)).not.toContain("open_tab");
   });
 
   it("maps camelCase aliases onto the canonical snake_case fields", async () => {

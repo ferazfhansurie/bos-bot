@@ -2369,10 +2369,14 @@ function sharingController() {
           body: JSON.stringify({ id, action }),
           signal: action === "release" ? AbortSignal.timeout(3000) : AbortSignal.any([signal, AbortSignal.timeout(3000)]),
         });
-        if (!response.ok) throw new Error("This computer is in use locally or held by a person. Wait, then observe it again before acting.");
+        if (response.ok) return;
+        // Relay the server's reason: a person's hold and a busy bot turn need
+        // different answers from the remote bot.
+        const detail = await response.json().then(body => typeof body?.error === "string" ? body.error : "", () => "");
+        throw new Error(detail || "This computer is busy right now. This call was not performed. Try again in a minute.");
       };
       await lease("acquire");
-      return { renew: () => lease("acquire"), release: () => lease("release") };
+      return { renew: () => lease("renew"), release: () => lease("release") };
     },
   });
   return computerSharing;

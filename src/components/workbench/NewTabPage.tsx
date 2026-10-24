@@ -2,13 +2,16 @@
  * into it. The browser draws this on a blank page; a computer without the
  * browser gets it as its own "newtab" kind. */
 import { useState } from "react";
-import { Clapperboard, Folders, GitCompare, Globe, MessageCirclePlus, MoreHorizontal, NotebookText, SquareTerminal } from "lucide-react";
+import { Folders, GitCompare, Globe, MessageCirclePlus, MoreHorizontal, SquareDashed, SquareTerminal } from "lucide-react";
 
 import { Menu, anchorOf, type MenuAnchor } from "@/components/workbench/Menu";
 import type { TabIcon } from "@/components/workbench/registry";
 import { cn } from "@/lib/cn";
 
-export type NewTabTool = "files" | "sidechat" | "terminal" | "terminal-bottom" | "page" | "video" | "changes" | "bot-browser";
+/** "blank" is the blank tab: an empty page bos draws whatever you ask into
+ * (decks, dashboards, docs; videos hand off to the video editor). It replaced
+ * the separate "New page" and "New video" rows in 2.1.9. */
+export type NewTabTool = "blank" | "files" | "sidechat" | "terminal" | "terminal-bottom" | "changes" | "bot-browser";
 
 const mac = () => /mac/i.test(globalThis.navigator?.platform ?? "") || globalThis.window?.ogb?.platform === "darwin";
 
@@ -16,12 +19,10 @@ export function Keycap({ keys, className }: { keys: string; className?: string }
   return <kbd className={cn("inline-flex h-[22px] shrink-0 items-center rounded-full bg-ink/[.08] px-2 font-sans text-[12px] tracking-wide text-ink/70", className)}>{keys}</kbd>;
 }
 
-export function NewTabPage({ onPick, page = true, video = false, changes = false, botBrowser = false, className }: {
+export function NewTabPage({ onPick, blank = true, changes = false, botBrowser = false, className }: {
   onPick: (tool: NewTabTool) => void;
-  /** Whether a page tab can open (something registered the "page" kind). */
-  page?: boolean;
-  /** Whether the video editor registered (direct conversations only). */
-  video?: boolean;
+  /** Whether a blank tab can open (direct conversations, kind registered). */
+  blank?: boolean;
   /** bos extras ChatGPT lacks: the git diff and the server browser's live view. */
   changes?: boolean;
   botBrowser?: boolean;
@@ -30,11 +31,10 @@ export function NewTabPage({ onPick, page = true, video = false, changes = false
   const isMac = mac();
   const [more, setMore] = useState<MenuAnchor | null>(null);
   const rows: { tool: NewTabTool; label: string; icon: TabIcon; keys?: string }[] = [
+    ...(blank ? [{ tool: "blank" as const, label: "Blank tab", icon: SquareDashed }] : []),
     { tool: "files", label: "Files", icon: Folders, keys: isMac ? "⌘P" : "Ctrl P" },
     { tool: "sidechat", label: "Side chat", icon: MessageCirclePlus, keys: isMac ? "⌥⌘S" : "Ctrl Alt S" },
     { tool: "terminal", label: "Terminal", icon: SquareTerminal, keys: "⌃`" },
-    ...(page ? [{ tool: "page" as const, label: "New page", icon: NotebookText }] : []),
-    ...(video ? [{ tool: "video" as const, label: "New video", icon: Clapperboard }] : []),
     ...(changes ? [{ tool: "changes" as const, label: "Changes", icon: GitCompare }] : []),
     ...(botBrowser ? [{ tool: "bot-browser" as const, label: "Bot browser", icon: Globe }] : []),
   ];

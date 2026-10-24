@@ -4062,6 +4062,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         case "video":
           window.dispatchEvent(new CustomEvent("bos-video-changed", { detail: frame }));
           break;
+        case "workspace.open":
+          window.dispatchEvent(new CustomEvent("bos-workspace-open", { detail: frame }));
+          break;
         case "sections":
           rawDispatch({ type: "sections", sections: frame.sections });
           break;

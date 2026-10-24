@@ -1,0 +1,31 @@
+{
+  "id": "blank-tab",
+  "name": "Blank tab",
+  "version": "1.0.0",
+  "description": "Make a page, deck or dashboard as an html file and show it live in a tab beside the chat; follow-ups edit it in place.",
+  "defaultEnabled": true,
+  "triggerTerms": [
+    "new tab",
+    "blank tab",
+    "a tab",
+    "in a tab",
+    "this tab",
+    "the tab",
+    "presentation",
+    "deck",
+    "slides",
+    "slide ",
+    "pitch",
+    "dashboard",
+    "one-pager",
+    "one pager",
+    "make a page",
+    "make it a page",
+    "page for",
+    "page about",
+    "report page"
+  ],
+  "requiredCapabilities": [
+    "pageTabs"
+  ]
+}

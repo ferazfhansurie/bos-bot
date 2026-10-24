@@ -80,6 +80,16 @@ it("reads text, flags binary and refuses folders", async () => {
   expect((await get("read", { path: "src" })).status).toBe(409);
   expect((await get("read", { path: "nope.txt" })).status).toBe(404);
 });
+it("serves html raw only as inert plain text", async () => {
+  writeFileSync(join(root, "deck.html"), "<script>alert(1)</script>");
+  const r = await get("raw", { path: "deck.html" });
+  expect(r.status).toBe(200);
+  expect(r.headers.get("content-type")).toBe("text/plain; charset=utf-8");
+  expect(r.headers.get("x-content-type-options")).toBe("nosniff");
+  expect(r.headers.get("content-security-policy")).toBe("sandbox");
+  expect(await r.text()).toBe("<script>alert(1)</script>");
+  expect((await get("raw", { path: "b.txt" })).status).toBe(415);
+});
 it("rejects traversal, absolute paths and symlink escapes", async () => {
   for (const path of ["../secret.txt", "src/../../secret.txt", "/etc/passwd", join(base, "secret.txt"), "a\0b"]) expect((await get("read", { path })).status).toBe(400);
   expect((await get("list", { path: ".." })).status).toBe(400);

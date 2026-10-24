@@ -48,6 +48,11 @@
 //   FAKE_CLAUDE_TEXT_BEFORE_TOOLS 1: with FAKE_CLAUDE_TOOL_CALLS, the first
 //                      reply item is said before the tool calls and the rest
 //                      after them: text, tool call, text, as a real turn does.
+//   FAKE_CLAUDE_TURN_COMMAND shell command each turn runs (async) instead of
+//                      the scripted reply, with FAKE_TURN_PROMPT (a file),
+//                      FAKE_TURN_SYSTEM_PROMPT and FAKE_TURN_MCP_CONFIG (this
+//                      turn's own files, live until it settles); the last
+//                      stdout line is the reply.
 //   FAKE_CLAUDE_HOOKS  1: honour the `hooks` block of the --settings file the
 //                      way the real CLI does — after each tool_result run
 //                      every PostToolUse command with the event JSON on
@@ -72,7 +77,10 @@
 //
 // Keep this file dependency-free — it runs as a bare `node` subprocess.
 import { spawnSync } from "node:child_process";
-import { appendFileSync, existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { spawn } from "node:child_process";
+import { appendFileSync, existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { runRoomHandoffAgent } from "./room-handoff-agent.ts";
 
 const mode = process.env.FAKE_CLAUDE_MODE ?? "happy";
@@ -402,6 +410,30 @@ const playTurn = (prompt: JsonValue) => {
     }).catch(error => {
       out({ type: "result", is_error: true, result: String(error), stop_reason: "error" });
     }).finally(() => { turnRunning = false; finishIfDone(); });
+    return;
+  }
+
+  if (process.env.FAKE_CLAUDE_TURN_COMMAND) {
+    // A stand-in that does real work mid-turn (a real model with this turn's
+    // system prompt and MCP servers), while the turn and its capabilities are
+    // live. Its stdout is the reply.
+    const dir = mkdtempSync(join(tmpdir(), "fake-claude-turn-"));
+    const promptFile = join(dir, "prompt.txt");
+    writeFileSync(promptFile, promptText(prompt));
+    const child = spawn(process.env.FAKE_CLAUDE_TURN_COMMAND, {
+      shell: true, cwd: process.cwd(), stdio: ["ignore", "pipe", "inherit"],
+      env: { ...process.env, FAKE_TURN_PROMPT: promptFile, FAKE_TURN_SYSTEM_PROMPT: argAfter("--append-system-prompt-file") ?? "", FAKE_TURN_MCP_CONFIG: argAfter("--mcp-config") ?? "" },
+    });
+    let stdout = "";
+    child.stdout.on("data", (chunk) => { stdout += chunk; });
+    child.on("exit", (code) => {
+      rmSync(dir, { recursive: true, force: true });
+      const text = stdout.trim() || "done";
+      out({ type: "assistant", message: { content: [{ type: "text", text }] } });
+      out({ type: "result", is_error: code !== 0, stop_reason: code === 0 ? "end_turn" : "error", ...(code === 0 ? {} : { result: `turn command exit ${code}` }), usage: { input_tokens: 10, output_tokens: 5 } });
+      turnRunning = false;
+      finishIfDone();
+    });
     return;
   }
 

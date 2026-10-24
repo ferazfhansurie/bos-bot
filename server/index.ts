@@ -51,7 +51,7 @@ import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypt
 import { appendFileSync, existsSync, readFileSync, rmSync, mkdirSync, writeFileSync } from "node:fs";
 import { TelegramChannels } from "./telegram-channels.ts";
 import { writeFileAtomic } from "./atomic.ts";
-import { rm as removeDirectory, statfs } from "node:fs/promises";
+import { realpath, rm as removeDirectory, stat, statfs } from "node:fs/promises";
 import { createDoctor } from "./doctor.ts";
 import { recoveryNotices } from "./recovery-notices.ts";
 import { allowInSafeMode, safeModeStatus } from "./safe-mode.ts";
@@ -59,9 +59,9 @@ import { selfHealEnabled } from "../electron/self-heal-policy.mjs";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { TerminalService } from "./terminal.ts";
 import { resolveTerminalTarget } from "./terminal-target.ts";
-import { WorkspaceFilesService } from "./workspace-files.ts";
+import { WorkspaceFilesService, resolveInside } from "./workspace-files.ts";
 import { ToolResults, TOOL_RESULT_MAX_CHARS } from "./tool-results.ts";
-import { basename, extname, join } from "node:path";
+import { basename, extname, isAbsolute, join } from "node:path";
 import { homedir } from "node:os";
 
 import { z } from "zod";
@@ -1355,6 +1355,8 @@ function agentsIntegration(
   roomCoordination = false,
   ownThreadCreation = false,
   modRequest = false,
+  computerSelect = true,
+  pageTabs = false,
 ) {
   const token = mintInternalCapability({
     botId,
@@ -1384,10 +1386,12 @@ function agentsIntegration(
       OMB_WORK_CONTINUITY: store.bot(botId)?.workContinuity && workTurns.has(threadId) ? "1" : "0",
       OMB_OWN_THREAD_CREATION: ownThreadCreation && !modRequest ? "1" : "0",
       OMB_MOD_TURN: modRequest ? "1" : "0",
+      OMB_PAGE_TABS: pageTabs && !modRequest ? "1" : "0",
       OMB_SKILL_AUTHORING_ENABLED: skillAuthoring ? "1" : "0",
       // The shared-computer tools are advertised only while the workspace
       // gate is on; the routes behind them refuse regardless.
       OMB_SHARED_COMPUTERS_ENABLED: sharedComputersEnabled(cfg) ? "1" : "0",
+      OMB_COMPUTER_SELECT: computerSelect ? "1" : "0",
     },
   };
 }
@@ -1448,9 +1452,43 @@ function settleDirectFollowup(generation: string | undefined): void {
 const directTurnBots = new Map<string, BotRecord>();
 let providerFleetReloading = false;
 const turnResources = new TurnResources();
-const sharedComputerControl = new SharedComputerControl(turnResources, () => store.bots.some(bot => botComputerControlSnapshot(bot.id).held));
 const turnResourceOwners = new Map<string, TurnOwner>();
 const turnComputerResources = new Map<string, { owner: TurnOwner; resource: string }>();
+/** When each turn last passed the computer gate, by thread. A turn claims
+ * the host screen on its first computer call and keeps it for the turn, so a
+ * screenshot and its click see the same desktop. A turn that then spends ten
+ * minutes in a shell must not lock everyone else out: once it has been idle
+ * on the screen this long, another claimant may take the screen and the idle
+ * turn's next call is told to observe again. Only reclaimed on demand. */
+const turnComputerLastUse = new Map<string, { generation: string; at: number }>();
+const IDLE_SCREEN_RECLAIM_MS = Math.max(500, Number(compatEnv.OMB_IDLE_SCREEN_RECLAIM_MS) || 90_000);
+function reclaimIdleScreen(resource: string, except?: TurnOwner): void {
+  const now = Date.now();
+  for (const [threadId, entry] of turnComputerResources) {
+    if (entry.resource !== resource || (except && except.threadId === threadId && except.generation === entry.owner.generation)) continue;
+    if (!turnResources.owns(resource, entry.owner)) continue;
+    const last = turnComputerLastUse.get(threadId);
+    const lastAt = last?.generation === entry.owner.generation ? last.at : 0;
+    if (now - lastAt >= IDLE_SCREEN_RECLAIM_MS) turnResources.releaseOne(resource, entry.owner);
+  }
+}
+function screenHolder(resource: string): { bot?: string; task?: string } | undefined {
+  const blocker = turnResources.blocker(resource, { threadId: "", generation: "" });
+  if (!blocker) return undefined;
+  const bot = store.botByThread(blocker.threadId);
+  const task = bot && store.taskByThread(bot.id, blocker.threadId);
+  return bot ? { bot: bot.name, ...(task?.title ? { task: task.title } : {}) } : undefined;
+}
+const sharedComputerControl = new SharedComputerControl(turnResources, {
+  // Only a person's hold on this machine's own screen blocks a share; a hold
+  // on a team Box computer is a different desktop.
+  personHold: () => {
+    const bot = store.bots.find(entry => !inheritedTeamComputer(entry) && computerControl.snapshot(entry.id).held);
+    return bot ? { bot: bot.name } : null;
+  },
+  reclaimIdle: () => reclaimIdleScreen("computer:host"),
+  holder: () => screenHolder("computer:host"),
+});
 const teamComputerTurns = new Map<string, { owner: TurnOwner; computerId: string; botId: string; remoteAgent: boolean }>();
 const settlingResourceOwners = new Map<string, string>();
 
@@ -1469,6 +1507,7 @@ function releaseTurnResources(owner: TurnOwner | undefined): void {
   turnResources.release(owner);
   if (turnResourceOwners.get(owner.threadId)?.generation === owner.generation) turnResourceOwners.delete(owner.threadId);
   if (turnComputerResources.get(owner.threadId)?.owner.generation === owner.generation) turnComputerResources.delete(owner.threadId);
+  if (turnComputerLastUse.get(owner.threadId)?.generation === owner.generation) turnComputerLastUse.delete(owner.threadId);
   const teamTurn = teamComputerTurns.get(owner.threadId);
   if (teamTurn?.owner.generation === owner.generation) {
     stopScreenPoller(teamTurn.botId, owner.threadId);
@@ -2550,6 +2589,15 @@ const smartUiRenders = (botId: string, threadId: string) => !store.taskByThread(
 /** The bot's last reply drew ui, so a follow-up or a button click keeps the skill. */
 const smartUiFollowUp = (threadId: string) =>
   store.activePath(threadId).findLast((m) => m.role === "bot" && m.kind === "text")?.text?.includes(SMART_UI_FENCE) === true;
+// Blank tab: open_tab shows a page the bot wrote beside the chat, so the
+// skill needs a local folder the owner's app can read and a chat that draws.
+const pageTabsAvailable = (bot: BotRecord, threadId: string) => {
+  if (store.taskByThread(bot.id, threadId)?.channelTransport) return false;
+  try { resolveTerminalTarget(store, bot.id, threadId, candidate => Boolean(inheritedTeamComputer(candidate))); return true; } catch { return false; }
+};
+/** Threads whose bot opened a page tab, so "make slide 2 a chart" keeps the skill. */
+const pageTabThreads = new Set<string>();
+const PAGE_TAB_TRIGGER = "blank tab";
 const isHiddenChannelTask = (task: TaskRecord) => isPeerRoomTask(task) || task.channelTransport === "discord";
 const visibleBotTasks = (botId: string) => store.tasks(botId).filter(task => !isHiddenChannelTask(task));
 const visibleThreadBot = (bot: BotRecord): BotRecord => {
@@ -5579,6 +5627,18 @@ async function computerPreviewSurface(bot: BotRecord, threadId?: string) {
 
 /** Discovery is read-only. Starting or creating a configured computer is
  * deferred until a chat tool selects it and the old turn releases its tools. */
+// Whether any computer or browser could be selected for this bot. Cached a
+// minute per bot: the vps/vm probes behind it are too slow for every turn.
+const anyComputerCache = new Map<string, { at: number; any: boolean }>();
+async function anyComputerSelectable(bot: BotRecord): Promise<boolean> {
+  const hit = anyComputerCache.get(bot.id);
+  if (hit && Date.now() - hit.at < 60_000) return hit.any;
+  let any = true;
+  try { any = (await selectableComputers(bot)).some(option => option.available); } catch { any = true; }
+  anyComputerCache.set(bot.id, { at: Date.now(), any });
+  return any;
+}
+
 async function selectableComputers(bot: BotRecord) {
   const caps = registry.get(bot.modelSelection.instanceId)?.adapter.capabilities;
   const off = bot.computer === "off";
@@ -9289,10 +9349,11 @@ async function startTurn(
       const integrations: NonNullable<Parameters<typeof instance.adapter.sendTurn>[0]["integrations"]> = {};
       let browser: Awaited<ReturnType<typeof browserIntegration>> = null;
       const selectedSkills = sharedContext || sharedWork ? [] : selectBundledSkills(
-        smartUiFollowUp(threadId) ? `${providerText}\n${SMART_UI_FENCE}` : providerText,
+        [providerText, ...(smartUiFollowUp(threadId) ? [SMART_UI_FENCE] : []), ...(pageTabThreads.has(threadId) ? [PAGE_TAB_TRIGGER] : [])].join("\n"),
         [
           ...(instance.adapter.capabilities.phoneMcp === true ? ["phoneMcp"] : []),
           ...(smartUiRenders(bot.id, threadId) ? ["smartUi"] : []),
+          ...(pageTabsAvailable(bot, threadId) ? ["pageTabs"] : []),
           ...(skillAuthoring ? ["skillAuthoring"] : []),
           // hosted free installs ship guided starter skills; desktop bots don't get them
           ...(process.env.BOS_STARTER_SKILLS === "1" ? ["starterSkills"] : []),
@@ -9721,7 +9782,11 @@ async function startTurn(
           ? store.activePath(threadId).findLast(message => message.role === "user" && message.kind === "text")
           : userMessage;
         const ownThreadCreation = boundedCoordination && !opts?.coordination && Boolean(origin && !origin.peerAsk);
-        integrations.agents = agentsIntegration(bot.id, threadId, commsDepth, skillAuthoring, dispatchClaimId, opts?.coordination?.id, boundedCoordination, ownThreadCreation, Boolean(opts?.modRequest));
+        // No computer or browser to pick: drop the selection (and its prompt
+        // text) and hide select_computer, rather than show a card that fails.
+        const computerSelect = !computerSelectionTurns.has(threadId) || await anyComputerSelectable(bot);
+        if (!computerSelect && computerSelectionTurns.get(threadId)?.generation === dispatchClaimId) computerSelectionTurns.delete(threadId);
+        integrations.agents = agentsIntegration(bot.id, threadId, commsDepth, skillAuthoring, dispatchClaimId, opts?.coordination?.id, boundedCoordination, ownThreadCreation, Boolean(opts?.modRequest), computerSelect, pageTabsAvailable(bot, threadId));
       }
       if (!sharedWork && instance.adapter.capabilities.hooks === true && hooksEnabled()) {
         integrations.hooks = hooksIntegration(bot.id, threadId, dispatchClaimId);
@@ -17869,6 +17934,36 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
           return json(res, 400, { error: error instanceof Error ? error.message : String(error) });
         }
       }
+      if (method === "POST" && path === "/api/internal/tabs") {
+        // open_tab: a page the bot wrote opens beside this conversation. Only
+        // ids and a folder-relative path go out; the owner's tab reads the
+        // file through the owner-gated workspace-files route.
+        const body = await readInternalBody() as { path?: unknown; title?: unknown } | null;
+        const from = internalSender;
+        const fromThreadId = internalCapability.threadId;
+        if (!connectorThread(from.id, fromThreadId)) return json(res, 403, { error: "source conversation does not belong to sender" });
+        let root: string;
+        try { root = resolveTerminalTarget(store, from.id, fromThreadId, bot => Boolean(inheritedTeamComputer(bot))); }
+        catch (error) { return json(res, 409, { error: `This conversation has no local folder for a tab (${error instanceof Error ? error.message : String(error)}).` }); }
+        let given = String(body?.path ?? "").trim();
+        // an absolute path is spelled the way the filesystem spells the root
+        if (isAbsolute(given)) given = await realpath(given).catch(() => given);
+        given = given.replace(/\\/g, "/");
+        const rootPosix = root.replace(/\\/g, "/");
+        const rel = given.startsWith(rootPosix + "/") ? given.slice(rootPosix.length + 1) : given;
+        if (!/\.html?$/i.test(rel)) return json(res, 400, { error: "open_tab shows .html files only." });
+        try {
+          const found = await resolveInside(root, rel);
+          if (!(await stat(found.real)).isFile()) return json(res, 400, { error: "That path is a folder, not a page." });
+          const title = typeof body?.title === "string" ? body.title.trim().slice(0, 120) : "";
+          broadcast({ kind: "workspace.open", botId: from.id, threadId: fromThreadId, tab: "canvas", ref: found.rel, ...(title ? { title } : {}) });
+          pageTabThreads.add(fromThreadId);
+          return json(res, 200, { path: found.rel });
+        } catch (error) {
+          const status = (error as { status?: number }).status ?? 500;
+          return json(res, status, { error: status === 404 ? `No file at ${rel} in your working folder (${root}). Write it first.` : error instanceof Error ? error.message : String(error) });
+        }
+      }
       if (method === "POST" && path === "/api/internal/routine-requests") {
         const parsed = routineRequestEnvelopeSchema.safeParse(await readInternalBody());
         if (!parsed.success) return json(res, 400, { error: "invalid routine proposal" });
@@ -19322,12 +19417,21 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
             });
           }
           const computer = turnComputerResources.get(internalCapability.threadId);
-          if (!snapshot.held && computer && computer.owner.generation === internalCapability.generation &&
-              !claimTurnResource(computer.owner, computer.resource)) {
-            return json(res, 200, {
-              held: true, helpOpen: false,
-              blockedReason: "Another thread is using this computer. This call was not performed. Pause computer work until that thread finishes, then take a fresh screenshot before acting.",
-            });
+          if (!snapshot.held && computer && computer.owner.generation === internalCapability.generation) {
+            // This machine's own screen: a turn that went quiet on it does
+            // not keep it. VM/VPS desktops keep their whole-turn waits.
+            const host = computer.resource === "computer:host";
+            if (!claimTurnResource(computer.owner, computer.resource) &&
+                !(host && (reclaimIdleScreen(computer.resource, computer.owner), claimTurnResource(computer.owner, computer.resource)))) {
+              const holder = host ? screenHolder(computer.resource) : undefined;
+              return json(res, 200, {
+                held: true, helpOpen: false,
+                blockedReason: host
+                  ? `${holder?.bot ? `${holder.bot}${holder.task ? ` (“${holder.task}”)` : ""} is` : "Another thread or a connected workspace is"} using this computer. This call was not performed. Pause computer work until it finishes, then take a fresh screenshot before acting.`
+                  : "Another thread is using this computer. This call was not performed. Pause computer work until that thread finishes, then take a fresh screenshot before acting.",
+              });
+            }
+            turnComputerLastUse.set(internalCapability.threadId, { generation: internalCapability.generation, at: Date.now() });
           }
           return json(res, 200, { held: snapshot.held, helpOpen: snapshot.helpReason !== null });
         }

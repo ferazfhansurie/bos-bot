@@ -665,6 +665,7 @@ export type UpdateRunState =
 export type ServerFrame =
   | { kind: "page"; botId: string; pageId: string; revision: number; byKind: "human" | "bot"; deleted?: boolean }
   | { kind: "video"; botId: string; videoId: string; revision: number; byKind: "human" | "bot"; deleted?: boolean; render?: import("./video.ts").VideoRender }
+  | { kind: "workspace.open"; botId: string; threadId: string; tab: "canvas"; ref: string; title?: string }
   | ({ kind: "activity" } & import("./activity.ts").ActivityResponse)
   | { kind: "sections"; sections: string[] }
   | { kind: "bot.queued"; queues: BotQueuedMessages }

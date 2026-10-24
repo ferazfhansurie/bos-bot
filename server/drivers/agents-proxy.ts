@@ -56,6 +56,10 @@ const SKILL_AUTHORING_ENABLED = compatEnv.OMB_SKILL_AUTHORING_ENABLED === "1";
 // Opt-in computer sharing (server features.sharedComputers). Off unless the
 // harness says "1", the same way skill authoring is gated above.
 const SHARED_COMPUTERS_ENABLED = compatEnv.OMB_SHARED_COMPUTERS_ENABLED === "1";
+// "0" when the bot has no computer or browser it could select (a client-facing
+// deployment with none configured): select_computer is then not advertised, or
+// the model offers staff a computer prompt that can only fail.
+const COMPUTER_SELECT = compatEnv.OMB_COMPUTER_SELECT !== "0";
 const MAX_CREATED_PER_TURN = 4;
 let createdThisTurn = 0;
 // Same spirit as MAX_CREATED_PER_TURN above and MAX_QUEUED_PER_THREAD in
@@ -467,6 +471,14 @@ const TOOLS = [
       in_minutes: { type: "integer", minimum: 5, maximum: 20160, description: "Minutes from now." },
       at: { type: "string", description: "RFC3339 time with an explicit offset, e.g. 2026-10-21T16:00:00+08:00." },
     }, required: ["why"] },
+  },
+  {
+    name: "open_tab",
+    description: "Show an html page you wrote in a tab beside this chat, so the person sees it live while you talk. Use it when they ask for a new tab, page, deck, presentation, dashboard or doc page (the blank-tab skill says how to write the file). The tab reloads by itself whenever you edit the file, so call this once per page, not after every edit. The file must be an .html inside your working folder.",
+    inputSchema: { type: "object", additionalProperties: false, properties: {
+      path: { type: "string", minLength: 1, maxLength: 1024, description: "The .html file, relative to your working folder (bos-pages/2026-10-24-bos-dashboard-k3f9.html) or absolute inside it." },
+      title: { type: "string", maxLength: 120, description: "Short tab title, e.g. \"bos bot dashboard\"." },
+    }, required: ["path"] },
   },
   {
     name: "ring_owner",
@@ -1114,6 +1126,9 @@ const SHAREABLE_TOOLS = SHARED_COMPUTERS_ENABLED
 const ROOM_ONLY_TOOLS = new Set(["list_room_targets", "coordinate_bots", "list_lead_actions", "report_lead_action", "resolve_lead_action"]);
 const ROOM_REPLACED_TOOLS = new Set(["ask_bot", "delegate_bot", "check_delegation", "wait_delegation", "start_thread", "send_to_thread", "wait_thread"]);
 const COORDINATING = compatEnv.OMB_ROOM_TURN === "1";
+// open_tab only where the harness can show a tab: the owner's own chat with a
+// working folder (direct chats run this same coordinator, rooms never get it).
+const PAGE_TABS = compatEnv.OMB_PAGE_TABS === "1";
 // Pages are the owner's private documents; a room can hold clients.
 const MOD_TOOL_NAMES = new Set(["mods_list", "mod_read", "mod_write", "mod_delete"]);
 const PAGE_TOOL_NAMES = new Set(["pages_list", "page_read", "page_create", "page_write", "page_edit", "page_comment"]);
@@ -1131,11 +1146,12 @@ const AVAILABLE_TOOLS_FOR_TURN = COORDINATING
       } },
     } : tool)
   : SHAREABLE_TOOLS.filter(tool => !ROOM_ONLY_TOOLS.has(tool.name));
+const TURN_TOOLS = AVAILABLE_TOOLS_FOR_TURN.filter(tool => tool.name !== "open_tab" || PAGE_TABS);
 // A mod's bots:ask / apps:call turn reads only; the harness refuses the rest too.
 const MOD_TURN = compatEnv.OMB_MOD_TURN === "1";
-const AVAILABLE_TOOLS = MOD_TURN
-  ? AVAILABLE_TOOLS_FOR_TURN.filter(tool => MOD_REQUEST_AGENT_TOOLS.has(tool.name))
-  : AVAILABLE_TOOLS_FOR_TURN;
+const AVAILABLE_TOOLS = (MOD_TURN
+  ? TURN_TOOLS.filter(tool => MOD_REQUEST_AGENT_TOOLS.has(tool.name))
+  : TURN_TOOLS).filter(tool => COMPUTER_SELECT || tool.name !== "select_computer");
 
 type Json = Record<string, unknown>;
 type RoutineAction = "update" | "pause" | "resume" | "run_now" | "delete";
@@ -1396,6 +1412,13 @@ async function callTool(name: string, args: Json): Promise<{ text: string; isErr
     });
     if (!response.ok) return { text: String(response.body.error ?? `HTTP ${response.status}`), isError: true };
     return { text: `Wake set for ${String(response.body.at)}${response.body.moved ? " (moved out of quiet hours)" : ""}. You'll wake in this conversation then and speak only if it's worth it. It shows in Routines until it fires.` };
+  }
+  if (name === "open_tab") {
+    const parsed = z.object({ path: z.string().trim().min(1).max(1024), title: z.string().trim().max(120).optional() }).strict().safeParse(args);
+    if (!parsed.success) return { text: "open_tab needs path (an .html file in your working folder) and an optional short title.", isError: true };
+    const response = await apiResponse("/api/internal/tabs", { method: "POST", body: JSON.stringify(parsed.data) });
+    if (!response.ok) return { text: String(response.body.error ?? `HTTP ${response.status}`), isError: true };
+    return { text: `Opened ${String(response.body.path)} in a tab beside this chat. It reloads on its own when you edit the file; don't call open_tab again for this page.` };
   }
   if (name === "ring_owner") {
     const parsed = z.object({ reason: z.string().trim().min(1).max(500) }).strict().safeParse(args);

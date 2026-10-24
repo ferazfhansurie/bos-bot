@@ -78,6 +78,7 @@ import { roomMentionPool, roomBotSupportsImages } from "@/lib/room-members";
 import { botControlAvailable, mentionableBots } from "@/lib/remote-bot";
 import { sharedAttachmentError, type SharedComposer } from "./shared-conversation";
 import { serializeThreadRefs, threadTokenFromPaste, threadTokenSpacing } from "@/lib/thread-refs";
+import { COMPOSER_INSERT_EVENT, type ComposerInsertDetail } from "./canvas/canvas";
 import {
   composerSlashTrigger,
   goalTextFromComposer,
@@ -272,6 +273,17 @@ export function Composer({
   const [dismissedSlashAt, setDismissedSlashAt] = useState<number | null>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const mentionListRef = useRef<HTMLDivElement>(null);
+  // the blank tab's starter chips type into this chat
+  useEffect(() => {
+    const onInsert = (event: Event) => {
+      const detail = (event as CustomEvent<ComposerInsertDetail>).detail;
+      if (!detail || group || shared || detail.botId !== bot?.id || (detail.threadId && detail.threadId !== threadId)) return;
+      editText(detail.text);
+      requestAnimationFrame(() => { const el = inputRef.current; if (el) { el.focus(); el.setSelectionRange(detail.text.length, detail.text.length); } });
+    };
+    window.addEventListener(COMPOSER_INSERT_EVENT, onInsert);
+    return () => window.removeEventListener(COMPOSER_INSERT_EVENT, onInsert);
+  }, [bot?.id, threadId, group, shared, editText]);
   // what was typed before the mic went on — partials append after it
   const baseText = useRef("");
 

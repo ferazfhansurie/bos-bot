@@ -46,7 +46,7 @@ export function usePickTool() {
       if (replacing) closeTab(replacing);
       return openTab("terminal", { pane: "bottom", fresh: true });
     }
-    const kind = tool === "page" ? "page" : tool;
+    const kind = tool === "blank" ? "canvas" : tool;
     if (replacing) replaceTab(replacing, kind);
     else openTab(kind, { pane: "right", fresh: kind === "terminal" });
   };
@@ -63,15 +63,20 @@ export function videosReady(): boolean {
   return Boolean(tabKind("video"));
 }
 
+/** Whether the blank tab has registered. */
+export function blankReady(): boolean {
+  return Boolean(tabKind("canvas"));
+}
+
 /** The rows a new tab offers beyond ChatGPT's: changes in a git folder, and
  * the server's browser when this computer has none of its own. */
 export function useNewTabExtras() {
   const { git, browserAvailable, target } = useWorkspace();
   const { state } = useStore();
   const botBrowser = !browserAvailable && serverBrowserAvailable(state.config) && state.config?.features?.browser !== false;
-  // videos, like pages, belong to direct conversations
+  // the blank tab, like pages and videos, belongs to direct conversations
   const direct = !target || !state.groups.some((group) => group.id === target.botId);
-  return { page: pagesReady(), video: videosReady() && direct, changes: git === true, botBrowser };
+  return { blank: blankReady() && direct, changes: git === true, botBrowser };
 }
 
 function NewTabKind({ tab }: TabRenderProps) {

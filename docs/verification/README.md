@@ -58,6 +58,7 @@ Use only mapped, tested commands:
 - [Chat UI, driven headlessly](chat-ui.md)
 - [Output working copies and comments](output-drafts.md)
 - [Document pages, comments, history and bot tools](pages.md)
+- [Blank tab: pages bos writes, follow-ups and present mode](blank-tab.md)
 - [Videos: timeline editor, media, renders and bot tools](videos.md)
 - [Imported voice memos](voice-memos.md)
 - [Exact outbound message review](outbound-reviews.md)

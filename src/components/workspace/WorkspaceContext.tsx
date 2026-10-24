@@ -10,7 +10,7 @@ import { remoteBotHint } from "@/lib/remote-bot";
 import { terminalAvailable, sameTerminalTarget, type TerminalTarget } from "@/lib/terminal";
 import {
   DETACHABLE, bottomVisible, closeTab as closeTabState, focusTab as focusTabState, loadWorkspace, moveTab as moveTabState,
-  openTab as openTabState, replaceTab as replaceTabState, rightVisible, saveWorkspace, setBottomOpen, setFilePath, setLayout, setTabTitle as setTabTitleState, workspaceKey,
+  openTab as openTabState, replaceTab as replaceTabState, rightVisible, saveWorkspace, setBottomOpen, setFilePath, setLayout, setTabTitle as setTabTitleState, showPage, workspaceKey,
   type ThreadWorkspace, type WorkspaceLayout, type WorkspacePane, type WorkspaceTab, type WorkspaceTabKind,
 } from "@/lib/thread-workspace";
 import { sendBrowserCommand } from "@/components/workbench/browser-tabs";
@@ -292,6 +292,24 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     };
   }, [available, run]);
 
+  // a bot's open_tab shows its page beside that conversation, now if it is on
+  // screen, or waiting in its workspace for when you go back to it
+  useEffect(() => {
+    if (!available) return;
+    const onOpen = (event: Event) => {
+      const detail = (event as CustomEvent<{ botId?: unknown; threadId?: unknown; ref?: unknown; title?: unknown }>).detail;
+      if (typeof detail?.botId !== "string" || typeof detail.threadId !== "string" || typeof detail.ref !== "string" || !detail.ref) return;
+      const id = workspaceKey(detail.botId, detail.threadId);
+      const ref = detail.ref, title = typeof detail.title === "string" ? detail.title : undefined;
+      setWorkspaces((all) => {
+        const next = showPage(all[id] ?? loadWorkspace(id), ref, title).state;
+        saveWorkspace(id, next);
+        return { ...all, [id]: next };
+      });
+    };
+    window.addEventListener("bos-workspace-open", onOpen);
+    return () => window.removeEventListener("bos-workspace-open", onOpen);
+  }, [available]);
   // a link opened from another app shows the browser tab; a bot's reveal
   // shows it only in that bot's thread and opens it out of sight elsewhere
   const [browserInBackground, setBrowserInBackground] = useState(false);

@@ -1,5 +1,5 @@
 import {describe,it,expect} from 'vitest';
-import {emptyWorkspace,openTab,replaceTab,sanitizeWorkspace,closeTab,moveTab,rightVisible,bottomVisible} from './thread-workspace';
+import {emptyWorkspace,openTab,replaceTab,sanitizeWorkspace,closeTab,moveTab,rightVisible,bottomVisible,showPage} from './thread-workspace';
 describe('conversation workbench persistence and transitions',()=>{
  it('restores every real kind while rejecting side chats with no thread and unsafe file paths',()=>{
   const restored=sanitizeWorkspace({layout:'split',tabs:[{id:'file',kind:'files',path:'../private'},{id:'side',kind:'sidechat',ref:'thread-1',title:'Side chat'},{id:'orphan',kind:'sidechat'},{id:'page',kind:'page',ref:'page-1',title:'Draft'},{id:'new',kind:'newtab'}],active:{right:'page'}});
@@ -19,5 +19,17 @@ describe('conversation workbench persistence and transitions',()=>{
   state=openTab(state,'terminal',{id:'term',pane:'right'}).state;
   state=moveTab(state,'term','bottom');expect(bottomVisible(state)).toBe(true);expect(rightVisible(state)).toBe(true);
   state=closeTab(state,'term').state;expect(bottomVisible(state)).toBe(false);expect(state.tabs.map(t=>t.id)).toEqual(['files']);
+ });
+ it('shows a page the bot opened: same tab, else the blank or new tab on screen, else a fresh one',()=>{
+  const blank=openTab(emptyWorkspace(),'canvas',{id:'blank'}).state;
+  const filled=showPage(blank,'bos-pages/a.html','deck');
+  expect(filled.id).toBe('blank');expect(filled.state.tabs).toEqual([{id:'blank',kind:'canvas',pane:'right',ref:'bos-pages/a.html',title:'deck'}]);
+  expect(showPage(filled.state,'bos-pages/a.html').id).toBe('blank');
+  const fresh=showPage(filled.state,'bos-pages/b.html');
+  expect(fresh.id).not.toBe('blank');expect(fresh.state.active.right).toBe(fresh.id);
+  const fromNew=showPage(openTab(emptyWorkspace(),'newtab',{id:'new'}).state,'bos-pages/c.html','dash');
+  expect(fromNew.state.tabs.map(t=>[t.kind,t.ref])).toEqual([['canvas','bos-pages/c.html']]);
+  const hidden=showPage({...emptyWorkspace(),layout:'hidden'},'bos-pages/d.html');
+  expect(hidden.state.layout).toBe('split');
  });
 });

@@ -123,13 +123,13 @@ describe("shared computer authority and lifecycle", () => {
 it("shared screen calls respect local turns, human takeover, lease expiry and release", async () => {
   vi.useFakeTimers();
   const resources = new TurnResources(); let held = false;
-  const control = new SharedComputerControl(resources, () => held);
+  const control = new SharedComputerControl(resources, { personHold: () => held ? {} : null });
   const local = { threadId: "local", generation: "first" };
   resources.claim("computer:host", local);
-  expect(() => control.acquire("remote")).toThrow(/in use locally/);
+  expect(() => control.acquire("remote")).toThrow(/Another bot is using this computer/);
   resources.release(local); control.acquire("remote");
   expect(resources.claim("computer:host", local)).toBe(false);
-  held = true; expect(() => control.acquire("remote")).toThrow(/held by a person/);
+  held = true; expect(() => control.acquire("remote")).toThrow(/person at this computer has taken control/);
   held = false; control.acquire("remote");
   await vi.advanceTimersByTimeAsync(40_001);
   expect(resources.claim("computer:host", local)).toBe(true);

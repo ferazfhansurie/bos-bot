@@ -10,8 +10,11 @@ const ID = /^[\w-]{1,128}$/;
 const MAX_LIST = 2000, MAX_WALK = 20_000, WALK_MS = 2000, MAX_READ = 256 * 1024;
 const MAX_RAW = 64 * 1024 * 1024, MAX_DIFF = 2 * 1024 * 1024, MAX_UNTRACKED = 200, MAX_UNTRACKED_READ = 64 * 1024;
 const GIT_MS = 5000;
-/** Only media the viewer renders inline is served raw, each with its real type. */
+/** Only media the viewer renders inline is served raw, each with its real
+ * type. Html goes out as plain text: the blank tab renders it in its own
+ * sandboxed frame, never as a page from this origin. */
 const RAW_TYPES: Record<string, string> = {
+  ".html":"text/plain; charset=utf-8", ".htm":"text/plain; charset=utf-8",
   ".png":"image/png", ".jpg":"image/jpeg", ".jpeg":"image/jpeg", ".gif":"image/gif", ".webp":"image/webp", ".avif":"image/avif",
   ".bmp":"image/bmp", ".ico":"image/x-icon", ".svg":"image/svg+xml", ".pdf":"application/pdf",
   ".mp4":"video/mp4", ".m4v":"video/x-m4v", ".webm":"video/webm", ".mov":"video/quicktime",
@@ -39,7 +42,7 @@ function fsStatus(e: unknown): number {
   return code === "ENOENT" || code === "ENOTDIR" ? 404 : code === "EACCES" || code === "EPERM" ? 403 : 500;
 }
 /** Validate a relative posix path, then resolve it and refuse anything whose realpath leaves the root. */
-async function resolveInside(root: string, rel: string): Promise<{real: string; rel: string}> {
+export async function resolveInside(root: string, rel: string): Promise<{real: string; rel: string}> {
   if (rel.includes("\0") || rel.startsWith("/") || /^[a-z]:/i.test(rel) || rel.split(/[\\/]/).includes("..")) fail(400, "Invalid path");
   const clean = rel.split("/").filter(s => s && s !== ".").join("/");
   let real: string;

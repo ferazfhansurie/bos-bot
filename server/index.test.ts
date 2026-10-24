@@ -1050,6 +1050,9 @@ beforeAll(async () => {
       // Production uses 15s. Keep the real timer path while making the
       // browser-visible heartbeat assertion fast and deterministic.
       OMB_SSE_HEARTBEAT_MS: "50",
+      // Production gives a quiet turn 90s before a shared job may take the
+      // screen; the same reclaim path, one second here.
+      OMB_IDLE_SCREEN_RECLAIM_MS: "1000",
       FAKE_CLAUDE_MODE: "hang",
       FAKE_CLAUDE_DUMP: fakeClaudeDump,
       // the one-shot text helper fails by default (its reply file is
@@ -7018,6 +7021,57 @@ describe("harness HTTP API", () => {
 
     await api("PATCH", "/api/config", { features: { skillAuthoring: true, showToolCalls: true } });
   });
+
+  // After the config-file assertions above: this test writes features.sharedComputers.
+  it.skipIf(process.platform !== "darwin")("a quiet local turn yields this screen to a shared job, refusals name the holder, and taking control ends the job", async () => {
+    const descriptorDir = join(home, "Library", "Application Support", "BOS Bot");
+    mkdirSync(descriptorDir, { recursive: true });
+    const descriptor = join(descriptorDir, "cua-connection.json");
+    writeFileSync(descriptor, JSON.stringify({ mcpCommand: process.execPath, mcpArgs: ["--version"] }), { mode: 0o600 });
+    expect((await api("PATCH", "/api/config", { features: { sharedComputers: true } })).status).toBe(200);
+    const bot = (await api("POST", "/api/bots", { name: "Screen holder", modelSelection: { instanceId: "claude", model: "claude-sonnet-5" } })).body.bot;
+    const lease = randomUUID();
+    const desktop = (action: string) => api("POST", "/api/desktop/shared-computer-control", { id: lease, action });
+    try {
+      expect((await api("PATCH", `/api/bots/${bot.id}`, { computer: "local", browser: false })).status).toBe(200);
+      expect((await api("PATCH", `/api/bots/${bot.id}/tasks/${bot.threadId}`, { title: "Blank tab", surface: "local" })).status).toBe(200);
+      rmSync(fakeClaudeDump, { force: true });
+      expect((await api("POST", `/api/bots/${bot.id}/messages`, { text: "screen fixture", threadId: bot.threadId })).status).toBe(202);
+      const dump = await readJsonFileWhenReady<{ mcpConfig: { mcpServers: Record<string, { env?: Record<string, string> }> } }>(fakeClaudeDump);
+      const control = dump.mcpConfig.mcpServers.computer.env!;
+      const gate = async () => (await fetch(control.OMB_CONTROL_URL, { headers: { authorization: `Bearer ${control.OMB_CONTROL_TOKEN}` } })).json();
+      // The turn's first screen call claims the screen; a shared job right
+      // after is refused with the bot and task named, never "a person".
+      expect(await gate()).toMatchObject({ held: false });
+      const busy = await desktop("acquire");
+      expect(busy.status).toBe(409);
+      expect(busy.body.error).toMatch(/^Screen holder \(“Blank tab”\) is using this computer's screen/);
+      // Quiet past the reclaim window: the shared job takes it, and the
+      // turn's next screen call is refused instead of acting under it.
+      await new Promise(resolve => setTimeout(resolve, 1_200));
+      expect((await desktop("acquire")).status).toBe(200);
+      expect((await desktop("renew")).status).toBe(200);
+      const refused = await gate();
+      expect(refused.held).toBe(true);
+      expect(refused.blockedReason).toMatch(/connected workspace is using this computer/);
+      // The person takes control mid-job: the next heartbeat fails, which is
+      // what aborts the desktop job, and the screen is free of the lease.
+      expect((await api("POST", `/api/bots/${bot.id}/computer/control`, { action: "take" })).body.held).toBe(true);
+      const cut = await desktop("renew");
+      expect(cut.status).toBe(409);
+      expect(cut.body.error).toMatch(/person at this computer has taken control/);
+      expect((await desktop("acquire")).status).toBe(409);
+      expect((await api("POST", `/api/bots/${bot.id}/computer/control`, { action: "release" })).body.held).toBe(false);
+      expect(await gate()).toMatchObject({ held: false });
+    } finally {
+      await desktop("release");
+      await api("POST", `/api/bots/${bot.id}/interrupt`, { threadId: bot.threadId });
+      await expect.poll(async () => (await api("GET", "/api/bots?messages=0")).body.bots.find((b: { id: string }) => b.id === bot.id)?.busy, { timeout: 10000 }).toBe(false);
+      await api("DELETE", `/api/bots/${bot.id}`);
+      await api("PATCH", "/api/config", { features: { sharedComputers: false } });
+      rmSync(descriptor, { force: true });
+    }
+  }, 30_000);
 
   it("refuses to delete a bot while it owns an active channel turn", async () => {
     const bot = (await api("POST", "/api/bots", {

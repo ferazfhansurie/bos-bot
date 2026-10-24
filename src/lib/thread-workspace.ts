@@ -8,7 +8,7 @@
  * document tab, rendered by whatever registered the "page" kind (see
  * src/components/workbench/registry.ts). video: a video editing timeline,
  * registered by src/components/videos. */
-export type WorkspaceTabKind = "browser" | "terminal" | "files" | "changes" | "bot-browser" | "newtab" | "sidechat" | "page" | "video";
+export type WorkspaceTabKind = "browser" | "terminal" | "files" | "changes" | "bot-browser" | "newtab" | "sidechat" | "page" | "video" | "canvas";
 export type WorkspacePane = "right" | "bottom";
 /** hidden: chat only. split: chat beside the right panel. full: the right panel covers the chat. */
 export type WorkspaceLayout = "hidden" | "split" | "full";
@@ -33,7 +33,7 @@ export interface ThreadWorkspace {
 }
 
 const KEY_PREFIX = "bos.thread-workspace.v2:";
-const KINDS: readonly WorkspaceTabKind[] = ["browser", "terminal", "files", "changes", "bot-browser", "newtab", "sidechat", "page", "video"];
+const KINDS: readonly WorkspaceTabKind[] = ["browser", "terminal", "files", "changes", "bot-browser", "newtab", "sidechat", "page", "video", "canvas"];
 /** Kinds that exist at most once per thread; opening one again focuses it. */
 const SINGLE: ReadonlySet<WorkspaceTabKind> = new Set(["browser", "files", "changes", "bot-browser"]);
 const MAX_TABS = 16;
@@ -42,7 +42,7 @@ export const LAYOUT_CYCLE: readonly WorkspaceLayout[] = ["split", "full", "hidde
 
 export const TAB_LABEL: Record<WorkspaceTabKind, string> = {
   browser: "browser", terminal: "terminal", files: "files", changes: "changes", "bot-browser": "browser",
-  newtab: "New tab", sidechat: "Side chat", page: "Untitled page", video: "Video",
+  newtab: "New tab", sidechat: "Side chat", page: "Untitled page", video: "Video", canvas: "Blank tab",
 };
 
 /** Tab kinds that can move into a window of their own. The browser is a
@@ -220,6 +220,24 @@ export function cycleLayout(state: ThreadWorkspace): ThreadWorkspace {
   const at = LAYOUT_CYCLE.indexOf(state.layout);
   const layout = state.layout === "hidden" ? "split" : LAYOUT_CYCLE[(at + 1) % LAYOUT_CYCLE.length]!;
   return { ...state, layout };
+}
+
+/** A page the bot opened (open_tab): the tab already showing it, else the
+ * blank or new tab on screen, else a fresh canvas tab on the right. */
+export function showPage(state: ThreadWorkspace, ref: string, title?: string): { state: ThreadWorkspace; id: string } {
+  const named = (tab: WorkspaceTab) => (title ? { ...tab, title: title.slice(0, 120) } : tab);
+  const same = state.tabs.find((tab) => tab.kind === "canvas" && tab.ref === ref);
+  if (same) return { state: focusTab({ ...state, tabs: state.tabs.map((tab) => (tab.id === same.id ? named(tab) : tab)) }, same.id), id: same.id };
+  const shown = (["right", "bottom"] as const)
+    .filter((pane) => (pane === "right" ? state.layout !== "hidden" : state.bottomOpen))
+    .map((pane) => state.tabs.find((tab) => tab.id === state.active[pane]))
+    .find((tab) => tab && ((tab.kind === "canvas" && !tab.ref) || tab.kind === "newtab"));
+  const blank = shown ?? state.tabs.find((tab) => tab.kind === "canvas" && !tab.ref);
+  if (blank?.kind === "canvas") {
+    return { state: focusTab({ ...state, tabs: state.tabs.map((tab) => (tab.id === blank.id ? named({ ...tab, ref }) : tab)) }, blank.id), id: blank.id };
+  }
+  if (blank) return replaceTab(state, blank.id, "canvas", { ref, title });
+  return openTab(state, "canvas", { pane: "right", ref, title });
 }
 
 export function setLayout(state: ThreadWorkspace, layout: WorkspaceLayout): ThreadWorkspace {
