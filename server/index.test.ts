@@ -7039,7 +7039,7 @@ describe("harness HTTP API", () => {
       expect((await api("POST", `/api/bots/${bot.id}/messages`, { text: "screen fixture", threadId: bot.threadId })).status).toBe(202);
       const dump = await readJsonFileWhenReady<{ mcpConfig: { mcpServers: Record<string, { env?: Record<string, string> }> } }>(fakeClaudeDump);
       const control = dump.mcpConfig.mcpServers.computer.env!;
-      const gate = async () => (await fetch(control.OMB_CONTROL_URL, { headers: { authorization: `Bearer ${control.OMB_CONTROL_TOKEN}` } })).json();
+      const gate = async () => (await fetch(control.OMB_CONTROL_URL, { headers: { authorization: `Bearer ${control.OMB_CONTROL_TOKEN}` } })).json() as { held?: boolean; blockedReason?: string };
       // The turn's first screen call claims the screen; a shared job right
       // after is refused with the bot and task named, never "a person".
       expect(await gate()).toMatchObject({ held: false });
