@@ -14,6 +14,7 @@
 // attached only after authenticating the phone and authorizing its route.
 import { request as httpRequest, type IncomingMessage, type ServerResponse } from "node:http";
 import type { Duplex } from "node:stream";
+import { gzip } from "node:zlib";
 
 import { bearerToken } from "./devices.ts";
 import {
@@ -157,6 +158,19 @@ const PRIVATE_RESPONSE_HEADERS = {
  * is enabled. Never let chat JSON, images, audio, pairing responses, or even
  * authorization failures become shared cache entries. These values override
  * anything the loopback harness supplied. */
+const GZIP_MIN_BYTES = 16 * 1024;
+
+/** Whether a client's accept-encoding allows gzip (q=0 refuses it). */
+export function acceptsGzip(header: string | string[] | undefined): boolean {
+  const value = Array.isArray(header) ? header.join(",") : header ?? "";
+  return value.split(",").some((part) => {
+    const [name, ...params] = part.trim().toLowerCase().split(";");
+    if (name !== "gzip" && name !== "*") return false;
+    const q = params.map((p) => p.trim()).find((p) => p.startsWith("q="));
+    return !q || Number(q.slice(2)) > 0;
+  });
+}
+
 const privateHeaders = (headers: IncomingMessage["headers"] = {}): IncomingMessage["headers"] => {
   const out: IncomingMessage["headers"] = {};
   for (const [name, value] of Object.entries(headers)) {
@@ -663,11 +677,23 @@ export function createProxyHandler(options: ProxyOptions) {
           delete headers["content-length"];
           delete headers["content-encoding"];
           delete headers["transfer-encoding"];
-          res.writeHead(status, {
-            ...privateHeaders(headers),
-            "content-length": Buffer.byteLength(text),
-          });
-          res.end(text);
+          const body = Buffer.from(text, "utf8");
+          const send = (bytes: Buffer, encoded: boolean) => {
+            if (res.destroyed) return;
+            res.writeHead(status, {
+              ...privateHeaders(headers),
+              ...(encoded ? { "content-encoding": "gzip", vary: "accept-encoding" } : {}),
+              "content-length": bytes.length,
+            });
+            res.end(bytes);
+          };
+          // The phone's first snapshot is ~1.7MB of JSON for a busy desktop
+          // and over the hosted tunnel it took ~50s to arrive (firaz's
+          // iPhone, 2026-10-25), with the chat frozen on stale state the
+          // whole time. JSON compresses about 5x. URLSession and fetch both
+          // ask for gzip and undo it themselves.
+          if (body.length < GZIP_MIN_BYTES || !acceptsGzip(req.headers["accept-encoding"])) return send(body, false);
+          gzip(body, { level: 4 }, (error, zipped) => send(error ? body : zipped, !error));
         }
       },
     );

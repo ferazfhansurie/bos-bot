@@ -4,7 +4,7 @@
   "bosUpdatePolicy": {
     "mode": "offline"
   },
-  "version": "2.2.0",
+  "version": "2.2.1",
   "description": "Open-source, local-first AI workspace for people and bots, with desktop and mobile clients.",
   "homepage": "https://github.com/ferazfhansurie/bos-bot",
   "repository": {

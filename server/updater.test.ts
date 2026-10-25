@@ -3,11 +3,11 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { parse as parseYaml } from "yaml";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
-  SERVER_PORT_FAMILIES, UpdateCoordinator, appDigests, isRunningBuild, classifyLaunchdJobs, createDarwinExecutor, discoverCandidate, jobBlocks, pendingUpdates, preflightVerdict, readCheckpoint, resumePrompt,
+  SERVER_PORT_FAMILIES, UpdateCoordinator, appDigests, isRunningBuild, classifyLaunchdJobs, createDarwinExecutor, discoverCandidate, squirrelInstallPending, jobBlocks, pendingUpdates, preflightVerdict, readCheckpoint, resumePrompt,
   updaterPlist, writeCandidateManifest, type ApplyPlan, type BusyTurn, type CheckpointTurn, type DarwinExecutorOptions, type LaunchdJobDetails, type NoDowngradeOptions, type UpdateEvent, type UpdateExecutor, type UpdateResult, type UpdaterHooks, type UpdaterHost,
 } from "./updater.ts";
 
@@ -678,6 +678,35 @@ describe("updater coordinator", () => {
     await again.boot();
     expect(h.resumed).toHaveLength(2);
     expect((await again.status()).lastResult).toMatchObject({ state: "done" });
+  });
+
+  it("finds a Squirrel.Mac install only while its update bundle is still on disk", () => {
+    const caches = join(root, "Caches");
+    writeFileSync(join(h.live, "Contents", "Info.plist"), "<plist><dict><key>CFBundleIdentifier</key>\n<string>ai.bos.bot</string></dict></plist>");
+    expect(squirrelInstallPending(h.live, caches)).toBeNull();
+    const update = fakeApp(join(caches, "ai.bos.bot.ShipIt", "update.abc"), "BOS Bot.app", "squirrel");
+    const state = (target: string) => writeFileSync(join(caches, "ai.bos.bot.ShipIt", "ShipItState.plist"),
+      JSON.stringify({ launchAfterInstallation: false, targetBundleURL: pathToFileURL(target).href + "/", updateBundleURL: pathToFileURL(update).href + "/", useUpdateBundleName: true }));
+    state(h.live);
+    expect(squirrelInstallPending(h.live, caches)).toEqual({ bundle: update });
+    state(join(root, "Elsewhere", "BOS Bot.app"));
+    expect(squirrelInstallPending(h.live, caches)).toBeNull();
+    state(h.live);
+    rmSync(update, { recursive: true });
+    expect(squirrelInstallPending(h.live, caches)).toBeNull();
+  });
+
+  it("lets a downloaded Squirrel update install during a restart and refuses a swap that would race it", async () => {
+    const pending = () => ({ bundle: "/tmp/update.abc/BOS Bot.app" });
+    const { updateId, notes } = await h.make({}, { nativeInstallPending: pending }).restart({ force: true });
+    await h.settle();
+    expect(notes).toEqual(expect.arrayContaining([expect.stringMatching(/installs during this restart/)]));
+    const plan = JSON.parse(readFileSync(join(h.dataDir, "updates", updateId, "plan.json"), "utf8")) as ApplyPlan;
+    expect(plan.mode).toBe("restart");
+    expect(plan.old).toBeNull();
+    stage(h);
+    await expect(h.make({}, { nativeInstallPending: pending }).apply({ force: true })).rejects.toMatchObject({ status: 409, message: /restart BOS first/ });
+    expect(h.bootstraps).toHaveLength(1);
   });
 
   it("marks a turn resumed before dispatching so a crash cannot replay it", async () => {

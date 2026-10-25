@@ -171,6 +171,12 @@ final class Session: ObservableObject {
         ConnectionTrace.record("satellite=\(isSatellite) generation=\(streamGeneration) \(event)")
     }
     @Published private(set) var isRefreshing = false
+    /// When the stream last delivered a frame, pings included.
+    private var lastFrameAt = Date.distantPast
+    /// When `run()` last dialled the stream.
+    private var streamOpenedAt = Date.distantPast
+    /// A hello arrived resumed:false and its snapshot is still loading.
+    private var hydrating = false
     /// Transient, user-facing failures from an action they just took.
     @Published var actionError: String?
     /// One exact message the next opened chat should reveal.
@@ -1159,8 +1165,8 @@ final class Session: ObservableObject {
         }
     }
 
-    /// Pull-to-refresh: reopen the stream, and hold the control open until
-    /// the connection has actually settled one way or the other.
+    /// Pull-to-refresh: make sure this home is current, and hold the control
+    /// open until it has settled one way or the other, or `wait` runs out.
     ///
     /// `connect()` returns the moment the task is spawned, so a `refreshable`
     /// that only calls it snaps the spinner shut before a single byte has
@@ -1168,9 +1174,18 @@ final class Session: ObservableObject {
     /// occasion it exists for. Waiting for `status` to leave `.connecting`
     /// makes the spinner mean what it appears to mean; the deadline is there
     /// so a network that never answers still gives the control back.
-    func refresh() async {
+    ///
+    /// A pull used to tear the stream down every time. On firaz's phone over
+    /// the hosted tunnel (2026-10-25) that was the whole 9–13s: the launch
+    /// stream was still hydrating, the pull killed it before the hello cursor
+    /// was saved, the new stream started cold and hydrated again, and so did
+    /// the next pull. A stream that heard the server within one ping interval
+    /// is already current, and one still handshaking is the refresh already
+    /// under way; neither is restarted.
+    func refresh(wait: TimeInterval = 10) async {
+        let deadline = Date().addingTimeInterval(wait)
         if isRefreshing {
-            while isRefreshing, !Task.isCancelled {
+            while isRefreshing, !Task.isCancelled, Date() < deadline {
                 try? await Task.sleep(for: .milliseconds(80))
             }
             return
@@ -1178,26 +1193,76 @@ final class Session: ObservableObject {
         guard client != nil || restorePending else { return }
         isRefreshing = true
         defer { isRefreshing = false }
-        // Publish before spawning run(): otherwise a previously live home
-        // can make the refresh return before its new handshake even starts.
-        stopStream()
-        status = .connecting
-        connect()
-        let deadline = Date().addingTimeInterval(10)
+        if streamTask != nil, status == .live, Date().timeIntervalSince(lastFrameAt) < Self.currentStreamWindow {
+#if DEBUG
+            PerfProbe.mark("refresh.kept", "satellite=\(isSatellite) route=\(perfRoute) quiet=\(Int(Date().timeIntervalSince(lastFrameAt) * 1000))ms")
+#endif
+        } else if streamTask != nil, status == .connecting,
+                  hydrating || Date().timeIntervalSince(streamOpenedAt) < Self.dialPatience {
+#if DEBUG
+            PerfProbe.mark("refresh.joined", "satellite=\(isSatellite) route=\(perfRoute) hydrating=\(hydrating)")
+#endif
+        } else {
+            // Publish before spawning run(): otherwise a previously live home
+            // can make the refresh return before its new handshake even starts.
+            stopStream()
+            status = .connecting
+            connect()
+        }
         while status == .connecting, !Task.isCancelled, Date() < deadline {
             try? await Task.sleep(for: .milliseconds(80))
         }
     }
 
-    /// The roster contains every paired home. Check them concurrently so a
-    /// sleeping secondary computer cannot leave stale faces after a pull.
+    /// The server pings every 15s, so a live stream quiet for longer than
+    /// this may be a dead socket the watchdog has not caught yet.
+    private static let currentStreamWindow: TimeInterval = 20
+    /// A dial with no hello after this long is likely stuck; a pull redials.
+    private static let dialPatience: TimeInterval = 8
+    /// How long a pull holds the spinner for this computer. Past it the pull
+    /// ends and the stream keeps going; the banner still says connecting.
+    static let pullWait: TimeInterval = 2.5
+
+    /// The roster contains every paired home. The pull waits on this computer
+    /// only, and only up to `pullWait`: a secondary computer that is asleep
+    /// or slow refreshes in the background instead of holding the spinner
+    /// (it held it for the full 10s deadline while that home was down).
     func refreshHomes() async {
         if !isSatellite { syncSatellites() }
-        let homes = [self] + satellites
-        await withTaskGroup(of: Void.self) { group in
-            for home in homes { group.addTask { await home.refresh() } }
+        for (index, satellite) in satellites.enumerated() {
+            Task { @MainActor in
+#if DEBUG
+                let began = Date()
+#endif
+                await satellite.refresh()
+#if DEBUG
+                PerfProbe.mark("home.refreshed", "home=\(index + 1) route=\(satellite.perfRoute) status=\(satellite.status) took=\(Int(Date().timeIntervalSince(began) * 1000))ms")
+#endif
+            }
         }
+#if DEBUG
+        let began = Date()
+#endif
+        await refresh(wait: Self.pullWait)
+#if DEBUG
+        PerfProbe.mark("home.refreshed", "home=0 route=\(perfRoute) status=\(status) took=\(Int(Date().timeIntervalSince(began) * 1000))ms")
+#endif
     }
+
+    /// The kind of route this home dials, for the connection trace. The host
+    /// stays out: the trace is a file a person may share.
+    private var traceRoute: String {
+        guard let endpoint = rotation.currentEndpoint ?? connection?.activeEndpoint else { return "legacy" }
+        return "\(endpoint.kind)"
+    }
+
+#if DEBUG
+    /// The kind and host of the route this home dials, for PerfProbe only.
+    var perfRoute: String {
+        guard let endpoint = rotation.currentEndpoint ?? connection?.activeEndpoint else { return "legacy" }
+        return "\(endpoint.kind)@\(endpoint.host)"
+    }
+#endif
 
     func removedRemoteBotIDs() async throws -> Set<String> {
         guard let client else { throw APIError.transport("Computer is offline") }
@@ -1207,16 +1272,21 @@ final class Session: ObservableObject {
     /// `expectingActor`: the last answer named this person, so ask for
     /// their contacts and rooms beside `me` instead of after it — one round
     /// trip, not two. A `me` without an actor still discards them unread.
-    func sharedRoster(expectingActor: Bool = false) async throws -> (SharedMe, [SharedContact], [SharedRoomSummary]) {
+    ///
+    /// `withContacts: false` skips the contacts list and answers nil for it.
+    /// It carries every face as inline base64 (~445KB on firaz's home), and
+    /// fetching it every 3s starved the stream on a ~100KB/s hosted tunnel.
+    func sharedRoster(expectingActor: Bool = false, withContacts: Bool = true) async throws -> (SharedMe, [SharedContact]?, [SharedRoomSummary]) {
         guard let client else { throw APIError.transport("Computer is offline") }
+        func contacts() async throws -> [SharedContact]? { withContacts ? try await client.sharedContacts() : nil }
         guard expectingActor else {
             let me = try await client.sharedMe()
             guard me.actorId != nil else { return (me, [], []) }
-            async let contacts = client.sharedContacts()
+            async let contacts = contacts()
             async let rooms = client.sharedRooms()
             return try await (me, contacts, rooms)
         }
-        async let contacts = client.sharedContacts()
+        async let contacts = contacts()
         async let rooms = client.sharedRooms()
         let me = try await client.sharedMe()
         guard me.actorId != nil else { return (me, [], []) }
@@ -1800,9 +1870,11 @@ final class Session: ObservableObject {
                 ? Task { try await client.fleetForHydration(messages: Self.hydrationMessages) } : nil
             defer { coldSnapshot?.cancel() }
 #if DEBUG
-            PerfProbe.mark("stream.open", state.cursor == nil ? "cold" : "cursor")
+            PerfProbe.mark("stream.open", "\(state.cursor == nil ? "cold" : "cursor") satellite=\(isSatellite) route=\(perfRoute)")
 #endif
             log.info("opening stream, cursor=\(self.state.cursor ?? "none", privacy: .public)")
+            traceConnection("stream open \(state.cursor == nil ? "cold" : "cursor") route=\(traceRoute)")
+            streamOpenedAt = Date()
             do {
                 // The query is fixed when the connection opens, so changing
                 // it means a new connection — `restartStream()` cancels this
@@ -1819,6 +1891,7 @@ final class Session: ObservableObject {
                     if Task.isCancelled { return }
                     if await stopForIdentity() { return }
                     reconnectDelay = 0
+                    lastFrameAt = Date()
                     if Date().timeIntervalSince(lastFrameTrace) > 5 {
                         lastFrameTrace = Date()
                         traceConnection("frame received")
@@ -1838,7 +1911,7 @@ final class Session: ObservableObject {
                         mascotReplayCutoff = cursor.split(separator: ":").last.flatMap { Int($0) }
                         traceConnection("hello resumed=\(resumed)")
 #if DEBUG
-                        PerfProbe.mark("hello", "resumed=\(resumed)")
+                        PerfProbe.mark("hello", "resumed=\(resumed) satellite=\(isSatellite) route=\(perfRoute)")
 #endif
                         log.info("stream live, resumed=\(resumed, privacy: .public)")
                         // false means the server could not replay the gap —
@@ -1847,13 +1920,15 @@ final class Session: ObservableObject {
                         // the request dies halfway through replay/hydration,
                         // reconnecting must still ask for the missing gap.
                         if !resumed {
+                            hydrating = true
+                            defer { hydrating = false }
                             try await hydrate(using: client, prefetched: coldSnapshot, hello: cursor)
                             try Task.checkCancellation()
                             state.resetCursor(cursor)
                         }
                         status = .live
 #if DEBUG
-                        PerfProbe.mark("status.live")
+                        PerfProbe.mark("status.live", "satellite=\(isSatellite) route=\(perfRoute)")
 #endif
                         // The next cold launch draws this roster at once,
                         // even if this computer is down by then.
@@ -1887,6 +1962,7 @@ final class Session: ObservableObject {
                 flushFrames()
                 // the stream ended without an error — the harness went away
                 log.notice("stream ended without an error")
+                traceConnection("stream ended cleanly route=\(traceRoute)")
                 status = .offline(failureMessage(for: URLError(.networkConnectionLost)))
             } catch let error as APIError where error.isUnauthorized {
                 if Task.isCancelled { return }
@@ -1904,6 +1980,9 @@ final class Session: ObservableObject {
                 if await stopForIdentity() { return }
                 flushFrames()
                 traceConnection("stream error domain=\((error as NSError).domain) code=\((error as NSError).code)")
+#if DEBUG
+                PerfProbe.mark("stream.error", "satellite=\(isSatellite) route=\(perfRoute) code=\((error as NSError).code)")
+#endif
                 log.error("stream failed: \(error.localizedDescription, privacy: .public)")
                 status = .offline(failureMessage(for: error))
             }
@@ -2058,6 +2137,9 @@ final class Session: ObservableObject {
             // A snapshot fetched while the stream dialed is good only if it
             // already holds everything up to the hello cursor; the frames
             // after it fold on top, exactly as after a fetch made now.
+            // Timed from here so a prefetch still in flight at hello counts:
+            // that wait is what holds the stream's frames back.
+            let fetchStarted = Date()
             var early: (fleet: Fleet, waitingThreads: [String: ThreadPage])?
             if attempt == 0, let prefetched, let hello, let fetched = try? await prefetched.value,
                fetched.fleet.covers(hello: hello) {
@@ -2068,6 +2150,8 @@ final class Session: ObservableObject {
 #endif
             let snapshot: (fleet: Fleet, waitingThreads: [String: ThreadPage])
             if let early { snapshot = early } else { snapshot = try await client.fleetForHydration(messages: Self.hydrationMessages) }
+            traceConnection("hydrate fetch \(early == nil ? "fetched" : "prefetched") ms=\(Int(Date().timeIntervalSince(fetchStarted) * 1000)) route=\(traceRoute)")
+            let applyStarted = Date()
             try Task.checkCancellation()
             guard streamGeneration == generation, self.client?.connection.id == client.connection.id else {
                 throw CancellationError()
@@ -2075,6 +2159,7 @@ final class Session: ObservableObject {
             flushFrames()
             guard state.hydrate(snapshot.fleet, waitingThreads: snapshot.waitingThreads,
                                 ifCursorMatches: expectedCursor) else { continue }
+            traceConnection("hydrate applied ms=\(Int(Date().timeIntervalSince(applyStarted) * 1000))")
 #if DEBUG
             PerfProbe.mark("hydrate.done")
             PerfProbe.scan(snapshot.fleet, source: "hydrate")
@@ -3128,12 +3213,36 @@ final class Session: ObservableObject {
     private var olderInFlight: Set<String> = []
 
     /// A pinned background thread may not be in a fresh fleet snapshot.
+    ///
+    /// Until this page lands the chat holds its reading position and does not
+    /// follow the reply as it streams, so one failed fetch used to leave the
+    /// chat frozen until a pull or a relaunch (firaz's phone on cellular,
+    /// 2026-10-25). A phone just unlocked or between networks often has no
+    /// route for a second: retry like a notification open does, and leave an
+    /// unreachable computer to the connection banner instead of an alert.
     func loadThreadIfNeeded(_ threadId: String) async {
-        guard let client, !state.hasLoadedPage(forThread: threadId) else { return }
-        do {
-            let page = try await client.messages(threadId: threadId, turns: Self.openTurns)
-            state.mergeTail(page, intoThread: threadId)
-        } catch { if !Task.isCancelled { actionError = error.localizedDescription } }
+        guard let client else { return }
+        let connectionID = client.connection.id
+        for attempt in 0..<NotificationOpenPolicy.maxAttempts {
+            guard !state.hasLoadedPage(forThread: threadId) else { return }
+            do {
+                let page = try await client.messages(threadId: threadId, turns: Self.openTurns)
+                guard self.client?.connection.id == connectionID else { return }
+                state.mergeTail(page, intoThread: threadId)
+                return
+            } catch {
+                let failure = NotificationOpenPolicy.failure(for: error)
+                let current = !Task.isCancelled && self.client?.connection.id == connectionID
+                traceConnection("thread load attempt=\(attempt) failure=\(failure)")
+                switch NotificationOpenPolicy.next(after: failure, attempt: attempt, tapIsCurrent: current) {
+                case .drop: return
+                case let .retry(milliseconds): try? await Task.sleep(for: .milliseconds(milliseconds))
+                case .fail:
+                    if failure == .refused { actionError = error.localizedDescription }
+                    return
+                }
+            }
+        }
     }
 
     static let openTurns = 6
@@ -3761,56 +3870,108 @@ final class Session: ObservableObject {
         }
         pendingNotification = nil
         notificationChat = nil
-        // A tap also resumes the app. Start reconnect before capturing its
-        // generation so the foreground callback cannot cancel this navigation.
+        // A tap also resumes the app, so dial now. The open belongs to this
+        // tap and this connection, never to one stream: from the lock screen
+        // the tap lands before the scene turns active, and the foreground
+        // connect() then restarts an offline stream. Holding the open to the
+        // stream generation dropped it there without a word.
         connect()
-        let generation = streamGeneration
         let openID = UUID()
         notificationOpenID = openID
-        do {
-            try await hydrate(using: client)
-            let page: ThreadPage
-            if let messageID = target.messageId {
-                page = try await client.messages(threadId: target.threadId, around: messageID)
-            } else {
-                page = try await client.messages(threadId: target.threadId)
-            }
-            try Task.checkCancellation()
-            guard notificationOpenID == openID, streamGeneration == generation, target.belongs(to: self.client?.connection.id) else { throw CancellationError() }
-            // A tap opens history, it does not answer a request. Settled
-            // approval notifications still lead to their original thread.
-            if requirePending {
-                guard case .pending = target.requestState(in: page.messages) else {
-                    throw APIError.status(code: 410, message: "This request was resolved or is no longer available.")
-                }
-            }
-            let focus = target.requestState(in: page.messages) == .unavailable ? nil : target.messageId
-            state.merge(page, intoThread: target.threadId)
-            if var room = state.rooms.first(where: {
-                $0.threadId == target.threadId || ($0.tasks ?? []).contains(where: { $0.threadId == target.threadId })
-            }) {
-                if room.threadId != target.threadId {
-                    room = try await client.switchTask(groupId: room.id, threadId: target.threadId)
-                    guard notificationOpenID == openID, streamGeneration == generation, target.belongs(to: self.client?.connection.id) else { throw CancellationError() }
-                    state.apply(.room(room))
-                }
-                focusedMessageId = focus
-                present(.room(room))
-                return
-            }
-            guard let selected = state.bot(target.botId)?.projected(forThread: target.threadId) else {
-                throw APIError.status(code: 404, message: "That conversation no longer exists.")
-            }
-            // Selection belongs to this screen, like the thread picker. A
-            // running sibling must not prevent reading the notified thread.
-            focusedMessageId = focus
-            present(.bot(selected))
-        } catch is CancellationError {
-            // A previous connection's response cannot navigate the new account.
-        } catch {
-            guard notificationOpenID == openID, streamGeneration == generation, target.belongs(to: self.client?.connection.id) else { return }
-            actionError = "Couldn't open this notification's exact task. " + error.localizedDescription
+        let connectionID = client.connection.id
+        let tapIsCurrent = {
+            !Task.isCancelled && self.notificationOpenID == openID
+                && self.client?.connection.id == connectionID && target.belongs(to: connectionID)
         }
+        // Land on the thread at once from what the phone already holds; the
+        // fetch below fills it in. A request link waits, because it must
+        // first prove the request is still pending.
+        var presented = false
+        if !requirePending, let chat = cachedNotificationChat(for: target) {
+            focusedMessageId = nil
+            present(chat)
+            presented = true
+            traceConnection("notification open cached thread=\(target.threadId.prefix(8))")
+        }
+        for attempt in 0..<NotificationOpenPolicy.maxAttempts {
+            do {
+                // The stream hydrates on its own; a cached landing only needs
+                // the thread itself.
+                if !presented { try await hydrate(using: client) }
+                let page: ThreadPage
+                if let messageID = target.messageId {
+                    page = try await client.messages(threadId: target.threadId, around: messageID)
+                } else {
+                    page = try await client.messages(threadId: target.threadId)
+                }
+                guard tapIsCurrent() else { return }
+                // A tap opens history, it does not answer a request. Settled
+                // approval notifications still lead to their original thread.
+                if requirePending {
+                    guard case .pending = target.requestState(in: page.messages) else {
+                        throw APIError.status(code: 410, message: "This request was resolved or is no longer available.")
+                    }
+                }
+                let focus = target.requestState(in: page.messages) == .unavailable ? nil : target.messageId
+                state.merge(page, intoThread: target.threadId)
+                if var room = state.rooms.first(where: {
+                    $0.threadId == target.threadId || ($0.tasks ?? []).contains(where: { $0.threadId == target.threadId })
+                }) {
+                    if room.threadId != target.threadId {
+                        room = try await client.switchTask(groupId: room.id, threadId: target.threadId)
+                        guard tapIsCurrent() else { return }
+                        state.apply(.room(room))
+                    }
+                    focusedMessageId = focus
+                    if !presented { present(.room(room)) }
+                    traceConnection("notification open landed room thread=\(target.threadId.prefix(8)) attempt=\(attempt)")
+                    return
+                }
+                if !presented {
+                    guard let selected = state.bot(target.botId)?.projected(forThread: target.threadId) else {
+                        throw APIError.status(code: 404, message: "That conversation no longer exists.")
+                    }
+                    // Selection belongs to this screen, like the thread
+                    // picker. A running sibling must not prevent reading the
+                    // notified thread.
+                    focusedMessageId = focus
+                    present(.bot(selected))
+                } else {
+                    focusedMessageId = focus
+                }
+                traceConnection("notification open landed thread=\(target.threadId.prefix(8)) attempt=\(attempt)")
+                return
+            } catch {
+                let failure = NotificationOpenPolicy.failure(for: error)
+                traceConnection("notification open attempt=\(attempt) failure=\(failure) presented=\(presented)")
+                switch NotificationOpenPolicy.next(after: failure, attempt: attempt, tapIsCurrent: tapIsCurrent()) {
+                case .drop:
+                    return
+                case let .retry(milliseconds):
+                    if milliseconds > 0 { try? await Task.sleep(for: .milliseconds(milliseconds)) }
+                case .fail:
+                    // Already on the thread: the stream fills it in when the
+                    // computer answers, so a failed refresh is not news.
+                    guard !presented, tapIsCurrent() else { return }
+                    actionError = failure == .reconnected
+                        ? "Couldn't open this notification's exact task. Try again once your computer reconnects."
+                        : "Couldn't open this notification's exact task. " + error.localizedDescription
+                    return
+                }
+            }
+        }
+    }
+
+    /// The tapped thread as the phone last saw it, so a tap can land before
+    /// the computer has answered. A room on another task needs the computer
+    /// to switch it, so it waits for the fetch.
+    private func cachedNotificationChat(for target: NotificationTarget) -> Chat? {
+        if let room = state.rooms.first(where: {
+            $0.threadId == target.threadId || ($0.tasks ?? []).contains(where: { $0.threadId == target.threadId })
+        }) {
+            return room.threadId == target.threadId ? .room(room) : nil
+        }
+        return state.bot(target.botId)?.projected(forThread: target.threadId).map { .bot($0) }
     }
 
     func consumeNotificationChat() { notificationChat = nil }

@@ -754,7 +754,15 @@ struct ChatView: View {
             cancelThreadOpen()
         }
         .onChange(of: session.status) { _, status in
-            if status == .live { checkpointDraft(); restoreDraft() }
+            guard status == .live else { return }
+            checkpointDraft(); restoreDraft()
+            // A chat opened while the computer was out of reach is still
+            // waiting on its page; the stream coming back is the moment to
+            // fetch it, so the chat follows the reply again without a pull.
+            let requestedThread = threadId
+            if !session.state.hasLoadedPage(forThread: requestedThread) {
+                Task { await session.loadThreadIfNeeded(requestedThread) }
+            }
         }
         .onChange(of: session.credentialEntryResetGeneration) { _, _ in
             checkpointDraft(); activeScope = nil; restoreDraft()

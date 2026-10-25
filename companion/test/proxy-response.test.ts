@@ -4,10 +4,11 @@
 // about the seam between the two. This file is the opposite: a harness stub
 // that can be made to return exactly the pathological body a test needs,
 // which is the only way to reach the failure branches below.
-import { createServer, type Server, type ServerResponse } from "node:http";
+import { createServer, request as httpRequest, type Server, type ServerResponse } from "node:http";
+import { gunzipSync } from "node:zlib";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { createProxyHandler, proxyHeadersTimeoutMs } from "../src/proxy.ts";
+import { acceptsGzip, createProxyHandler, proxyHeadersTimeoutMs } from "../src/proxy.ts";
 import type { CompanionEndpoint } from "../src/endpoints.ts";
 import { companionStatusSnapshot, type ReportedCompanionStatus } from "../src/status.ts";
 import { scrub } from "../src/wire.ts";
@@ -335,6 +336,55 @@ describe("preparing a harness response for a device", () => {
     expect(text).not.toContain("cursor-value");
     expect(headers.get("cache-control")).toBe("private, no-store");
     expect(headers.get("cloudflare-cdn-cache-control")).toBe("no-store");
+  });
+
+  it("gzips a large JSON snapshot for a device that accepts it", async () => {
+    const bots = Array.from({ length: 400 }, (_, i) => ({ id: `b${i}`, name: "a bot with a long enough name", status: "idle" }));
+    respond = (res) => {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ bots, resumeCursors: { agent: "cursor-value" } }));
+    };
+    const raw = (acceptEncoding?: string) => new Promise<{ headers: Record<string, unknown>; body: Buffer }>((resolve, reject) => {
+      const req = httpRequest({
+        host: "127.0.0.1", port: sidecarPort, path: "/api/bots", method: "GET",
+        headers: { authorization: `Bearer ${TOKEN}`, ...(acceptEncoding ? { "accept-encoding": acceptEncoding } : {}) },
+      }, (res) => {
+        const chunks: Buffer[] = [];
+        res.on("data", (c: Buffer) => chunks.push(c));
+        res.on("end", () => resolve({ headers: res.headers, body: Buffer.concat(chunks) }));
+      });
+      req.on("error", reject);
+      req.end();
+    });
+
+    const zipped = await raw("gzip, deflate");
+    expect(zipped.headers["content-encoding"]).toBe("gzip");
+    expect(zipped.headers["vary"]).toBe("accept-encoding");
+    expect(Number(zipped.headers["content-length"])).toBe(zipped.body.length);
+    const text = gunzipSync(zipped.body).toString("utf8");
+    expect(JSON.parse(text)).toEqual({ bots });
+    expect(zipped.body.length).toBeLessThan(Buffer.byteLength(text) / 3);
+
+    const plain = await raw();
+    expect(plain.headers["content-encoding"]).toBeUndefined();
+    expect(JSON.parse(plain.body.toString("utf8"))).toEqual({ bots });
+
+    respond = (res) => {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ bots: [{ id: "b1" }] }));
+    };
+    const small = await raw("gzip");
+    expect(small.headers["content-encoding"]).toBeUndefined();
+    expect(JSON.parse(small.body.toString("utf8"))).toEqual({ bots: [{ id: "b1" }] });
+  });
+
+  it("reads accept-encoding the way clients write it", () => {
+    expect(acceptsGzip("gzip, deflate, br")).toBe(true);
+    expect(acceptsGzip("br;q=1.0, gzip;q=0.8")).toBe(true);
+    expect(acceptsGzip("*")).toBe(true);
+    expect(acceptsGzip("gzip;q=0")).toBe(false);
+    expect(acceptsGzip("identity")).toBe(false);
+    expect(acceptsGzip(undefined)).toBe(false);
   });
 
   it("overrides cacheable upstream headers on byte responses", async () => {

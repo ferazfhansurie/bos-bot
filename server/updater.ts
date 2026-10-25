@@ -14,7 +14,9 @@
 import { execFile } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from "node:fs";
-import { basename, dirname, join } from "node:path";
+import { homedir } from "node:os";
+import { basename, dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { writeFileAtomic } from "./atomic.ts";
 import { UPDATER_APPLY_SCRIPT } from "./updater-apply-script.ts";
 
@@ -703,8 +705,32 @@ export interface DarwinExecutorOptions {
    * sandbox): skipped with a note. */
   noDowngrade?: NoDowngradeOptions;
   runPreflight?: (path: string) => Promise<string>;
+  /** A Squirrel.Mac install waiting for the app to quit; squirrelInstallPending by default, none in the sandbox. */
+  nativeInstallPending?: () => { bundle: string } | null;
   log?: (line: string) => void;
 }
+
+/** electron-updater's mac backend (Squirrel.Mac) stages a downloaded update
+ * under ~/Library/Caches/<bundle id>.ShipIt, and ShipIt swaps it into the live
+ * bundle the moment the app quits. A restart we run then relaunches the new
+ * version, so the old-tree check failed a healthy app ("relaunched app did not
+ * become healthy" on 2.2.0), and a swap we run would race ShipIt for the same
+ * path. The state file outlives the install; the update bundle it names does
+ * not, so only a bundle still on disk counts as pending. */
+export function squirrelInstallPending(liveApp: string, cachesDir = join(homedir(), "Library", "Caches")): { bundle: string } | null {
+  try {
+    const plist = readFileSync(join(liveApp, "Contents", "Info.plist"), "utf8");
+    const id = /<key>CFBundleIdentifier<\/key>\s*<string>([^<]+)<\/string>/.exec(plist)?.[1]?.trim();
+    if (!id || !/^[A-Za-z0-9.-]+$/.test(id)) return null;
+    const state = JSON.parse(readFileSync(join(cachesDir, `${id}.ShipIt`, "ShipItState.plist"), "utf8")) as { targetBundleURL?: unknown; updateBundleURL?: unknown };
+    if (typeof state.targetBundleURL !== "string" || typeof state.updateBundleURL !== "string") return null;
+    if (resolve(fileURLToPath(state.targetBundleURL)) !== resolve(liveApp)) return null;
+    const bundle = resolve(fileURLToPath(state.updateBundleURL));
+    return existsSync(join(bundle, "Contents")) ? { bundle } : null;
+  } catch { return null; }
+}
+
+const SQUIRREL_PENDING = "a desktop app update is already downloaded and installs the next time BOS quits; restart BOS first, then update";
 
 /** A bundle at an arbitrary path described like a staged candidate: version
  * from its Info.plist, sha = its server tree digest. Sandbox only. */
@@ -836,6 +862,7 @@ export function createDarwinExecutor(host: UpdaterHost, options: DarwinExecutorO
   const log = options.log ?? (() => {});
   const uid = options.uid === undefined ? (process.getuid?.() ?? null) : options.uid;
   const sandbox = options.sandbox;
+  const nativePending = options.nativeInstallPending ?? (() => sandbox ? null : squirrelInstallPending(options.liveApp));
   const candidate = async (): Promise<Candidate | null> => sandbox?.stagedPath
     ? (existsSync(join(sandbox.stagedPath, "Contents")) ? describeStagedApp(sandbox.stagedPath) : null)
     : discoverCandidate(options.dataDir);
@@ -843,6 +870,9 @@ export function createDarwinExecutor(host: UpdaterHost, options: DarwinExecutorO
     candidate,
     async admit(mode) {
       const notes: string[] = await runPreflightGate(options);
+      const pending = nativePending();
+      if (pending && mode === "update") throw err(SQUIRREL_PENDING, 409);
+      if (pending) notes.push("a downloaded desktop app update installs during this restart");
       if (mode === "update") {
         const staged = await candidate();
         if (!staged) throw err("no staged update to apply", 409);
@@ -874,12 +904,15 @@ export function createDarwinExecutor(host: UpdaterHost, options: DarwinExecutorO
       return `no-downgrade: ${verdict?.reason ?? "recorded the live build"}`;
     },
     async execute(plan, dir) {
+      const pending = nativePending();
+      if (pending && plan.mode === "update") throw err(SQUIRREL_PENDING, 409);
       const staged = plan.mode === "update" ? await candidate() : null;
       if (plan.mode === "update" && (!staged || staged.version !== plan.version || staged.sha !== plan.sha)) throw err("staged app changed since it was admitted; re-stage it", 409);
       if (staged && appDigests(staged.appPath).server !== staged.serverSha256) throw err("staged app changed since it was staged; re-stage it", 409);
       const live = options.liveApp;
       let old: ApplyPlan["old"] = null;
-      try { old = appDigests(live); } catch { old = null; }
+      // ShipIt replaces the bundle while the app is down, so a restart can only judge health, not the old tree.
+      if (!pending) { try { old = appDigests(live); } catch { old = null; } }
       const proc = await host.appProcess();
       const script = UPDATER_APPLY_SCRIPT;
       // The job judges the swap again on its own, from its own copy of the guard.

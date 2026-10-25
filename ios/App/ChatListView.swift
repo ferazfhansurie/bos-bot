@@ -40,6 +40,7 @@ struct ChatListView: View {
     @State private var managingThreads: Chat?
     @State private var sharedMe: SharedMe?
     @State private var sharedContacts: [SharedContact] = []
+    @State private var contactsFetchedAt = Date.distantPast
     @State private var sharedRooms: [SharedRoomSummary] = []
     @State private var groupPendingDeletion: SharedRoomSummary?
     @State private var groupDeleteError: String?
@@ -429,9 +430,14 @@ struct ChatListView: View {
             }
             .coordinateSpace(.named("roster"))
             .bosRefreshable {
-                async let shared: Void = refreshShared()
+                // People and rooms land when they land; the spinner waits on
+                // this computer's stream only (they cost 4–14s on the hosted
+                // tunnel when the pull waited on them).
+                Task { await refreshShared() }
                 await session.refreshHomes()
-                await shared
+#if DEBUG
+                PerfProbe.mark("homes.done")
+#endif
 #if DEBUG
                 if ProcessInfo.processInfo.arguments.contains("-pull-refresh-preview") || ProcessInfo.processInfo.arguments.contains("-refresh-ui-test") { try? await Task.sleep(for: .seconds(5)) }
 #endif
@@ -554,7 +560,7 @@ struct ChatListView: View {
                                 Task {
                                     guard (try? await session.setProfilePhoto(nil)) != nil else { return }
                                     personalAvatar = ""
-                                    await refreshShared()
+                                    await refreshShared(forceContacts: true)
                                 }
                             }
                         }
@@ -581,7 +587,7 @@ struct ChatListView: View {
                         guard let encoded = thumbnail.jpegData(compressionQuality: 0.85)?.base64EncodedString(),
                               (try? await session.setProfilePhoto(encoded)) != nil else { return }
                         personalAvatar = encoded
-                        await refreshShared()
+                        await refreshShared(forceContacts: true)
                     }
                 }
             }
@@ -618,10 +624,16 @@ struct ChatListView: View {
         crossBotAttentionThreads(session.state.bots).filter { ["waiting-on-you", "dead", "no-signal"].contains($0.task.activity ?? "") }
     }
 
-    private func refreshShared() async {
+    /// Contacts change rarely and are the one heavy answer here (every face
+    /// inline), so the 3s loop asks for them only this often, when a room
+    /// names someone not on the list, or when `forceContacts` says a face
+    /// just changed. `me` and rooms stay on every pass.
+    private static let contactsInterval: TimeInterval = 60
+
+    private func refreshShared(forceContacts: Bool = false) async {
         let connectionID = session.connection?.id
         guard connectionID != nil else {
-            sharedMe = nil; sharedContacts = []; sharedRooms = []
+            sharedMe = nil; sharedContacts = []; sharedRooms = []; contactsFetchedAt = .distantPast
             return
         }
         do {
@@ -629,15 +641,27 @@ struct ChatListView: View {
             PerfProbe.mark("shared.begin")
             defer { PerfProbe.mark("shared.done") }
 #endif
+            let known = Set(sharedContacts.map(\.id)).union([sharedMe?.actorId].compactMap { $0 })
+            let strangers = sharedRooms.contains { room in room.memberIds.contains { !known.contains($0) } }
+            let withContacts = forceContacts || strangers || sharedContacts.isEmpty
+                || Date().timeIntervalSince(contactsFetchedAt) >= Self.contactsInterval
             // Removed linked bots are independent of the roster, so they no
             // longer wait behind it: a pull was three round trips in a row.
             async let removed = try? session.removedRemoteBotIDs()
-            let (me, contacts, rooms) = try await session.sharedRoster(expectingActor: sharedMe?.actorId != nil)
+            let (me, fetched, rooms) = try await session.sharedRoster(expectingActor: sharedMe?.actorId != nil, withContacts: withContacts)
+#if DEBUG
+            PerfProbe.mark("shared.roster", "contacts=\(fetched.map { String($0.count) } ?? "kept") rooms=\(rooms.count)")
+#endif
             guard session.connection?.id == connectionID else { return }
+            let contacts = fetched ?? sharedContacts
+            if fetched != nil { contactsFetchedAt = Date() }
             sharedMe = me
             sharedContacts = contacts
             sharedRooms = rooms
             if let removed = await removed, session.connection?.id == connectionID { removedOnMain = removed }
+#if DEBUG
+            PerfProbe.mark("shared.removed")
+#endif
             // Faces for push banners are drawn on the main actor; nothing on
             // screen waits for them, and the pull no longer does either.
             NotificationAvatarSync.run(contacts: contacts) { await cacheNotificationAvatars($0) }
@@ -648,7 +672,7 @@ struct ChatListView: View {
             }
         } catch {
             guard session.connection?.id == connectionID else { return }
-            sharedMe = nil; sharedContacts = []; sharedRooms = []
+            sharedMe = nil; sharedContacts = []; sharedRooms = []; contactsFetchedAt = .distantPast
         }
     }
 
