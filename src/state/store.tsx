@@ -202,7 +202,7 @@ export interface Message {
   /** Stable client identity for at-most-once chat POST retries. */
   sendId?: string;
   /** rooms: which member said this (sender attribution). */
-  from?: { botId: string; name: string; color: MausColor };
+  from?: { botId: string; name: string; color: MausColor; person?: { avatar?: string | null } };
   /** a user-role line another bot delivered into this conversation
    * (ask_bot, delegate_bot, start_thread): the words are that bot's, not
    * the person's. Rendered as the peer speaking — see lib/peer-message. */
@@ -522,9 +522,11 @@ export type ProjectUpdatePatch = { name?: string; emoji?: string | null };
  * missing engines never lock, and a remote bot runs on its own machine. */
 export function signInBeforeSend(state: { instances: InstanceInfo[]; bots: Bot[] }, botId?: string): boolean {
   if (botId && state.bots.find((bot) => bot.id === botId)?.remote) return false;
-  const ready = state.instances.some((instance) => instance.snapshot.state === "available" &&
-    (instance.access === "custom" || instance.snapshot.authenticated !== false));
-  return !ready && state.instances.some((instance) => instance.snapshot.state === "available" && instance.snapshot.authenticated === false);
+  // views and test fixtures can render before the first instances load
+  const instances = state.instances ?? [];
+  const ready = instances.some((instance) => instance.snapshot?.state === "available" &&
+    (instance.access === "custom" || instance.snapshot?.authenticated !== false));
+  return !ready && instances.some((instance) => instance.snapshot?.state === "available" && instance.snapshot?.authenticated === false);
 }
 
 export function currentTaskBot(bot: Bot, threadId = bot.threadId): Bot {
@@ -648,7 +650,7 @@ export interface ConfigStatus {
   /** UI language override; "" (or absent) follows the system language. */
   language?: string;
   /** Opt-in flags. Absent means off. */
-  features?: { skillAuthoring: boolean; showToolCalls?: boolean; browser?: boolean; sharedComputers?: boolean; claudeUserMcp?: boolean; marketplacePublisher?: boolean };
+  features?: { skillAuthoring: boolean; autoSkills?: boolean; showToolCalls?: boolean; browser?: boolean; sharedComputers?: boolean; claudeUserMcp?: boolean; marketplacePublisher?: boolean };
   /** First-run progress: whether the welcome tour was finished and which
    * one-time hints were dismissed. Server-owned so it follows the workspace. */
   onboarding?: OnboardingStatus;
@@ -1327,39 +1329,55 @@ export function openNotificationTarget(
   dispatch: (action: Action) => void,
   target: NotificationTarget,
   state: NotificationRoutingState,
-) {
+): boolean {
   // A room's approval/question notification carries the asker bot with the
   // GROUP's thread id; asking the bot to switch to that thread would 404.
   // Open the room itself. Cross-bot routine receipts carry the executing
   // bot but report into the requesting bot's thread: resolve its actual
-  // owner before selecting. An unknown/deleted thread falls back to the bot.
-  const group = state.groups.find(
-    (candidate) =>
-      candidate.threadId === target.threadId ||
-      (candidate.tasks ?? []).some((task) => task.threadId === target.threadId),
-  );
+  // owner before selecting. Multiplayer rooms and DMs (roomId, or a
+  // `shared:` thread) open in the shared view. A thread this client cannot
+  // place opens its bot with a "thread gone" notice, never quietly on
+  // whatever thread the bot had open last.
+  const land = (threadId: string) => {
+    if (target.messageId) dispatch({ type: "focusMessage", threadId, messageId: target.messageId });
+  };
+  const owns = (owner: NotificationThreadOwner) =>
+    owner.threadId === target.threadId || (owner.tasks ?? []).some((task) => task.threadId === target.threadId);
+  const group = (target.threadId ? state.groups.find(owns) : undefined) ??
+    (target.roomId && !target.threadId ? state.groups.find((candidate) => candidate.id === target.roomId) : undefined);
   if (group) {
+    const threadId = target.threadId || group.threadId;
     dispatch({ type: "select", id: group.id });
-    if (group.threadId !== target.threadId) {
-      dispatch({ type: "switchGroupTask", groupId: group.id, threadId: target.threadId });
+    if (group.threadId !== threadId) {
+      dispatch({ type: "switchGroupTask", groupId: group.id, threadId });
     }
-    return;
+    land(threadId);
+    return true;
   }
-  const bot = state.bots.find((candidate) =>
-    candidate.threadId === target.threadId || candidate.tasks?.some((task) => task.threadId === target.threadId)
-  ) ?? state.bots.find((candidate) => candidate.id === target.botId);
-  dispatch({ type: "select", id: bot?.id ?? target.botId });
-  if (!bot) return;
-  const known =
-    bot.threadId === target.threadId ||
-    (bot.tasks ?? []).some((task) => task.threadId === target.threadId);
-  if (known) dispatch({ type: "switchTask", botId: bot.id, threadId: target.threadId });
+  const sharedRoom = target.threadId?.startsWith("shared:") ? target.threadId.slice("shared:".length) : !target.threadId ? target.roomId : undefined;
+  if (sharedRoom) {
+    dispatch({ type: "selectSharedRoom", roomId: sharedRoom });
+    land(`shared:${sharedRoom}`);
+    return true;
+  }
+  const bot = state.bots.find(owns) ?? state.bots.find((candidate) => candidate.id === target.botId);
+  if (!bot || !owns(bot)) {
+    if (bot) dispatch({ type: "select", id: bot.id });
+    dispatch({ type: "notice", notice: { kind: "thread-gone", botName: (bot as { name?: string } | undefined)?.name ?? null } });
+    return false;
+  }
+  dispatch({ type: "select", id: bot.id });
+  dispatch({ type: "switchTask", botId: bot.id, threadId: target.threadId });
+  land(target.threadId);
+  return true;
 }
 
 /** A thread the person can open from a chip or a #Title link. */
 export interface ThreadTarget {
   botId: string;
   threadId: string;
+  /** scroll to and flash this message once the thread is open */
+  messageId?: string;
 }
 
 interface ThreadOpeningState extends NotificationRoutingState {
@@ -4062,8 +4080,15 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         case "video":
           window.dispatchEvent(new CustomEvent("bos-video-changed", { detail: frame }));
           break;
+        case "app":
+          window.dispatchEvent(new CustomEvent("bos-app-changed", { detail: frame }));
+          break;
         case "workspace.open":
           window.dispatchEvent(new CustomEvent("bos-workspace-open", { detail: frame }));
+          break;
+        case "desk":
+        case "desk.whatsapp":
+          window.dispatchEvent(new CustomEvent("bos-desk-changed", { detail: frame }));
           break;
         case "sections":
           rawDispatch({ type: "sections", sections: frame.sections });

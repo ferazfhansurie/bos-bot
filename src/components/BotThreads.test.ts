@@ -25,6 +25,7 @@ describe("sidebar bot threads", () => {
     expect(workingFolderLabel("C:\\fixture\\task-workspaces\\maus\\idle\\", "maus", "idle")).toBe("Thread workspace");
     expect(workingFolderLabel("/Users/example/Projects/Website/", "maus", "idle")).toBe("Website");
     expect(workingFolderLabel("/Users/example/task-workspaces/notes", "maus", "idle")).toBe("notes");
+    expect(workingFolderLabel("/Users/example/.bos-bot/workspaces/maus", "maus", "idle")).toBe("Bot workspace");
   });
   it("shows indented named threads with separate presence and a usable New thread action", () => {
     const markup = renderToStaticMarkup(createElement(StoreProvider, null, createElement(BotThreadList, { bot, selected: true })));

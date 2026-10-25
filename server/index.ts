@@ -7,6 +7,10 @@ import { gzipSync } from "node:zlib";
 import { assertOwnerAccess, readOwnerOutputBody } from "./output-draft-access.ts";
 import { PageStore } from "./pages.ts";
 import { handleInternalPageRoute, handleOwnerPageRoute } from "./page-routes.ts";
+import { handleInternalAppRoute, handleOwnerAppRoute } from "./app-routes.ts";
+import { AppStore } from "./apps.ts";
+import { APP_TEMPLATE_ICON, APP_TEMPLATE_LABEL, appMeta, type AppSummary, type AppTemplate } from "../shared/apps.ts";
+import * as appFs from "node:fs/promises";
 import { VideoStore } from "./videos.ts";
 import { handleInternalVideoRoute, handleOwnerVideoRoute } from "./video-routes.ts";
 import { validateOutputDraft } from "../shared/output-draft.ts";
@@ -108,8 +112,9 @@ import { sharedRequestIsActive, sharedRequestProgress } from "../shared/shared-r
 import type { SharedSearchKind } from "../shared/shared-search.ts";
 import { SharedRoomTrust, isSharedRoomTrustLevel, sharedRoomTargets, sharedMentionText, sharedRoomBotCandidates, type SharedRoomTrustLevel } from "./shared-room-trust.ts";
 import { collectSharedBotReply, type SharedBotReply } from "./shared-bot-reply.ts";
+import { PeopleHubLink } from "./people-hub.ts";
 import { SharedAttachmentStore } from "./shared-attachment-store.ts";
-import { ApnsPush, type LiveRegistration } from "./apns-push.ts";
+import { ApnsPush, type LiveRegistration, type PushTarget } from "./apns-push.ts";
 import { LiveActivityDriver } from "./live-activity-driver.ts";
 import { VoiceRings, VoiceRingRateLimit, voiceRingInput } from "./voice-ring.ts";
 import { contactId, parseContactId, SHARED_ROOM_MAX_HOPS, type SharedRoom, type SharedTextMessage, type SharedAttachment } from "../shared/multiplayer.ts";
@@ -213,6 +218,7 @@ import {
   vpsAliasResourceChangeError,
 } from "./cloud-backend.ts";
 import * as composio from "./composio.ts";
+import { DeskError, DeskStore } from "./desks.ts";
 import { WhatsAppService, WHATSAPP_NATIVE_PROMPT, WHATSAPP_REPLY_PROMPT, WHATSAPP_SLUG } from "./whatsapp-service.ts";
 import type { CapturedMessage } from "./whatsapp-types.ts";
 import type { ReplyInput, SendInput } from "./whatsapp-replies.ts";
@@ -256,6 +262,7 @@ import {
   showToolCallsEnabled,
   claudeUserMcpEnabled,
   skillAuthoringEnabled,
+  autoSkillsEnabled,
   sharedComputersEnabled,
   builtInBrowserEnabled,
   llmThreadTitlesEnabled,
@@ -296,6 +303,7 @@ import { fleetAvailable, fleetRequest, fleetSocketPath } from "./fleet-client.ts
 import { entitled } from "./enterprise.ts";
 import { HOSTED_CONTRACT_HEADER, HOSTED_CONTRACT_METADATA, HOSTED_CONTRACT_VERSION } from "./hosted-contract.ts";
 import { describeSpawnFailure, execCli } from "./procs.ts";
+import { WebPush, webPushMessage } from "./web-push.ts";
 import { blockedTarget, buildNotification, buildVoiceWorkDone, ownerPushTarget, type Notification } from "./notify.ts";
 import {
   isModelVariant,
@@ -484,6 +492,17 @@ import {
 } from "./skills.ts";
 import { fetchSkillFromSource } from "./skill-fetch.ts";
 import { expandLearnTurnText, learnSource } from "./skill-learn.ts";
+import {
+  AutoSkillLedger,
+  autoSkillDispatchEligible,
+  autoSkillGate,
+  autoSkillReadOutside,
+  autoSkillSource,
+  isAutoSkillSource,
+  runAutoSkill,
+  turnToolCalls,
+  turnWroteSkill,
+} from "./auto-skill.ts";
 import { expandSetupTurnText, setupModeActive, setupSystemPrompt } from "./setup-mode.ts";
 import type { SkillRequestCardData } from "../shared/skill-request.ts";
 import { checkSoulDrift, readSoulDrift, soulFile, writeSoulMirror } from "./bot-folder.ts";
@@ -760,6 +779,21 @@ const apnsPush = new ApnsPush(undefined, (sessionId, actorId) => {
   const bound = multiplayerActors.actorFor(sessionId);
   return bound === actorId || (actorId === multiplayerActors.ownerId && bound !== null && bound === multiplayerLinks.primaryActorId());
 });
+/** Browsers the person turned notifications on in. Same rule as a phone: a
+ * subscription lives only as long as the session that made it. */
+const webPush = new WebPush(undefined, (sessionId, actorId) => {
+  if (!sessions.isLive(sessionId)) return false;
+  const bound = multiplayerActors.actorFor(sessionId);
+  return bound ? bound === actorId : actorId === multiplayerActors.ownerId;
+});
+/** One push to a person on everything they carry: the phone (APNs) and every
+ * browser they subscribed (web push). Bot events, rooms and DMs all go
+ * through here, so a new kind of event reaches both by calling it once. */
+function pushPerson(actorId: string, title: string, body: string, target: PushTarget): Promise<void> {
+  const web = webPush.send(actorId, webPushMessage(title, body, target)).catch(error =>
+    console.warn(`web push failed: ${error instanceof Error ? error.message : "unknown failure"}`));
+  return Promise.all([apnsPush.send(actorId, title, body, target), web]).then(() => undefined);
+}
 const multiplayerLinks = new MultiplayerLinks(join(DATA_DIR, "multiplayer-links.json"), ENVIRONMENT_ID);
 const voiceRings = new VoiceRings({
   file: join(DATA_DIR, "voice-rings.json"), ownerId: multiplayerActors.ownerId,
@@ -1357,6 +1391,7 @@ function agentsIntegration(
   modRequest = false,
   computerSelect = true,
   pageTabs = false,
+  deskTools = false,
 ) {
   const token = mintInternalCapability({
     botId,
@@ -1387,6 +1422,8 @@ function agentsIntegration(
       OMB_OWN_THREAD_CREATION: ownThreadCreation && !modRequest ? "1" : "0",
       OMB_MOD_TURN: modRequest ? "1" : "0",
       OMB_PAGE_TABS: pageTabs && !modRequest ? "1" : "0",
+      // desks are the owner's: rooms (the other caller) never pass deskTools
+      OMB_DESKS: deskTools && !modRequest ? "1" : "0",
       OMB_SKILL_AUTHORING_ENABLED: skillAuthoring ? "1" : "0",
       // The shared-computer tools are advertised only while the workspace
       // gate is on; the routes behind them refuse regardless.
@@ -1772,6 +1809,10 @@ const browserRuntime = new BrowserRuntime({ closeBrowser: closeAgentBrowser });
 // Native read-only WhatsApp capture (whatsapp-service.ts): one linked-device
 // client under <data dir>/whatsapp, resumed at boot when a session exists.
 const whatsapp = new WhatsAppService({ dataDir: DATA_DIR, native: { onCaptured: (message) => queueWhatsAppReply(message) } });
+// Desks (desks.ts): an app a bot works in, watched live beside the chat and
+// worked through cards the bot writes. One json file per bot.
+const desks = new DeskStore(DATA_DIR);
+const deskChanged = (botId: string, deskId: string) => broadcast({ kind: "desk", botId, deskId, desk: desks.get(botId, deskId) ?? null });
 const telegramChannelTurns = new Map<string, { threadId: string; sendId: string }>();
 const telegramChannels = new TelegramChannels({
   dataDir: DATA_DIR, managerToken: process.env.BOS_TELEGRAM_MANAGER_TOKEN,
@@ -2502,12 +2543,18 @@ const quotaRetryTurns = new Map<string, QuotaRetryTurn>();
 const fallbackRestoreTimer = setInterval(() => { void modelFallback.restore().catch(error => console.error("model fallback restore failed", error)); }, 30_000);
 fallbackRestoreTimer.unref();
 
-function checkedFallbackModel(value: unknown, preferred?: string): { ok: true; model: string | undefined } | { ok: false; error: string } {
-  if (value === null || value === "") return { ok: true, model: undefined };
-  if (typeof value !== "string" || value.length > 200 || !fallbackSelection(value, registry.instances(), preferred)) {
-    return { ok: false, error: "fallbackModel must be an unambiguous available model ID, or null" };
+function checkedFallbackModel(value: unknown, preferred?: string, instanceValue?: unknown): { ok: true; model: string | undefined; instanceId: string | undefined } | { ok: false; error: string } {
+  if (value === null || value === "") return { ok: true, model: undefined, instanceId: undefined };
+  if (instanceValue !== undefined && instanceValue !== null && instanceValue !== "" && (typeof instanceValue !== "string" || instanceValue.length > 200)) {
+    return { ok: false, error: "fallbackInstanceId must be a provider instance ID, or null" };
   }
-  return { ok: true, model: value };
+  const instanceId = typeof instanceValue === "string" && instanceValue ? instanceValue : undefined;
+  if (typeof value !== "string" || value.length > 200 || !fallbackSelection(value, registry.instances(), preferred, instanceId)) {
+    return { ok: false, error: instanceId
+      ? "fallbackModel must be a model that fallbackInstanceId offers, on a different instance than the bot's own"
+      : "fallbackModel must be an unambiguous available model ID, or null" };
+  }
+  return { ok: true, model: value, instanceId };
 }
 const remoteFullProviderRevisions = new WeakMap<object, string>();
 const remoteFull = new RemoteFullService({ store,
@@ -2598,6 +2645,9 @@ const pageTabsAvailable = (bot: BotRecord, threadId: string) => {
 /** Threads whose bot opened a page tab, so "make slide 2 a chart" keeps the skill. */
 const pageTabThreads = new Set<string>();
 const PAGE_TAB_TRIGGER = "blank tab";
+/** Threads whose bot opened or edited a desk, so "add a button here" keeps the desks skill. */
+const deskThreads = new Set<string>();
+const DESK_TRIGGER = "desk";
 const isHiddenChannelTask = (task: TaskRecord) => isPeerRoomTask(task) || task.channelTransport === "discord";
 const visibleBotTasks = (botId: string) => store.tasks(botId).filter(task => !isHiddenChannelTask(task));
 const visibleThreadBot = (bot: BotRecord): BotRecord => {
@@ -4410,7 +4460,7 @@ function closeSessionStreams(sessionId: string): void {
   }
 }
 sessions.onSessionRevoked((sessionId) => {
-  try { apnsPush.revokeSession(sessionId); }
+  try { apnsPush.revokeSession(sessionId); webPush.revokeSession(sessionId); }
   catch { console.error("Could not persist push removal; revoked session still blocks future delivery."); }
   peerHandoffs.forget(sessionId);
   const revokedThreads = peerThreads.list(sessionId);
@@ -4542,6 +4592,11 @@ function emitFrame(payload: Record<string, unknown>) {
         return actor && canReadChannel(group, actor) ? channelView(group!, actor) as unknown as Record<string, unknown> : null;
       },
       knownBot: botId => peerKnownBots.get(client.sessionId)?.has(botId) === true,
+      appShared: appId => {
+        const actor = multiplayerActors.actorFor(client.sessionId);
+        if (!actor) return false;
+        try { return appStore.get(appId).sharedRoomIds.some(roomId => canReadChannel(store.group(roomId), actor)); } catch { return false; }
+      },
       botView: botId => {
         const bot = store.bot(botId);
         const actor = multiplayerActors.actorFor(client.sessionId);
@@ -4768,10 +4823,10 @@ function notify(notification: Notification | null) {
     if (room && notification.kind === "done" && !roomCompletionNotifies(room.notifications, notification.body, cfg.profile?.name ?? "")) return;
     broadcast({ kind: "notify", notification });
     if (room) for (const personId of roomPushPeople(room, multiplayerActors.ownerId, id => canReadChannel(room, id), multiplayerActors.ownerId, notification.kind)) {
-      void apnsPush.send(personId, notification.title, notification.body, { roomId: room.id, threadId: notification.threadId, senderId: `bot:${notification.botId}`, senderName: notification.title }).catch(() => {});
+      void pushPerson(personId, notification.title, notification.body, { roomId: room.id, threadId: notification.threadId, senderId: `bot:${notification.botId}`, senderName: notification.title }).catch(() => {});
     }
     if (notification.kind === "done" && Date.now() - ownerActiveAt < OWNER_ACTIVE_MS) return;
-    void apnsPush.send(multiplayerActors.ownerId, notification.title, notification.body, ownerPushTarget(notification)).catch(error =>
+    void pushPerson(multiplayerActors.ownerId, notification.title, notification.body, ownerPushTarget(notification)).catch(error =>
       console.warn(`bot push failed: ${error instanceof Error ? error.message : "unknown failure"}`));
   }
 }
@@ -5026,6 +5081,7 @@ function clearTurnDigestState(threadId: string): void {
   turnCheckpoints.delete(threadId);
   liveTurnByThread.delete(threadId);
   memoryRowsByThread.delete(threadId);
+  autoSkillTurns.delete(threadId);
 }
 
 const TOOL_RESULTS_DIR = join(DATA_DIR, "tool-results");
@@ -5091,6 +5147,69 @@ function ingestEngineHook(capability: InternalCapability, body: unknown): { ok: 
 /** Persist observed tools and memory immediately. Keep a direct turn's
  * workspace claimed while its bounded file snapshot settles, then enrich
  * that same row only if its task and active branch still exist. */
+/** After a settled person-started turn, maybe draft a skill from it. Runs
+ * detached: the turn's settle and the next queued send never wait on it, and
+ * a failure only logs. */
+function scheduleAutoSkill(input: {
+  bot: BotRecord;
+  threadId: string;
+  turnId: string;
+  ok: boolean;
+  routine: boolean;
+  internal: boolean;
+  reply: string;
+  instanceId: string;
+  /** The direct-turn generation this completion belongs to. */
+  generation: string | undefined;
+}): void {
+  // a late completion must not take the entry a newer turn left
+  const entry = autoSkillTurns.get(input.threadId);
+  const turn = entry && input.generation && entry.generation === input.generation ? entry : undefined;
+  if (turn) autoSkillTurns.delete(input.threadId);
+  try {
+    const messages = store.messagesFor(input.threadId);
+    const tools = turnToolCalls(messages, input.turnId);
+    const instance = registry.get(input.instanceId);
+    const gate = autoSkillGate({
+      enabled: autoSkillsEnabled(cfg),
+      personStarted: Boolean(turn),
+      direct: Boolean(store.taskByThread(input.bot.id, input.threadId)) && !store.groupByThread(input.threadId),
+      ok: input.ok,
+      routine: input.routine,
+      internal: input.internal,
+      askText: turn?.askText ?? "",
+      toolCount: tools.length,
+      wroteSkill: turnWroteSkill(messages, input.turnId, turn?.askAt ?? Date.now()),
+      canGenerate: Boolean(instance?.generateText),
+    });
+    if (!gate.run || !turn || !instance?.generateText) return;
+    const botId = input.bot.id;
+    const threadId = input.threadId;
+    void runAutoSkill({
+      botId,
+      generateText: instance.generateText.bind(instance),
+      skills: () => listSkills(botId).map((skill) => ({ name: skill.name, description: skill.description })),
+      stagedNames: () => listStagedSkillWrites(botId).map((staged) => staged.name),
+      pendingDrafts: () => listStagedSkillWrites(botId).filter((staged) => isAutoSkillSource(staged.source)).length,
+      budget: () => assertWithinBudget(cfg, DATA_DIR),
+      ledger: autoSkillLedger,
+      write: (draft) => {
+        // the thread or the setting may be gone by the time the model answers
+        if (!autoSkillsEnabled(cfg) || !store.taskByThread(botId, threadId)) return { state: "failed", error: "thread or setting changed" };
+        // nor may a card land in a conversation that has moved on
+        if (threadBusy(botId, threadId) || directTurnGenerationByThread.get(threadId) !== input.generation) return { state: "failed", error: "thread moved on" };
+        const written = writeLearnedSkill({ botId, threadId, action: "create", skillMd: draft.skillMd,
+          gist: draft.description, source: autoSkillSource(threadId), auto: true, review: autoSkillReadOutside(tools) });
+        return written.ok ? { state: written.state, name: written.staged.name } : { state: "failed", error: written.error };
+      },
+    }, { ask: turn.askText, tools, reply: input.reply })
+      .then((outcome) => console.error(`[auto-skill] bot=${botId} thread=${threadId.slice(0, 8)} tools=${tools.length} → ${outcome.state}${"name" in outcome ? ` ${outcome.name}` : ""}${"reason" in outcome ? ` (${outcome.reason})` : ""}${"error" in outcome ? ` (${outcome.error})` : ""}`))
+      .catch((error) => console.error("[auto-skill] distill failed", error));
+  } catch (error) {
+    console.error("[auto-skill] could not check the turn", error);
+  }
+}
+
 async function scheduleTurnDigest(input: {
   botId: string;
   botName: string;
@@ -5240,6 +5359,11 @@ function isInternalTurn(threadId: string): boolean {
 // a peer hop, or a resumed card records nothing here: the user message
 // such a turn finds in its thread may be hours old and its author gone.
 const personAskAt = new Map<string, number>();
+// Turns the person started in a bot's own thread, recorded at dispatch for
+// the automatic skill distiller to read back when the turn settles. Only
+// startTurn knows who started a turn; see autoSkillDispatchEligible.
+const autoSkillTurns = new Map<string, { askText: string; askAt: number; generation: string }>();
+const autoSkillLedger = new AutoSkillLedger(join(DATA_DIR, "auto-skills.json"));
 let routines: RoutineManager | null = null;
 let calendarCalls: CalendarCallManager | null = null;
 const localVmOwnerBusy = (botId: string) => store.bot(botId)?.busy === true;
@@ -6488,6 +6612,12 @@ bus.subscribe((event: RuntimeEvent) => {
             isCurrent,
             ...(tokens ? { usage: { input: tokens.input ?? 0, output: tokens.output ?? 0, ...(typeof tokens.cachedInput === "number" ? { cachedInput: tokens.cachedInput } : {}), costUsd: event.cost ?? null } } : {}),
           }) : Promise.resolve();
+        if (completedTurnId) {
+          scheduleAutoSkill({ bot, threadId: event.threadId, turnId: completedTurnId, ok: event.ok,
+            routine: Boolean(routineRun), internal, reply, instanceId: selection.instanceId, generation });
+        } else {
+          autoSkillTurns.delete(event.threadId);
+        }
         if (resourceOwner) settlingResourceOwners.set(resourceOwner.threadId, resourceOwner.generation);
         liveTurnByThread.delete(event.threadId);
         const routineReportThread = routineRun ? routineSourceThread(routineRun) : null;
@@ -7990,6 +8120,29 @@ async function runLocalRoomTurn(room: SharedRoom, target: SharedRoomBot, prompt:
   return { reply: "" };
 }
 
+/** Friends' DMs and groups on the people hub. Their bot turns run here in
+ * Ask mode with the same sandboxed room thread as a local shared room. */
+const peopleHub = new PeopleHubLink({
+  dataDir: DATA_DIR, environmentId: ENVIRONMENT_ID, origin: compatEnv.OMB_PEOPLE_HUB_ORIGIN || undefined,
+  ownerName: () => cfg.profile?.name?.trim() || "BOS Bot user",
+  bots: () => store.bots.filter(bot => !bot.hidden && bot.visibility !== "private").map(bot => ({
+    localId: bot.id, name: bot.name, title: bot.title, color: bot.color, mascotBody: bot.mascotBody ?? null, mascotEyes: bot.mascotEyes ?? null })),
+  turnMinutes: () => roomTurnTimeoutMinutes(cfg),
+  runTurn: (claim, prompt, hooks) => {
+    const key = parseContactId(claim.job.botId);
+    const bot = key?.homeId === ENVIRONMENT_ID ? store.bot(key.localId) : undefined;
+    if (!key || !bot || bot.hidden || bot.visibility === "private") throw new Error("this bot is no longer shared");
+    const room: SharedRoom = { id: claim.room.id, homeId: "bosbot-people", name: claim.room.name, memberIds: claim.members.map(member => member.id), kind: claim.room.kind, createdAt: 0, revision: claim.room.revision };
+    const target: SharedRoomBot = { key: { homeId: key.homeId, kind: "bot", localId: key.localId }, id: claim.job.botId, name: bot.name, remote: false, ownerName: cfg.profile?.name ?? "Owner" };
+    const source = { id: claim.source.id, roomId: claim.room.id, sequence: 0, actor: parseContactId(claim.job.requesterId)!, text: claim.source.text, at: claim.source.at, sendId: claim.source.id } satisfies SharedTextMessage;
+    return runLocalRoomTurn(room, target, prompt, source, claim.senderName, "helper", hooks.progress, hooks.deadline, hooks.shouldContinue, hooks.onDispatch, claim.job.requesterId);
+  },
+  notify: note => {
+    void apnsPush.send(multiplayerActors.ownerId, note.senderName, note.text, { roomId: note.roomId, senderId: note.senderId, senderName: note.senderName })
+      .catch(error => console.warn(`people hub push failed: ${error instanceof Error ? error.message : "unknown failure"}`));
+  },
+});
+
 /** Guest requests use the existing conversation-only provider isolation. Their
  * execution thread is private to the dispatcher; output joins the same room. */
 /** Private helper execution thread -> the room thread and member it speaks for. */
@@ -8251,7 +8404,7 @@ async function runPersonChannelTurn(groupId: string, threadId: string, message: 
         const currentRoom = store.group(groupId);
         if (!currentRoom) return;
         for (const personId of roomPushPeople(currentRoom, multiplayerActors.ownerId, id => canReadChannel(currentRoom, id), actorId, "done")) {
-          void apnsPush.send(personId, bot.name, reply.reply, { roomId: groupId, threadId, messageId: sent.id, senderId: target.id, senderName: bot.name }).catch(() => {});
+          void pushPerson(personId, bot.name, reply.reply, { roomId: groupId, threadId, messageId: sent.id, senderId: target.id, senderName: bot.name }).catch(() => {});
         }
         queueMentions(bot.id, sent, hop);
       } catch {
@@ -8486,7 +8639,7 @@ async function runSharedBotTurn(room: SharedRoom, source: SharedTextMessage, cha
     }
     for (const memberId of room.memberIds) {
       if (people.some(person => person.id === memberId) && sharedRoomShouldNotify(room.id, memberId, source)) {
-        void apnsPush.send(memberId, target.name, reply, { roomId: room.id, senderId: target.id, senderName: target.name }).catch(error =>
+        void pushPerson(memberId, target.name, reply, { roomId: room.id, senderId: target.id, senderName: target.name }).catch(error =>
           console.warn(`shared bot push failed: ${error instanceof Error ? error.message : "unknown failure"}`));
       }
     }
@@ -8843,6 +8996,8 @@ async function startTurn(
     editedMessageId?: string;
     /** The person who sent this, when not the desktop owner. */
     sender?: { name: string };
+    /** A message held for sign-in, replayed once the engine is ready. */
+    resumed?: boolean;
     /** The gateway member the sending session acts for (messageMember). */
     member?: TurnMember;
     /** Extra transcript ids to omit (every drained queued line, not just the last). */
@@ -9118,6 +9273,16 @@ async function startTurn(
   const resourceOwner = { threadId, generation: dispatchClaimId };
   turnResourceOwners.set(threadId, resourceOwner);
   directTurnGenerationByThread.set(threadId, dispatchClaimId);
+  if (autoSkillDispatchEligible({ ...opts, commsDepth, sharedContext, ownerId: multiplayerActors.ownerId, lines: [
+    userMessage,
+    ...(opts?.excludeMessageIds?.length
+      ? store.messagesFor(threadId).filter(message => opts.excludeMessageIds!.includes(message.id) && message.role === "user")
+      : []),
+  ] })) {
+    autoSkillTurns.set(threadId, { askText: text, askAt: userMessage.at, generation: dispatchClaimId });
+  } else {
+    autoSkillTurns.delete(threadId);
+  }
   if (voiceOrigin && !sharedContext) voiceTurns.set(threadId, { generation: dispatchClaimId, origin: voiceOrigin, sourceMessageId: userMessage.id });
   else voiceTurns.delete(threadId);
   if (!sharedContext && !opts?.automationSource && !opts?.compactOnly) beginWorkTurn(botId, threadId, dispatchClaimId,
@@ -9349,11 +9514,12 @@ async function startTurn(
       const integrations: NonNullable<Parameters<typeof instance.adapter.sendTurn>[0]["integrations"]> = {};
       let browser: Awaited<ReturnType<typeof browserIntegration>> = null;
       const selectedSkills = sharedContext || sharedWork ? [] : selectBundledSkills(
-        [providerText, ...(smartUiFollowUp(threadId) ? [SMART_UI_FENCE] : []), ...(pageTabThreads.has(threadId) ? [PAGE_TAB_TRIGGER] : [])].join("\n"),
+        [providerText, ...(smartUiFollowUp(threadId) ? [SMART_UI_FENCE] : []), ...(pageTabThreads.has(threadId) ? [PAGE_TAB_TRIGGER] : []), ...(deskThreads.has(threadId) ? [DESK_TRIGGER] : [])].join("\n"),
         [
           ...(instance.adapter.capabilities.phoneMcp === true ? ["phoneMcp"] : []),
           ...(smartUiRenders(bot.id, threadId) ? ["smartUi"] : []),
           ...(pageTabsAvailable(bot, threadId) ? ["pageTabs"] : []),
+          ...(smartUiRenders(bot.id, threadId) ? ["desks"] : []),
           ...(skillAuthoring ? ["skillAuthoring"] : []),
           // hosted free installs ship guided starter skills; desktop bots don't get them
           ...(process.env.BOS_STARTER_SKILLS === "1" ? ["starterSkills"] : []),
@@ -9786,7 +9952,7 @@ async function startTurn(
         // text) and hide select_computer, rather than show a card that fails.
         const computerSelect = !computerSelectionTurns.has(threadId) || await anyComputerSelectable(bot);
         if (!computerSelect && computerSelectionTurns.get(threadId)?.generation === dispatchClaimId) computerSelectionTurns.delete(threadId);
-        integrations.agents = agentsIntegration(bot.id, threadId, commsDepth, skillAuthoring, dispatchClaimId, opts?.coordination?.id, boundedCoordination, ownThreadCreation, Boolean(opts?.modRequest), computerSelect, pageTabsAvailable(bot, threadId));
+        integrations.agents = agentsIntegration(bot.id, threadId, commsDepth, skillAuthoring, dispatchClaimId, opts?.coordination?.id, boundedCoordination, ownThreadCreation, Boolean(opts?.modRequest), computerSelect, pageTabsAvailable(bot, threadId), smartUiRenders(bot.id, threadId));
       }
       if (!sharedWork && instance.adapter.capabilities.hooks === true && hooksEnabled()) {
         integrations.hooks = hooksIntegration(bot.id, threadId, dispatchClaimId);
@@ -10935,9 +11101,64 @@ const outboundReviews = new OutboundReviews(store);
 // Pages broadcast only ids; peers drop the frame (no threadId) and the owner's
 // editor refetches through the owner-gated route.
 const pageStore = new PageStore({ onChange: change => broadcast({ kind: "page", botId: change.botId, pageId: change.pageId, revision: change.revision, byKind: change.by.kind, ...(change.deleted ? { deleted: true } : {}) }) });
+// Apps: blank-tab pages with their own data (server/apps.ts). The data sits
+// in the bot folder; the page stays an html file in the conversation folder.
+const appStore = new AppStore({
+  botIds: () => store.bots.map(bot => bot.id),
+  onChange: change => broadcast({ kind: "app", appId: change.appId, botId: change.botId, rev: change.rev, collections: change.collections, by: change.by, ...(change.deleted ? { deleted: true } : {}), ...(change.meta ? { meta: true } : {}) }),
+});
+const APP_PAGE_BYTES = 2 * 1024 * 1024;
+async function appPageFile(botId: string, threadId: string, rel: string): Promise<{ real: string; rel: string; root: string } | null> {
+  let root: string;
+  try { root = resolveTerminalTarget(store, botId, threadId, bot => Boolean(inheritedTeamComputer(bot))); } catch { return null; }
+  if (!/\.html?$/i.test(rel)) return null;
+  try { const found = await resolveInside(root, rel); return { ...found, root }; } catch { return null; }
+}
+async function readAppPage(botId: string, threadId: string, rel: string): Promise<{ html: string; mtime: number } | null> {
+  const found = await appPageFile(botId, threadId, rel);
+  if (!found) return null;
+  try {
+    const st = await stat(found.real);
+    if (!st.isFile() || st.size > APP_PAGE_BYTES) return null;
+    return { html: await appFs.readFile(found.real, "utf8"), mtime: st.mtimeMs };
+  } catch { return null; }
+}
+const appSuffix = () => Array.from(randomBytes(4), b => "abcdefghijklmnopqrstuvwxyz0123456789"[b % 36]).join("");
+async function copyAppPage(botId: string, threadId: string, rel: string): Promise<string> {
+  const found = await appPageFile(botId, threadId, rel);
+  if (!found) throw Object.assign(new Error("this app's page file is gone"), { status: 404 });
+  const name = found.rel.split("/").pop()!.replace(/(-copy)?(-[a-z0-9]{4})?\.html?$/i, "") + `-copy-${appSuffix()}.html`;
+  const copyRel = found.rel.includes("/") ? found.rel.replace(/[^/]+$/, name) : name;
+  await appFs.copyFile(found.real, found.real.replace(/[^/\\]+$/, name), appFs.constants.COPYFILE_EXCL);
+  return copyRel;
+}
+const escapeAttr = (value: string) => value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+/** app_create: a starter from skills/apps/templates, named and saved in the conversation folder, then opened. */
+async function createAppFromTemplate(bot: BotRecord, threadId: string, template: AppTemplate, name: string, icon: string | undefined): Promise<{ path: string; app: AppSummary } | null> {
+  if (!pageTabsAvailable(bot, threadId)) return null;
+  const root = resolveTerminalTarget(store, bot.id, threadId, candidate => Boolean(inheritedTeamComputer(candidate)));
+  const skillsRoot = compatEnv.OMB_SKILLS_DIR || join(process.cwd(), "skills");
+  let html = await appFs.readFile(join(skillsRoot, "apps", "templates", `${template}.html`), "utf8");
+  const label = name.replace(/\s+/g, " ").trim().slice(0, 60) || APP_TEMPLATE_LABEL[template];
+  const iconName = (icon && /^[a-z0-9-]{1,32}$/.test(icon) ? icon : APP_TEMPLATE_ICON[template]);
+  html = html
+    .replace(/(<meta\s+name=["']bos-app["']\s+content=)(["'])[^"']*\2/i, `$1"${escapeAttr(label)}"`)
+    .replace(/(<meta\s+name=["']bos-app-icon["']\s+content=)(["'])[^"']*\2/i, `$1"${escapeAttr(iconName)}"`)
+    .replace(/<title>[^<]*<\/title>/i, `<title>${escapeAttr(label)}</title>`);
+  const slug = label.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 40) || template;
+  const rel = `bos-pages/${new Date().toISOString().slice(0, 10)}-${slug}-${appSuffix()}.html`;
+  await appFs.mkdir(join(root, "bos-pages"), { recursive: true });
+  await appFs.writeFile(join(root, rel), html, { flag: "wx" });
+  const meta = appMeta(html);
+  const app = appStore.ensure(bot.id, { threadId, path: rel, name: meta?.name ?? label, icon: meta?.icon, schema: meta?.schema, template }, bot.name);
+  broadcast({ kind: "workspace.open", botId: bot.id, threadId, tab: "canvas", ref: rel, title: app.name });
+  pageTabThreads.add(threadId);
+  return { path: rel, app };
+}
 store.onChange(change => { if (change.type === "bot.deleted") pageStore.forget(change.botId); });
 const videoStore = new VideoStore({ onChange: change => broadcast({ kind: "video", botId: change.botId, videoId: change.videoId, revision: change.revision, byKind: change.by.kind, ...(change.deleted ? { deleted: true } : {}), ...(change.render ? { render: change.render } : {}) }) });
 store.onChange(change => { if (change.type === "bot.deleted") videoStore.forget(change.botId); });
+store.onChange(change => { if (change.type === "bot.deleted") appStore.forget(change.botId); });
 const profileRequests = new ProfileRequestService({
   store,
   autoApply: fullAccessForSource,
@@ -13550,12 +13771,19 @@ function rejectDeletedThreadSkillStages(cleanups: Array<{ botId: string; stagedI
   for (const cleanup of cleanups) rejectStagedSkillWrite(cleanup.botId, cleanup.stagedId);
 }
 
-function skillCardCopy(staged: { action: "create" | "update"; name: string; gist: string; warnings: string[] }): {
+function skillCardCopy(staged: { action: "create" | "update"; name: string; gist: string; warnings: string[] }, auto = false): {
   title: string;
   subtitle: string;
   tool: string;
 } {
   const warnings = staged.warnings.length ? `\n\nWarnings:\n- ${staged.warnings.join("\n- ")}` : "";
+  if (auto) {
+    return {
+      title: `Learned a skill from this run: "${staged.name}". Enable it?`,
+      subtitle: `${staged.gist || staged.name}\n\nDrafted automatically after this run. Adds one line to the prompt index; the body is read only when used. Turn automatic skills off in the bot's Skills settings.${warnings}`,
+      tool: "stage_skill",
+    };
+  }
   return {
     title: staged.action === "create"
       ? `Enable skill "${staged.name}"?`
@@ -13565,10 +13793,71 @@ function skillCardCopy(staged: { action: "create" | "update"; name: string; gist
   };
 }
 
+/** The one way a learned skill is written, for skill_manage and for the
+ * automatic distiller alike: stage, then apply with a receipt card under
+ * Full access, or show the review card. */
+function writeLearnedSkill(args: {
+  botId: string;
+  threadId: string;
+  action: "create" | "update";
+  targetName?: string;
+  skillMd: string;
+  gist?: string;
+  source: string;
+  auto?: boolean;
+  /** Show a card even under full access. */
+  review?: boolean;
+}):
+  | { ok: false; error: string; failed?: true }
+  | { ok: true; state: "applied"; staged: Extract<ReturnType<typeof stageSkillWrite>, { id: string }>; applied: Exclude<ReturnType<typeof applySkillWriteWithReceipt>, { error: string }> }
+  | { ok: true; state: "pending"; staged: Extract<ReturnType<typeof stageSkillWrite>, { id: string }>; summary: string } {
+  const staged = stageSkillWrite(args.botId, {
+    action: args.action,
+    targetName: args.targetName,
+    files: [{ path: "SKILL.md", content: args.skillMd }],
+    gist: args.gist,
+    source: args.source,
+  });
+  if ("error" in staged) return { ok: false, error: staged.error };
+  const bot = store.bot(args.botId);
+  if (!args.review && fullAccessForSource(args.botId, args.threadId)) {
+    const applied = applySkillWriteWithReceipt(args.botId, staged, () => {
+      const receipt = appendSkillRequestCard({ botId: args.botId, threadId: args.threadId, staged, applied: true, auto: args.auto });
+      appendDecision(DATA_DIR, { threadId: args.threadId, requestId: receipt.requestId, botId: args.botId, botName: bot?.name,
+        tool: "stage_skill", summary: receipt.summary, decision: "auto-approved", source: "full-access" });
+    });
+    if ("error" in applied) {
+      rejectStagedSkillWrite(args.botId, staged.id);
+      return { ok: false, error: applied.error, failed: true };
+    }
+    return { ok: true, state: "applied", staged, applied };
+  }
+  let card: ReturnType<typeof appendSkillRequestCard>;
+  try {
+    card = appendSkillRequestCard({ botId: args.botId, threadId: args.threadId, staged, auto: args.auto });
+  } catch (error) {
+    rejectStagedSkillWrite(args.botId, staged.id);
+    throw error;
+  }
+  appendDecision(DATA_DIR, {
+    threadId: args.threadId,
+    requestId: card.requestId,
+    botId: args.botId,
+    botName: bot?.name,
+    tool: "stage_skill",
+    summary: card.summary,
+    decision: "card-shown",
+    source: "skill",
+  });
+  return { ok: true, state: "pending", staged, summary: card.summary };
+}
+
 function appendSkillRequestCard(args: {
   botId: string;
   threadId: string;
   applied?: boolean;
+  /** Drafted by the automatic distiller, not asked for in this turn. */
+  auto?: boolean;
   staged: {
     id: string;
     action: "create" | "update";
@@ -13581,7 +13870,7 @@ function appendSkillRequestCard(args: {
   };
 }): { requestId: string; summary: string } {
   const requestId = randomUUID();
-  const copy = skillCardCopy(args.staged);
+  const copy = skillCardCopy(args.staged, args.auto);
   const payload: SkillRequestCardData = {
     version: 1,
     requestId,
@@ -13606,7 +13895,9 @@ function appendSkillRequestCard(args: {
       title: copy.title,
       subtitle: copy.subtitle,
       options: args.applied ? [] : [args.staged.action === "create" ? "Enable" : "Update", "Deny"],
-      ...(args.applied ? { answered: "allow", title: `Skill "${args.staged.name}" ${args.staged.action === "create" ? "enabled" : "updated"}` } : {}),
+      ...(args.applied ? { answered: "allow", title: args.auto
+        ? `Learned a skill: ${args.staged.name}`
+        : `Skill "${args.staged.name}" ${args.staged.action === "create" ? "enabled" : "updated"}` } : {}),
       requestId,
       tool: copy.tool,
       skillRequest: payload,
@@ -14386,6 +14677,7 @@ function configStatus() {
     },
     features: {
       skillAuthoring: skillAuthoringEnabled(cfg),
+      autoSkills: autoSkillsEnabled(cfg),
       showToolCalls: showToolCallsEnabled(cfg),
       browser: builtInBrowserEnabled(cfg),
       // Maintainer-only escape hatch, not a Settings toggle: the desktop
@@ -14687,7 +14979,7 @@ function resumeTurnsHeldForSignIn(): void {
     if (!bot || !message) { heldForSignIn.delete(threadId); continue; }
     if (threadBusy(held.botId, threadId) || engineSignedOut.get(bot.modelSelection.instanceId) !== false) continue;
     heldForSignIn.delete(threadId);
-    void startTurn(held.botId, held.text, { threadId, userMessage: message })
+    void startTurn(held.botId, held.text, { threadId, userMessage: message, resumed: true })
       .catch((error) => console.warn("[sign-in] could not answer the held message", error instanceof Error ? error.message : String(error)));
   }
 }
@@ -15094,7 +15386,10 @@ function serveStatic(res: ServerResponse, path: string): boolean {
   const file = join(STATIC_DIR, safe);
   try {
     const data = readFileSync(file);
-    res.writeHead(200, { "content-type": MIME[extname(file)] ?? "application/octet-stream" });
+    // the service worker must never be served stale: a fix to it has to land
+    // on the next visit, and its scope header lets it cover the whole app
+    res.writeHead(200, { "content-type": MIME[extname(file)] ?? "application/octet-stream",
+      ...(safe === "/sw.js" ? { "cache-control": "no-cache", "service-worker-allowed": "/" } : {}) });
     res.end(data);
     return true;
   } catch {
@@ -16071,7 +16366,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         : store.appendMessage(threadId, { role: "user", kind: "text", text: body.text.trim(), sendId, replyToId: replyTo?.id, sender: channelMessageSender(auth), channelMode: "chat" });
       if (!trustedAdmin) void runPersonChannelTurn(group!.id, threadId, message, requestActor, auth.session.id).catch(error => console.warn("person room turn failed", error instanceof Error ? error.message : "unknown"));
       for (const personId of roomPushPeople(group!, multiplayerActors.ownerId, id => canReadChannel(group!, id), requestActor)) {
-        void apnsPush.send(personId, message.sender!.name, message.text!, { roomId: group!.id, threadId, senderId: requestActor, senderName: message.sender!.name, messageId: message.id }).catch(() => {});
+        void pushPerson(personId, message.sender!.name, message.text!, { roomId: group!.id, threadId, senderId: requestActor, senderName: message.sender!.name, messageId: message.id }).catch(() => {});
       }
       return json(res, 201, { message });
     }
@@ -16351,6 +16646,26 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
 
     // Shared-chat identities are explicit. A paired device called "Putri"
     // does not become Putri merely because its client chose that label.
+    if (path.startsWith("/api/people-hub/")) {
+      if (workspaceActor(auth) !== multiplayerActors.ownerId || peerSessionId) return json(res, 403, { error: "owner access required" });
+      try {
+        if (method === "GET" && path === "/api/people-hub/status") return json(res, 200, await peopleHub.status());
+        if (method === "POST" && path === "/api/people-hub/invites") {
+          const body = await readBody(req, 4096);
+          const result = await peopleHub.invite(typeof body?.email === "string" ? body.email : undefined);
+          return json(res, result.status, result.body);
+        }
+        if (method === "POST" && path === "/api/people-hub/accept") {
+          const body = await readBody(req, 4096);
+          if (typeof body?.link !== "string") return json(res, 400, { error: "invite link required" });
+          const result = await peopleHub.accept(body.link);
+          return json(res, result.status, result.body);
+        }
+      } catch (error) {
+        return json(res, 502, { error: error instanceof Error && /fetch failed|timeout|aborted/i.test(error.message) ? "BOS Bot people service is unreachable; check your connection" : error instanceof Error ? error.message : "people service unavailable" });
+      }
+      return json(res, 404, { error: "not found" });
+    }
     if (path.startsWith("/api/multiplayer/")) {
       const actorId = workspaceActor(auth);
       if (selectedServer && selectedServer[1] !== ENVIRONMENT_ID) {
@@ -16708,6 +17023,18 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       const roomId = /^\/api\/multiplayer\/rooms\/([\w-]+)(?:\/|$)/.exec(path)?.[1];
       const requestedRoom = roomId && actorId ? sharedRooms.roomFor(roomId, actorId) : null;
       if (requestedRoom && privateRoom(requestedRoom)) { req.resume(); return json(res, 404, { error: "room unavailable" }); }
+      // A friend's conversation on the people hub (server/people-hub.ts).
+      const hubOwner = !selectedServer && !multiplayerLinks.primaryActorId() && actorId === multiplayerActors.ownerId && !peerSessionId;
+      if (hubOwner && roomId && !requestedRoom && peopleHub.ownsRoom(roomId)) {
+        const body = method === "POST" || method === "PATCH" || method === "DELETE" ? await readBody(req, path.includes("/attachments") ? 36_000_000 : 100_000) : undefined;
+        try { const forwarded = await peopleHub.forward(path + url.search, method, body); return json(res, forwarded.status, forwarded.body); }
+        catch { return json(res, 502, { error: "BOS Bot people service is unreachable; try again" }); }
+      }
+      const hubPerson = (id: unknown) => {
+        const key = parseContactId(id);
+        return hubOwner && key?.kind === "person" && key.homeId !== ENVIRONMENT_ID && peopleHub.active &&
+          !multiplayerActors.people(cfg.profile?.name ?? "Owner").some(person => person.id === id);
+      };
       if (!selectedServer && multiplayerLinks.primaryActorId() && !path.startsWith("/api/multiplayer/links") &&
           !path.startsWith("/api/multiplayer/actor-bindings")) {
         if (auth.kind !== "loopback" && actorId !== multiplayerLinks.primaryActorId()) {
@@ -16790,6 +17117,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
           ...multiplayerLinks.contacts().filter(bot => remoteBots.roomBot(bot.homeId, parseContactId(bot.id)!.localId))
             .map(bot => ({ ...bot, remote: true, mascotBody: bot.mascotBody ?? null, mascotEyes: bot.mascotEyes ?? null, avatarUrl: null, avatarCrop: "mascot",
               ownerName: multiplayerLinks.bridgeLinks().find(link => link.homeId === bot.homeId)?.ownerName ?? null })),
+          ...(hubOwner ? await peopleHub.contacts() : []),
         ] });
       }
       if (path === "/api/multiplayer/links") {
@@ -16861,6 +17189,10 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         if (workspaceMembers.role(actorId) === "client-guest") return json(res, 403, { error: "guests cannot create direct rooms" });
         const body = await readBody(req, 1024);
         const targetId = body?.targetId;
+        if (hubPerson(targetId)) {
+          try { const forwarded = await peopleHub.forward(path, method, body); return json(res, forwarded.status, forwarded.body); }
+          catch { return json(res, 502, { error: "BOS Bot people service is unreachable; try again" }); }
+        }
         const target = [
           ...multiplayerActors.people(cfg.profile?.name ?? "Owner"),
           ...store.bots.filter(bot => !bot.hidden && (actorId === multiplayerActors.ownerId || bot.visibility !== "private")).map(bot => ({ id: `${ENVIRONMENT_ID}:bot:${bot.id}`, name: bot.name, kind: "bot" as const })),
@@ -16875,11 +17207,16 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       }
       if (path === "/api/multiplayer/rooms") {
         if (method === "POST" && workspaceMembers.role(actorId) === "client-guest") return json(res, 403, { error: "guests cannot create rooms" });
-        if (method === "GET") return json(res, 200, { rooms: sharedRooms.summariesFor(actorId).filter(listedRoom) });
+        if (method === "GET") return json(res, 200, { rooms: [...sharedRooms.summariesFor(actorId).filter(listedRoom), ...(hubOwner ? await peopleHub.rooms() : [])] });
         if (method === "POST") {
           const body = await readBody(req, 16_384);
           if (typeof body?.name !== "string" || !Array.isArray(body?.memberIds)) return json(res, 400, { error: "room name and members required" });
           if (!body.memberIds.includes(actorId)) return json(res, 403, { error: "sender must be a member" });
+          // A group with a friend from the people hub lives there, and may hold bots.
+          if (body.memberIds.some(hubPerson)) {
+            try { const forwarded = await peopleHub.forward(path, method, body); return json(res, forwarded.status, forwarded.body); }
+            catch { return json(res, 502, { error: "BOS Bot people service is unreachable; try again" }); }
+          }
           if (body.memberIds.some((id: unknown) => parseContactId(id)?.kind !== "person")) return json(res, 400, { error: "groups contain people; mention your bots in the conversation" });
           // The desktop picker names a linked Mac's bot by its virtual id here.
           const linkedBots = multiplayerLinks.contacts().filter(bot => remoteBots.roomBot(bot.homeId, parseContactId(bot.id)!.localId));
@@ -17124,8 +17461,8 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
               if (compatEnv.FAKE_CLAUDE_ROOM_PUSH_OUTBOX) {
                 appendFileSync(join(DATA_DIR, basename(compatEnv.FAKE_CLAUDE_ROOM_PUSH_OUTBOX)), JSON.stringify({ memberId, text: pushText }) + "\n");
               } else {
-                void apnsPush.send(memberId, multiplayerActors.nameFor(actorId) ?? cfg.profile?.name ?? "New message",
-                  pushText, { roomId: room.id, senderId: actorId, senderName: multiplayerActors.nameFor(actorId) ?? cfg.profile?.name ?? "New message" }).catch(error =>
+                void pushPerson(memberId, multiplayerActors.nameFor(actorId) ?? cfg.profile?.name ?? "New message",
+                  pushText, { roomId: room.id, messageId: result.message.id, senderId: actorId, senderName: multiplayerActors.nameFor(actorId) ?? cfg.profile?.name ?? "New message" }).catch(error =>
                     console.warn(`shared push failed: ${error instanceof Error ? error.message : "unknown failure"}`));
               }
             }
@@ -17482,6 +17819,22 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
           bot: { kind: "bot", id: internalSender.id, name: internalSender.name },
           inRoom: Boolean(store.groupByThread(internalCapability.threadId)),
           requireActive: requireActiveInternalCapability,
+          readBody: limit => readInternalBody(limit),
+          json: (status, body) => json(res, status, body),
+          send: (status, headers, body) => { res.writeHead(status, headers); res.end(body); },
+        });
+        if (handled) return;
+      }
+      if (path === "/api/internal/apps" || path.startsWith("/api/internal/apps/")) {
+        const room = store.groupByThread(internalCapability.threadId);
+        if (room ? !room.memberIds.includes(internalSender.id) : !connectorThread(internalSender.id, internalCapability.threadId)) return json(res, 403, { error: "source conversation does not belong to sender" });
+        const sender = internalSender;
+        const handled = await handleInternalAppRoute(method, path, url.searchParams, {
+          apps: appStore, botId: sender.id, botName: sender.name, threadId: internalCapability.threadId,
+          roomId: room?.id ?? null,
+          botRoomIds: () => store.groups.filter(group => group.memberIds.includes(sender.id)).map(group => group.id),
+          requireActive: requireActiveInternalCapability,
+          createFromTemplate: (template, name, icon) => createAppFromTemplate(sender, internalCapability.threadId, template as AppTemplate, name, icon),
           readBody: limit => readInternalBody(limit),
           json: (status, body) => json(res, status, body),
           send: (status, headers, body) => { res.writeHead(status, headers); res.end(body); },
@@ -17956,12 +18309,54 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
           const found = await resolveInside(root, rel);
           if (!(await stat(found.real)).isFile()) return json(res, 400, { error: "That path is a folder, not a page." });
           const title = typeof body?.title === "string" ? body.title.trim().slice(0, 120) : "";
+          // a page that declares <meta name="bos-app"> gets its data store now, so the bot can write to it straight away
+          let appId: string | undefined;
+          if ((await stat(found.real)).size <= APP_PAGE_BYTES) {
+            const meta = appMeta(await appFs.readFile(found.real, "utf8"));
+            if (meta) { try { appId = appStore.ensure(from.id, { threadId: fromThreadId, path: found.rel, ...meta }, from.name).id; } catch { /* the tab still opens */ } }
+          }
           broadcast({ kind: "workspace.open", botId: from.id, threadId: fromThreadId, tab: "canvas", ref: found.rel, ...(title ? { title } : {}) });
           pageTabThreads.add(fromThreadId);
-          return json(res, 200, { path: found.rel });
+          return json(res, 200, { path: found.rel, ...(appId ? { app_id: appId } : {}) });
         } catch (error) {
           const status = (error as { status?: number }).status ?? 500;
           return json(res, status, { error: status === 404 ? `No file at ${rel} in your working folder (${root}). Write it first.` : error instanceof Error ? error.message : String(error) });
+        }
+      }
+      if (path === "/api/internal/desks" || path.startsWith("/api/internal/desks/")) {
+        // desk_open / desk_card / desk_list / desk_remove: the sender's own
+        // desks, opened beside the conversation the tool was called from.
+        const from = internalSender;
+        const fromThreadId = internalCapability.threadId;
+        if (!connectorThread(from.id, fromThreadId)) return json(res, 403, { error: "source conversation does not belong to sender" });
+        try {
+          if (method === "GET" && path === "/api/internal/desks") {
+            return json(res, 200, { desks: desks.list(from.id).map(({ id, name, kind, url, status, pinned, cards }) => ({ id, name, kind, url, status, pinned, cards: cards.map((card) => ({ id: card.id, title: card.title, code: card.code, ...(card.data !== undefined ? { data: card.data } : {}) })) })) });
+          }
+          const body = (await readInternalBody() ?? {}) as Record<string, unknown>;
+          if (method === "POST" && path === "/api/internal/desks/open") {
+            const { desk, created } = desks.open(from.id, fromThreadId, body as never);
+            broadcast({ kind: "workspace.open", botId: from.id, threadId: fromThreadId, tab: "desk", ref: desk.id, title: desk.name });
+            deskChanged(from.id, desk.id);
+            deskThreads.add(fromThreadId);
+            return json(res, 200, { desk: { id: desk.id, name: desk.name, kind: desk.kind, url: desk.url, status: desk.status, cards: desk.cards.map((card) => card.id) }, created });
+          }
+          if (method === "POST" && path === "/api/internal/desks/card") {
+            const deskId = String(body.desk_id ?? "");
+            const result = desks.card(from.id, deskId, body as never);
+            deskChanged(from.id, deskId);
+            deskThreads.add(fromThreadId);
+            return json(res, 200, { removed: result.removed === true, card: result.card ? { id: result.card.id, title: result.card.title } : null, cards: result.desk.cards.map((card) => card.id) });
+          }
+          if (method === "POST" && path === "/api/internal/desks/remove") {
+            const deskId = String(body.desk_id ?? "");
+            const removed = desks.remove(from.id, deskId);
+            if (removed) deskChanged(from.id, deskId);
+            return json(res, removed ? 200 : 404, removed ? { removed } : { error: `no desk ${deskId}` });
+          }
+          return json(res, 405, { error: "method not allowed" });
+        } catch (error) {
+          return json(res, error instanceof DeskError ? error.status : 500, { error: error instanceof Error ? error.message : String(error) });
         }
       }
       if (method === "POST" && path === "/api/internal/routine-requests") {
@@ -18278,44 +18673,21 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         if (action === "update" && !targetName) {
           return json(res, 400, { error: "skill_name is required when action is update" });
         }
-        const staged = stageSkillWrite(from.id, {
+        const written = writeLearnedSkill({
+          botId: from.id,
+          threadId: fromThreadId,
           action,
           targetName: targetName || undefined,
-          files: [{ path: "SKILL.md", content: skillMd }],
+          skillMd,
           gist: typeof body.gist === "string" ? body.gist : undefined,
           source: learnSource(source),
         });
-        if ("error" in staged) return json(res, 422, { error: staged.error });
-        if (fullAccessForSource(from.id, fromThreadId)) {
-          const applied = applySkillWriteWithReceipt(from.id, staged, () => {
-            const receipt = appendSkillRequestCard({ botId: from.id, threadId: fromThreadId, staged, applied: true });
-            appendDecision(DATA_DIR, { threadId: fromThreadId, requestId: receipt.requestId, botId: from.id, botName: from.name,
-              tool: "stage_skill", summary: receipt.summary, decision: "auto-approved", source: "full-access" });
-          });
-          if ("error" in applied) {
-            rejectStagedSkillWrite(from.id, staged.id);
-            return json(res, 422, { state: "failed", error: applied.error });
-          }
+        if (!written.ok) return json(res, 422, { ...(written.failed ? { state: "failed" } : {}), error: written.error });
+        const { staged } = written;
+        if (written.state === "applied") {
           return json(res, 201, { state: "applied", stagedId: staged.id, name: staged.name, action: staged.action,
-            gist: staged.gist, warnings: staged.warnings, ...applied, summary: `Skill ${staged.name} ${staged.action === "create" ? "enabled" : "updated"}.` });
+            gist: staged.gist, warnings: staged.warnings, ...written.applied, summary: `Skill ${staged.name} ${staged.action === "create" ? "enabled" : "updated"}.` });
         }
-        let card: ReturnType<typeof appendSkillRequestCard>;
-        try {
-          card = appendSkillRequestCard({ botId: from.id, threadId: fromThreadId, staged });
-        } catch (error) {
-          rejectStagedSkillWrite(from.id, staged.id);
-          throw error;
-        }
-        appendDecision(DATA_DIR, {
-          threadId: fromThreadId,
-          requestId: card.requestId,
-          botId: from.id,
-          botName: from.name,
-          tool: "stage_skill",
-          summary: card.summary,
-          decision: "card-shown",
-          source: "skill",
-        });
         return json(res, 201, {
           state: "pending",
           stagedId: staged.id,
@@ -18323,7 +18695,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
           action: staged.action,
           gist: staged.gist,
           warnings: staged.warnings,
-          summary: card.summary,
+          summary: written.summary,
         });
       }
       if (method === "POST" && path === "/api/internal/ask-bot") {
@@ -19870,6 +20242,25 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       publishLeadAction(resolved);
       return json(res, 200, { action: resolved });
     }
+    // Browser notifications: the key a browser subscribes with, and its
+    // subscription. Bound to this person and this session, never a peer link.
+    if (path === "/api/web-push" && method === "GET") {
+      if (peerSessionId || !requestActor) return json(res, 403, { error: "forbidden" });
+      const endpointHash = url.searchParams.get("endpoint");
+      const pushSession = auth.kind === "loopback" ? "loopback" : sessions.isLive(auth.session.id) ? auth.session.id : null;
+      return json(res, 200, { publicKey: webPush.publicKey(), browsers: webPush.countFor(requestActor),
+        ...(endpointHash && /^[0-9a-f]{64}$/.test(endpointHash) ? { current: Boolean(pushSession && webPush.holds(endpointHash, requestActor, pushSession)) } : {}) });
+    }
+    if (method === "POST" && (path === "/api/web-push/subscribe" || path === "/api/web-push/unsubscribe")) {
+      if (peerSessionId || !requestActor) return json(res, 403, { error: "forbidden" });
+      const pushSession = auth.kind === "loopback" ? "loopback" : sessions.isLive(auth.session.id) ? auth.session.id : null;
+      if (!pushSession) return json(res, 401, { error: "session revoked" });
+      const body = await readBody(req, 8_000);
+      if (path.endsWith("/unsubscribe")) return json(res, 200, { removed: typeof body?.endpoint === "string" && webPush.unsubscribe(body.endpoint, pushSession) });
+      try { webPush.subscribe(requestActor, pushSession, body?.subscription ?? {}); }
+      catch (error) { return json(res, 400, { error: error instanceof Error ? error.message : "invalid subscription" }); }
+      return json(res, 200, { subscribed: true });
+    }
     // Enumerate authorized conversations, never the unrestricted work ledger.
     // Peer-only sessions have no workspace inbox authority (as for /api/inbox).
     if (method === "GET" && path === "/api/activity") {
@@ -19955,6 +20346,13 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       }
       const limit = pageSize(url.searchParams.get("messages"));
       if (limit === null) return json(res, 400, { error: "messages must be a non-negative whole number" });
+      // The stream position this snapshot covers at least. Read before the
+      // snapshot is built (every numbered frame is already in the store), so
+      // a phone can fetch the fleet while its stream is still dialing and
+      // tell at hello whether it is new enough. Clients that do not know the
+      // field ignore it; peer and guest views do not carry it.
+      deltaCoalescer.flush();
+      const cursor = `${STREAM_ID}:${lastSeq}`;
       // wireBot(), not publicBot(): publicBot() pulls the whole transcript via
       // messagesFor() just to have it overwritten below by messagePage(),
       // which — for a bounded request — never needs the full transcript.
@@ -19969,6 +20367,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       const withJoinedRooms = <T extends { groups: Array<{ id: string }> }>(body: T): Promise<T> | T =>
         remoteRoomOwner && !foreignNow ? withRemoteGroups(body.groups, { ...remoteRooms, waitMs: 100 }).then(groups => ({ ...body, groups })) : body;
       return json(res, 200, await withJoinedRooms({
+        cursor,
         bots: [...visibleBots.map(visibleThreadBot).map((bot) => ({
           ...wireBot(bot),
           tasks: visibleBotTasks(bot.id).map(task => wireTask(task, bot.id)),
@@ -21306,6 +21705,30 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       if (handled) return;
     }
 
+    if (path === "/api/apps" || path.startsWith("/api/apps/")) {
+      const ownerGates = { ownerId: multiplayerActors.ownerId, actor: workspaceActor, live: (id: string) => sessions.isLive(id) };
+      const handled = await handleOwnerAppRoute(method, path, url.searchParams, {
+        apps: appStore,
+        access: () => {
+          try {
+            assertOwnerAccess(auth, ownerGates);
+            return { level: "owner", name: cfg.profile?.name?.trim() || "Owner", roomIds: () => store.groups.map(group => group.id) };
+          } catch { /* not the owner: maybe a person in a room the app is shared into */ }
+          if (auth.kind !== "session" || !sessions.isLive(auth.session.id)) return null;
+          const actor = workspaceActor(auth);
+          if (!actor || actor === multiplayerActors.ownerId) return null;
+          return { level: "person", name: multiplayerActors.nameFor(actor) || auth.session.email || "Person", roomIds: () => store.groups.filter(group => canReadChannel(group, actor)).map(group => group.id) };
+        },
+        botExists: botId => Boolean(store.bot(botId)),
+        roomExists: roomId => Boolean(store.group(roomId)),
+        readPage: readAppPage,
+        copyPage: copyAppPage,
+        readBody: limit => readBody(req, limit),
+        json: (status, body) => json(res, status, body),
+        send: (status, headers, body) => { res.writeHead(status, { ...headers, "content-length": String(Buffer.byteLength(body)) }); res.end(body); },
+      });
+      if (handled) return;
+    }
     if (path.startsWith("/api/videos/")) {
       const ownerGates = { ownerId: multiplayerActors.ownerId, actor: workspaceActor, live: (id: string) => sessions.isLive(id) };
       const handled = await handleOwnerVideoRoute(method, path, url.searchParams, {
@@ -21461,7 +21884,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         if (!checked.ok) return json(res, checked.status, { error: checked.error });
         selection = checked.selection;
       }
-      const fallback = body.fallbackModel === undefined ? { ok: true as const, model: undefined } : checkedFallbackModel(body.fallbackModel, selection.instanceId);
+      const fallback = body.fallbackModel === undefined ? { ok: true as const, model: undefined, instanceId: undefined } : checkedFallbackModel(body.fallbackModel, selection.instanceId, body.fallbackInstanceId);
       if (!fallback.ok) return json(res, 400, { error: fallback.error });
       // Keep the capacity check immediately beside the synchronous write.
       // Awaiting provider discovery before this point cannot race the cap.
@@ -21473,6 +21896,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         section,
         modelSelection: selection,
         fallbackModel: fallback.model,
+        fallbackInstanceId: fallback.instanceId,
       });
       return json(res, 201, {
         bot: {
@@ -21735,10 +22159,13 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       }
       const patch: Record<string, unknown> = {};
       Object.assign(patch, profile.patch);
-      if (body.fallbackModel !== undefined) {
-        const fallback = checkedFallbackModel(body.fallbackModel, (normalizedSelection ?? existingBot?.modelSelection)?.instanceId);
+      if (body.fallbackModel !== undefined || body.fallbackInstanceId !== undefined) {
+        const model = body.fallbackModel === undefined ? existingBot?.fallbackModel ?? null : body.fallbackModel;
+        const instance = body.fallbackInstanceId === undefined ? existingBot?.fallbackInstanceId : body.fallbackInstanceId;
+        const fallback = checkedFallbackModel(model, (normalizedSelection ?? existingBot?.modelSelection)?.instanceId, instance);
         if (!fallback.ok) return json(res, 400, { error: fallback.error });
         patch.fallbackModel = fallback.model;
+        patch.fallbackInstanceId = fallback.instanceId;
       }
       if (body.visibility !== undefined) {
         if (body.visibility !== "shared" && body.visibility !== "private") return json(res, 400, { error: "visibility must be shared or private" });
@@ -25235,6 +25662,56 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       }
       return json(res, 200, { policy: whatsapp.replies.policy(m[1]) ?? null });
     }
+    m = path.match(/^\/api\/bots\/([\w-]+)\/desks(?:\/(d-[a-f0-9]{8}))?$/);
+    if (m) {
+      // The owner's side of a desk: read, pin, mark signed in, remove.
+      if (!auth.scopes.includes("admin")) return json(res, 403, { error: "owner access required" });
+      if (!store.bot(m[1])) return json(res, 404, { error: "no such bot" });
+      const [, botId, deskId] = m;
+      try {
+        if (!deskId && method === "GET") return json(res, 200, { desks: desks.list(botId) });
+        if (deskId && method === "GET") {
+          const desk = desks.get(botId, deskId);
+          return desk ? json(res, 200, { desk }) : json(res, 404, { error: "no such desk" });
+        }
+        if (deskId && method === "PATCH") {
+          const body = await readBody(req) as Record<string, unknown> | null;
+          const patch: { pinned?: boolean; status?: "ready" | "needs_sign_in"; name?: string } = {};
+          if (typeof body?.pinned === "boolean") patch.pinned = body.pinned;
+          if (body?.status === "ready" || body?.status === "needs_sign_in") patch.status = body.status;
+          if (typeof body?.name === "string") patch.name = body.name;
+          const desk = desks.patch(botId, deskId, patch);
+          deskChanged(botId, deskId);
+          return json(res, 200, { desk });
+        }
+        if (deskId && method === "DELETE") {
+          const removed = desks.remove(botId, deskId);
+          if (removed) deskChanged(botId, deskId);
+          return json(res, removed ? 200 : 404, removed ? { removed } : { error: "no such desk" });
+        }
+        return json(res, 405, { error: "method not allowed" });
+      } catch (error) {
+        return json(res, error instanceof DeskError ? error.status : 500, { error: error instanceof Error ? error.message : String(error) });
+      }
+    }
+    if (path === "/api/whatsapp/native/screen" && method === "GET") {
+      // The whatsapp desk's live view: a jpeg of bos's own WhatsApp Web page.
+      if (!auth.scopes.includes("admin")) return json(res, 403, { error: "owner access required" });
+      const shot = whatsapp.enabled ? await whatsapp.native.screenshot() : null;
+      if (!shot) return json(res, 409, { error: "WhatsApp is not linked" });
+      res.writeHead(200, { "content-type": "image/jpeg", "cache-control": "no-store", "content-length": String(shot.byteLength) });
+      res.end(Buffer.from(shot));
+      return;
+    }
+    if (path === "/api/whatsapp/native/hold" && method === "POST") {
+      // Take over / hand back: while held, no bot replies, sends or auto-dispatches.
+      if (!auth.scopes.includes("admin")) return json(res, 403, { error: "owner access required" });
+      const body = await readBody(req) as { on?: unknown } | null;
+      if (typeof body?.on !== "boolean") return json(res, 400, { error: "on (true or false) required" });
+      whatsapp.replies.hold(body.on);
+      broadcast({ kind: "desk.whatsapp", held: body.on });
+      return json(res, 200, { held: whatsapp.replies.held() });
+    }
     {
       const answer = await whatsapp.handlePublic(method, path);
       if (answer) return json(res, answer.status, answer.body);
@@ -26133,6 +26610,7 @@ server.listen(PORT, "127.0.0.1", () => {
   }, 60_000);
   productConnectionTimer.unref();
   anonymousUsagePing.start();
+  peopleHub.start();
   companyRuntimeReady();
   // after the fleet's first probe, so a ready Claude or ChatGPT is seen first
   setTimeout(() => void ensureBosAi().catch(error => console.error("[bos-ai] boot:", error instanceof Error ? error.message : error)), 3_000).unref();

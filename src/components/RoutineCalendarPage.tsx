@@ -1624,7 +1624,8 @@ export function RoutinesPage({ onBack, onOpenRoom }: { onBack: () => void; onOpe
   const newMenuRef = useRef<HTMLDetailsElement>(null);
   const [section, setSection] = useState<"calendar" | "logs" | "webhooks">(state.routinesFocus?.section === "logs" ? "logs" : "calendar");
   const [scheduleView, setScheduleView] = useState<"calendar" | "list">(state.routinesFocus?.view ?? "calendar");
-  const [viewDays, setViewDays] = useState<1 | 3 | 7>(7);
+  // a week of columns doesn't fit a phone: start on one day there
+  const [viewDays, setViewDays] = useState<1 | 3 | 7>(() => typeof window !== "undefined" && window.matchMedia?.("(max-width: 640px)").matches ? 1 : 7);
   const [anchor, setAnchor] = useState(() => startOfDay(Date.now()));
   const [botFilter, setBotFilter] = useState(state.routinesFocus?.botId ?? "all");
   const [routineFilter, setRoutineFilter] = useState<string | undefined>(state.routinesFocus?.routineId);

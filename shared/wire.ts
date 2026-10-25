@@ -237,6 +237,9 @@ export interface WireBot {
   modelSelection: ModelSelection;
   /** Explicit available backup model ID for provider quota fallback. */
   fallbackModel?: string;
+  /** Explicit owner opt-in: the provider instance that serves fallbackModel,
+   * including a sibling subscription of the same engine (a second Claude account). */
+  fallbackInstanceId?: string;
   /** where the bot works ("Works on"). Unset = auto. */
   computer?: Surface | "off";
   /** Explicit shared worker identity. Overrides local surface selection; never falls back. */
@@ -664,8 +667,11 @@ export type UpdateRunState =
 
 export type ServerFrame =
   | { kind: "page"; botId: string; pageId: string; revision: number; byKind: "human" | "bot"; deleted?: boolean }
+  | { kind: "app"; appId: string; botId?: string; rev: number; collections: string[]; by: string; deleted?: boolean; meta?: boolean }
   | { kind: "video"; botId: string; videoId: string; revision: number; byKind: "human" | "bot"; deleted?: boolean; render?: import("./video.ts").VideoRender }
-  | { kind: "workspace.open"; botId: string; threadId: string; tab: "canvas"; ref: string; title?: string }
+  | { kind: "workspace.open"; botId: string; threadId: string; tab: "canvas" | "desk"; ref: string; title?: string }
+  | { kind: "desk"; botId: string; deskId: string; desk: import("./desks.ts").Desk | null }
+  | { kind: "desk.whatsapp"; held: boolean }
   | ({ kind: "activity" } & import("./activity.ts").ActivityResponse)
   | { kind: "sections"; sections: string[] }
   | { kind: "bot.queued"; queues: BotQueuedMessages }

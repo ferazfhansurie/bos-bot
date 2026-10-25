@@ -1,0 +1,350 @@
+<!doctype html>
+<html lang="en">
+<head>
+<title>Tasks</title>
+<meta name="bos-app" content="Tasks">
+<meta name="bos-app-icon" content="kanban">
+<meta name="bos-app-schema" content="tasks: title, status (todo|doing|done), priority (low|medium|high), assignee (person name), due (YYYY-MM-DD), notes (text), order (number, lower shows first within its column)">
+<style>
+  [hidden]{display:none!important}
+  :root{--accent:#d9480f}
+  .app-icon{display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;border-radius:8px;background:var(--accent);color:#fff;flex:none}
+  .app-icon svg,.btn svg,.icon-btn svg{width:16px;height:16px}
+  .bar{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+  .bar select{width:auto;min-width:160px}
+  .summary{font-size:13px;color:var(--muted)}
+  .summary b{color:var(--bad);font-weight:600}
+  .board{grid-auto-columns:minmax(250px,1fr)}
+  .col-head .dot{width:8px;height:8px;border-radius:50%;background:var(--muted)}
+  .col-head .count{color:var(--muted);font-weight:500}
+  .quick{background:var(--surface);min-height:36px}
+  .quick::placeholder{color:var(--muted)}
+  .col-body{display:flex;flex-direction:column;gap:8px;min-height:40px}
+  .tile{display:flex;flex-direction:column;gap:8px;outline:none;position:relative}
+  .tile:focus-visible{border-color:var(--accent);box-shadow:0 0 0 3px color-mix(in srgb,var(--accent) 22%,transparent)}
+  .tile-title{font-weight:500;line-height:1.35;word-break:break-word}
+  .tile.done .tile-title{color:var(--muted);text-decoration:line-through}
+  .tile-foot{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+  .tile-foot .avatar{width:24px;height:24px;font-size:10px;margin-left:auto}
+  .tile .note-dot{color:var(--muted);display:inline-flex}
+  .tile .note-dot svg{width:14px;height:14px}
+  .drop-line{height:3px;border-radius:3px;background:var(--accent);margin:-5px 0}
+  .col-empty{font-size:12px;color:var(--muted);text-align:center;padding:14px 0;border:1px dashed var(--line);border-radius:10px}
+  .badge[data-tone=gray]{background:var(--raised);color:var(--muted)}
+  .pri{display:inline-flex;align-items:center;gap:5px;font-size:12px;color:var(--muted)}
+  .pri i{width:8px;height:8px;border-radius:2px;background:var(--line)}
+  .pri[data-p=high] i{background:var(--bad)} .pri[data-p=medium] i{background:var(--warn)} .pri[data-p=low] i{background:#98a2b3}
+  .who{display:flex;align-items:center;gap:8px;min-width:0}
+  .who .avatar{width:24px;height:24px;font-size:10px}
+  td.title-cell{max-width:380px}
+  td.title-cell div{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  tr.done td.title-cell{color:var(--muted);text-decoration:line-through}
+  .full{grid-column:1/-1}
+  .sheet-head{display:flex;align-items:center;gap:10px}
+  .sheet-head h2{flex:1}
+  .btn.solid-danger{background:var(--bad);border-color:var(--bad);color:#fff}
+  @media (max-width:640px){ .app-bar .tabs{order:5;width:100%;display:flex} .app-bar .tabs button{flex:1} .bar select{flex:1} }
+</style>
+</head>
+<body>
+<div class="app">
+  <header class="app-bar">
+    <h1><span class="app-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M8 7v7M12 7v4M16 7v9"/></svg></span><span id="app-name">Tasks</span></h1>
+    <div class="tabs" role="tablist">
+      <button role="tab" data-view="board" aria-selected="true">Board</button>
+      <button role="tab" data-view="list" aria-selected="false">List</button>
+    </div>
+    <button class="btn primary" id="new-task" aria-label="New task"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg><span class="hide-sm">New task</span></button>
+  </header>
+  <main class="app-main">
+    <div class="bar">
+      <select id="who" aria-label="Filter by assignee"></select>
+      <span class="summary" id="summary"></span>
+    </div>
+    <div id="view"></div>
+  </main>
+</div>
+
+<dialog class="sheet" id="task-sheet">
+  <div id="task-form">
+    <div class="sheet-head">
+      <h2 id="ts-title">New task</h2>
+      <button type="button" class="icon-btn" data-close aria-label="Close"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg></button>
+    </div>
+    <div class="form">
+      <label class="field full"><span>Title</span><input name="title" placeholder="What needs doing" autocomplete="off"></label>
+      <label class="field"><span>Status</span><select name="status"><option value="todo">To do</option><option value="doing">Doing</option><option value="done">Done</option></select></label>
+      <label class="field"><span>Priority</span><select name="priority"><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option></select></label>
+      <label class="field"><span>Assignee</span><input name="assignee" list="people" placeholder="Name" autocomplete="off"></label>
+      <label class="field"><span>Due</span><input name="due" type="date"></label>
+      <label class="field full"><span>Notes</span><textarea name="notes" placeholder="Details, links, context"></textarea></label>
+    </div>
+    <datalist id="people"></datalist>
+    <p class="small muted" id="ts-meta"></p>
+    <div class="sheet-actions">
+      <button type="button" class="btn danger" id="ts-delete" style="margin-right:auto">Delete</button>
+      <button type="button" class="btn" data-close>Cancel</button>
+      <button type="button" class="btn primary" id="ts-save">Save</button>
+    </div>
+  </div>
+</dialog>
+
+<dialog class="sheet" id="confirm-sheet">
+  <div>
+    <h2 id="confirm-text">Are you sure?</h2>
+    <p class="muted" id="confirm-sub"></p>
+    <div class="sheet-actions"><button type="button" class="btn" data-close>Cancel</button><button type="button" class="btn solid-danger" id="confirm-ok">Delete</button></div>
+  </div>
+</dialog>
+
+<script>
+const COLS = [
+  { key: "todo", label: "To do", color: "#98a2b3" },
+  { key: "doing", label: "Doing", color: "#2f6df6" },
+  { key: "done", label: "Done", color: "#12a150" },
+];
+const KNOWN = new Set(COLS.map(c => c.key));
+const PRI = { high: "High", medium: "Medium", low: "Low" };
+const $ = s => document.querySelector(s);
+const esc = bos.esc;
+const pad = n => String(n).padStart(2, "0");
+const ymd = d => d.getFullYear() + "-" + pad(d.getMonth() + 1) + "-" + pad(d.getDate());
+const today = () => ymd(new Date());
+const tomorrow = () => { const d = new Date(); d.setDate(d.getDate() + 1); return ymd(d); };
+const isDate = s => typeof s === "string" && /^\d{4}-\d{2}-\d{2}$/.test(s);
+const fmtDate = s => isDate(s) ? new Date(s + "T00:00").toLocaleDateString("en-GB", { day: "numeric", month: "short" }) : "";
+const initials = s => (String(s || "?").trim().split(/\s+/).slice(0, 2).map(w => w[0]).join("") || "?").toUpperCase();
+const ago = ms => { if (!ms) return ""; const m = Math.round((Date.now() - ms) / 60000); if (m < 1) return "just now"; if (m < 60) return m + "m ago"; const h = Math.round(m / 60); return h < 24 ? h + "h ago" : Math.round(h / 24) + "d ago"; };
+
+const state = { tasks: [], view: "board", who: "", openId: null, dirty: false };
+const statusOf = t => KNOWN.has(t.status) ? t.status : (t.status ? "other" : "todo");
+const ord = t => Number.isFinite(Number(t.order)) && t.order !== null && t.order !== "" ? Number(t.order) : null;
+const byOrder = (a, b) => { const x = ord(a), y = ord(b); if (x !== null && y !== null && x !== y) return x - y; if (x === null && y !== null) return 1; if (y === null && x !== null) return -1; return (a._at || 0) - (b._at || 0); };
+const visible = () => state.tasks.filter(t => !state.who || (state.who === "__none" ? !String(t.assignee || "").trim() : String(t.assignee || "").trim() === state.who));
+const inCol = key => visible().filter(t => statusOf(t) === key).sort(byOrder);
+
+function dueBadge(t) {
+  if (!isDate(t.due)) return "";
+  if (statusOf(t) === "done") return `<span class="badge" data-tone="gray">${esc(fmtDate(t.due))}</span>`;
+  const d = today();
+  if (t.due < d) return `<span class="badge" data-tone="red">Overdue ${esc(fmtDate(t.due))}</span>`;
+  if (t.due === d) return `<span class="badge" data-tone="amber">Today</span>`;
+  if (t.due === tomorrow()) return `<span class="badge" data-tone="blue">Tomorrow</span>`;
+  return `<span class="badge" data-tone="gray">${esc(fmtDate(t.due))}</span>`;
+}
+const priTag = t => PRI[t.priority] ? `<span class="pri" data-p="${t.priority}"><i></i>${PRI[t.priority]}</span>` : "";
+
+// ---------- render ----------
+function render() {
+  // filter options
+  const people = [...new Set(state.tasks.map(t => String(t.assignee || "").trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b));
+  if (state.who && state.who !== "__none" && !people.includes(state.who)) state.who = "";
+  $("#who").innerHTML = `<option value="">Everyone</option>` + people.map(p => `<option value="${esc(p)}">${esc(p)}</option>`).join("") + `<option value="__none">Unassigned</option>`;
+  $("#who").value = state.who;
+  $("#people").innerHTML = people.map(p => `<option value="${esc(p)}">`).join("");
+  const open = visible().filter(t => statusOf(t) !== "done"), late = open.filter(t => isDate(t.due) && t.due < today()).length;
+  $("#summary").innerHTML = state.tasks.length ? `${open.length} open${late ? ` · <b>${late} overdue</b>` : ""}` : "No tasks yet. Type in a column to add one, or let a bot add them.";
+  document.querySelectorAll(".tabs [data-view]").forEach(b => b.setAttribute("aria-selected", b.dataset.view === state.view));
+  const focusQuick = document.activeElement && document.activeElement.matches(".quick") ? document.activeElement.dataset.col : null;
+  const focusTile = document.activeElement && document.activeElement.matches(".tile") ? document.activeElement.dataset.id : null;
+  $("#view").innerHTML = state.view === "board" ? board() : list();
+  if (focusQuick) { const q = document.querySelector(`.quick[data-col="${focusQuick}"]`); if (q) q.focus(); }
+  if (focusTile) { const t = document.querySelector(`.tile[data-id="${CSS.escape(focusTile)}"]`); if (t) t.focus(); }
+}
+
+function tile(t) {
+  return `<div class="tile${statusOf(t) === "done" ? " done" : ""}" draggable="true" tabindex="0" data-id="${esc(t.id)}" aria-label="${esc(t.title || "Untitled")}. Shift and arrow keys move it.">
+    <div class="tile-title">${esc(t.title || "Untitled")}</div>
+    ${priTag(t) || dueBadge(t) || t.assignee || t.notes ? `<div class="tile-foot">${priTag(t)}${dueBadge(t)}${t.notes ? `<span class="note-dot" title="Has notes"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 6h16M4 12h16M4 18h10"/></svg></span>` : ""}${String(t.assignee || "").trim() ? `<span class="avatar" title="${esc(t.assignee)}">${esc(initials(t.assignee))}</span>` : ""}</div>` : ""}
+  </div>`;
+}
+function board() {
+  return columns();
+}
+function columns() {
+  const cols = COLS.slice();
+  if (visible().some(t => statusOf(t) === "other")) cols.push({ key: "other", label: "Other", color: "#7a5af8" });
+  return `<div class="board">` + cols.map(c => {
+    const items = inCol(c.key);
+    return `<div class="col" data-col="${c.key}" aria-label="${c.label}">
+      <div class="col-head"><span class="dot" style="background:${c.color}"></span>${c.label}<span class="count">${items.length}</span></div>
+      ${c.key === "other" ? "" : `<input class="quick" data-col="${c.key}" placeholder="+ Add a task" aria-label="Add a task to ${c.label}" autocomplete="off">`}
+      <div class="col-body">${items.map(tile).join("") || `<div class="col-empty">${c.key === "done" ? "Finished work lands here" : "Nothing here"}</div>`}</div>
+    </div>`;
+  }).join("") + `</div>`;
+}
+function list() {
+  const rank = { doing: 0, todo: 1, other: 2, done: 3 };
+  const rows = visible().slice().sort((a, b) => (rank[statusOf(a)] - rank[statusOf(b)]) || ((isDate(a.due) ? a.due : "9999") < (isDate(b.due) ? b.due : "9999") ? -1 : (isDate(a.due) ? a.due : "9999") > (isDate(b.due) ? b.due : "9999") ? 1 : 0) || byOrder(a, b));
+  if (!rows.length) return `<div class="empty"><p><b>${state.tasks.length ? "No tasks for this person" : "No tasks yet"}</b></p><p class="small">Press New task to add one.</p></div>`;
+  const label = s => (COLS.find(c => c.key === s) || { label: "Other" }).label;
+  const tone = { todo: "", doing: "blue", done: "green", other: "purple" };
+  return `<div class="table-wrap"><table class="table"><thead><tr><th style="width:36px"></th><th>Task</th><th>Status</th><th class="hide-sm">Priority</th><th class="hide-sm">Assignee</th><th>Due</th></tr></thead><tbody>` +
+    rows.map(t => `<tr data-click data-open="${esc(t.id)}" class="${statusOf(t) === "done" ? "done" : ""}">
+      <td><input type="checkbox" data-done="${esc(t.id)}" ${statusOf(t) === "done" ? "checked" : ""} aria-label="Mark done"></td>
+      <td class="title-cell"><div>${esc(t.title || "Untitled")}</div></td>
+      <td><span class="badge" data-tone="${tone[statusOf(t)]}">${esc(statusOf(t) === "other" ? String(t.status) : label(statusOf(t)))}</span></td>
+      <td class="hide-sm">${priTag(t) || `<span class="muted">-</span>`}</td>
+      <td class="hide-sm">${String(t.assignee || "").trim() ? `<div class="who"><span class="avatar">${esc(initials(t.assignee))}</span>${esc(t.assignee)}</div>` : `<span class="muted">-</span>`}</td>
+      <td>${dueBadge(t) || `<span class="muted">-</span>`}</td></tr>`).join("") + `</tbody></table></div>`;
+}
+
+// ---------- writes ----------
+const local = (id, fields) => { const t = state.tasks.find(x => x.id === id); if (t) Object.assign(t, fields); render(); };
+async function patch(id, fields) {
+  local(id, fields);
+  try { await bos.patch("tasks", id, fields); } catch (e) { bos.toast("Could not save: " + e.message); }
+}
+// place task `id` into column `key` before task `beforeId` (null = end)
+async function move(id, key, beforeId) {
+  const items = inCol(key).filter(t => t.id !== id);
+  let idx = beforeId ? items.findIndex(t => t.id === beforeId) : items.length;
+  if (idx < 0) idx = items.length;
+  const prev = items[idx - 1], next = items[idx];
+  const po = prev ? ord(prev) : null, no = next ? ord(next) : null;
+  let order;
+  if (!prev && !next) order = 1000;
+  else if (!prev && no !== null) order = no - 1000;
+  else if (!next && po !== null) order = po + 1000;
+  else if (po !== null && no !== null && no - po > 1e-6) order = (po + no) / 2;
+  if (order === undefined) {
+    // neighbours have no usable order (bot-written tasks): renumber the column
+    const seq = items.slice(); seq.splice(idx, 0, { id });
+    await Promise.all(seq.map((t, i) => t.id === id ? null : ord(t) === (i + 1) * 1000 ? null : patch(t.id, { order: (i + 1) * 1000 })));
+    order = (idx + 1) * 1000;
+  }
+  const t = state.tasks.find(x => x.id === id);
+  const fields = { order };
+  if (!t || statusOf(t) !== key) fields.status = key;
+  await patch(id, fields);
+}
+async function quickAdd(key, title) {
+  const items = inCol(key), first = items.find(t => ord(t) !== null);
+  const rec = { title, status: key, priority: "medium", order: first ? ord(first) - 1000 : 1000 };
+  if (state.who && state.who !== "__none") rec.assignee = state.who;
+  try { await bos.put("tasks", rec); } catch (e) { bos.toast("Could not add: " + e.message); }
+}
+
+// ---------- sheet ----------
+const form = $("#task-form"), F = n => form.querySelector(`[name=${n}]`);
+function openTask(t) {
+  t = t || { status: "todo", priority: "medium", assignee: state.who && state.who !== "__none" ? state.who : "" };
+  state.openId = t.id || null; state.dirty = false;
+  $("#ts-title").textContent = t.id ? "Edit task" : "New task";
+  F("title").value = t.title || "";
+  F("status").value = KNOWN.has(t.status) ? t.status : "todo";
+  F("priority").value = PRI[t.priority] ? t.priority : "medium";
+  F("assignee").value = t.assignee || "";
+  F("due").value = isDate(t.due) ? t.due : "";
+  F("notes").value = t.notes || "";
+  $("#ts-meta").textContent = t.id ? `Updated ${ago(t._at)}${t._by ? " by " + t._by : ""}` + (t.status && !KNOWN.has(t.status) ? ` · status was "${t.status}"` : "") : "";
+  $("#ts-delete").hidden = !t.id;
+  if (!$("#task-sheet").open) $("#task-sheet").showModal();
+  F("title").focus();
+}
+async function saveTask() {
+  const title = F("title").value.trim();
+  if (!title) { F("title").focus(); return bos.toast("Give the task a title"); }
+  const fields = { title, status: F("status").value, priority: F("priority").value, assignee: F("assignee").value.trim(), due: F("due").value, notes: F("notes").value.trim() };
+  const id = state.openId, old = state.tasks.find(t => t.id === id);
+  try {
+    if (id && old) {
+      if (statusOf(old) !== fields.status) { const top = inCol(fields.status).find(t => ord(t) !== null); fields.order = top ? ord(top) - 1000 : 1000; }
+      await bos.patch("tasks", id, fields);
+    } else {
+      const top = inCol(fields.status).find(t => ord(t) !== null);
+      await bos.put("tasks", { ...fields, order: top ? ord(top) - 1000 : 1000 });
+    }
+    state.dirty = false;
+    $("#task-sheet").close();
+    bos.toast(id ? "Task saved" : "Task added");
+  } catch (e) { bos.toast("Could not save: " + e.message); }
+}
+$("#ts-save").addEventListener("click", saveTask);
+form.addEventListener("keydown", e => { if (e.key === "Enter" && e.target.tagName === "INPUT") { e.preventDefault(); saveTask(); } });
+form.addEventListener("input", e => { if (e.target.name) state.dirty = true; });
+$("#task-sheet").addEventListener("close", () => { state.openId = null; state.dirty = false; });
+function confirmBox(text, sub) {
+  const d = $("#confirm-sheet");
+  $("#confirm-text").textContent = text; $("#confirm-sub").textContent = sub || "";
+  d.returnValue = ""; d.showModal(); $("#confirm-ok").focus();
+  return new Promise(ok => d.addEventListener("close", () => ok(d.returnValue === "yes"), { once: true }));
+}
+$("#confirm-ok").addEventListener("click", () => $("#confirm-sheet").close("yes"));
+$("#ts-delete").addEventListener("click", async () => {
+  const id = state.openId, t = state.tasks.find(x => x.id === id); if (!t) return;
+  if (!(await confirmBox(`Delete "${t.title || "Untitled"}"?`, "This cannot be undone."))) return;
+  try { await bos.remove("tasks", id); $("#task-sheet").close(); bos.toast("Task deleted"); } catch (e) { bos.toast("Could not delete: " + e.message); }
+});
+
+// ---------- events ----------
+$("#new-task").addEventListener("click", () => openTask());
+$("#who").addEventListener("change", e => { state.who = e.target.value; render(); });
+document.querySelectorAll(".tabs [data-view]").forEach(b => b.addEventListener("click", () => { state.view = b.dataset.view; render(); }));
+document.addEventListener("click", e => {
+  const t = e.target;
+  if (t.closest("[data-close]")) { t.closest("dialog").close(); return; }
+  if (t.matches("[data-done]")) return;
+  const tl = t.closest(".tile"); if (tl) { openTask(state.tasks.find(x => x.id === tl.dataset.id)); return; }
+  const row = t.closest("[data-open]"); if (row) openTask(state.tasks.find(x => x.id === row.dataset.open));
+});
+document.addEventListener("change", e => {
+  if (e.target.matches("[data-done]")) { const id = e.target.dataset.done; const t = state.tasks.find(x => x.id === id); if (!t) return; const key = e.target.checked ? "done" : "todo"; move(id, key, inCol(key)[0] ? inCol(key)[0].id : null); }
+});
+document.addEventListener("keydown", e => {
+  if (e.target.matches(".quick") && e.key === "Enter") {
+    e.preventDefault(); const v = e.target.value.trim(); if (!v) return;
+    e.target.value = ""; quickAdd(e.target.dataset.col, v);
+  } else if (e.target.matches(".quick") && e.key === "Escape") { e.target.value = ""; e.target.blur(); }
+  else if (e.target.matches(".tile")) {
+    const id = e.target.dataset.id, t = state.tasks.find(x => x.id === id); if (!t) return;
+    if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openTask(t); return; }
+    if (!e.shiftKey) return;
+    const key = statusOf(t), ci = COLS.findIndex(c => c.key === key);
+    if (e.key === "ArrowRight" || e.key === "ArrowLeft") {
+      e.preventDefault();
+      const to = COLS[Math.max(0, Math.min(COLS.length - 1, (ci < 0 ? 0 : ci) + (e.key === "ArrowRight" ? 1 : -1)))].key;
+      if (to !== key) move(id, to, inCol(to)[0] ? inCol(to)[0].id : null);
+    } else if (e.key === "ArrowUp" || e.key === "ArrowDown") {
+      e.preventDefault();
+      const items = inCol(key), i = items.findIndex(x => x.id === id);
+      if (e.key === "ArrowUp" && i > 0) move(id, key, items[i - 1].id);
+      if (e.key === "ArrowDown" && i < items.length - 1) move(id, key, items[i + 2] ? items[i + 2].id : null);
+    }
+  }
+});
+
+// drag and drop: between columns and within a column
+let dragId = null, dropAt = null;
+const line = document.createElement("div"); line.className = "drop-line";
+document.addEventListener("dragstart", e => { const t = e.target.closest && e.target.closest(".tile"); if (!t) return; dragId = t.dataset.id; t.classList.add("dragging"); e.dataTransfer.effectAllowed = "move"; e.dataTransfer.setData("text/plain", dragId); });
+document.addEventListener("dragend", () => { if (!dragId) return; dragId = null; dropAt = null; line.remove(); render(); });
+document.addEventListener("dragover", e => {
+  const col = e.target.closest && e.target.closest(".col"); if (!col || !dragId || col.dataset.col === "other") return;
+  e.preventDefault();
+  document.querySelectorAll(".col.drop").forEach(c => c !== col && c.classList.remove("drop")); col.classList.add("drop");
+  const body = col.querySelector(".col-body"), tiles = [...body.querySelectorAll(".tile:not(.dragging)")];
+  const before = tiles.find(t => { const r = t.getBoundingClientRect(); return e.clientY < r.top + r.height / 2; });
+  dropAt = { key: col.dataset.col, beforeId: before ? before.dataset.id : null };
+  before ? body.insertBefore(line, before) : body.appendChild(line);
+});
+document.addEventListener("drop", e => {
+  if (!dragId || !dropAt) return; e.preventDefault();
+  const { key, beforeId } = dropAt, id = dragId;
+  // the re-render below detaches the dragged tile, so dragend may never reach document: reset here
+  dragId = null; dropAt = null; line.remove();
+  if (beforeId !== id) move(id, key, beforeId); else render();
+});
+
+// ---------- live data ----------
+bos.subscribe("tasks", rows => {
+  state.tasks = rows;
+  if (dragId) return; // finish the drag first; dragend re-renders via the next update
+  render();
+  if (state.openId && !state.dirty && $("#task-sheet").open) { const t = rows.find(x => x.id === state.openId); if (t) openTask(t); else $("#task-sheet").close(); }
+});
+bos.app().then(a => { if (a && a.name) { $("#app-name").textContent = a.name; document.title = a.name; } });
+render();
+</script>
+</body>
+</html>

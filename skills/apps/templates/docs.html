@@ -1,0 +1,362 @@
+<!doctype html>
+<html lang="en">
+<head>
+<title>Docs</title>
+<meta name="bos-app" content="Docs">
+<meta name="bos-app-icon" content="file-text">
+<meta name="bos-app-schema" content="docs: title, html (body as simple HTML using only p h1 h2 h3 ul ol li b strong i em u blockquote a br div span; links need http, https or mailto; checklist items are li starting with [ ] or [x]), updated_by (who wrote last), words (number, word count of the body)">
+<style>
+  [hidden]{display:none!important}
+  :root{--accent:#6941c6}
+  .app-icon{display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;border-radius:8px;background:var(--accent);color:#fff;flex:none}
+  .app-icon svg,.btn svg,.icon-btn svg{width:16px;height:16px}
+  .layout{display:grid;grid-template-columns:260px minmax(0,1fr);gap:20px;align-items:start}
+  .side{position:sticky;top:16px;display:flex;flex-direction:column;gap:10px}
+  .doc-list{max-height:calc(100vh - 160px);overflow:auto}
+  .doc-list > button{all:unset;box-sizing:border-box;display:block;width:100%;cursor:pointer;padding:10px 14px;border-bottom:1px solid var(--line)}
+  .doc-list > button:hover{background:var(--raised)}
+  .doc-list > button:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
+  .doc-list > button[aria-current=true]{background:color-mix(in srgb,var(--accent) 10%,var(--surface));box-shadow:inset 3px 0 0 var(--accent)}
+  .doc-list .t{font-weight:600;font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .doc-list .s{font-size:12px;color:var(--muted);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .layout > .stack{min-width:0}
+  #editor h1,#editor h2,#editor h3{font-weight:650;letter-spacing:-.01em}
+  .paper{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow);min-width:0}
+  .doc-head{display:flex;align-items:center;gap:8px;padding:18px 24px 4px}
+  #doc-title{font-size:26px;font-weight:700;letter-spacing:-.02em;border:0;padding:0;min-height:0;background:transparent;box-shadow:none;flex:1;min-width:0}
+  .doc-meta{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:0 24px 12px;font-size:12px;color:var(--muted)}
+  .chip{display:inline-flex;align-items:center;gap:8px;height:26px;padding:0 4px 0 10px;border-radius:999px;font-size:12px;font-weight:500;background:color-mix(in srgb,var(--warn) 16%,transparent);color:var(--ink)}
+  .chip button{all:unset;cursor:pointer;font-weight:600;color:var(--accent);padding:2px 8px;border-radius:999px;background:var(--surface)}
+  .toolbar{position:sticky;top:0;z-index:3;display:flex;gap:2px;flex-wrap:wrap;padding:6px 18px;border-top:1px solid var(--line);border-bottom:1px solid var(--line);background:var(--surface)}
+  .toolbar .icon-btn{width:32px;height:32px;font-size:13px;font-weight:700}
+  .toolbar .icon-btn[aria-pressed=true]{background:color-mix(in srgb,var(--accent) 14%,transparent);color:var(--accent)}
+  .toolbar .sep{width:1px;background:var(--line);margin:6px 4px}
+  #editor{min-height:55vh;padding:22px 24px 48px;outline:none;border:0;border-radius:0 0 var(--radius) var(--radius);box-shadow:none;line-height:1.65;font-size:15px;word-wrap:break-word}
+  #editor:focus{box-shadow:none}
+  #editor:empty::before{content:attr(data-placeholder);color:var(--muted)}
+  #editor h1{font-size:24px;margin:18px 0 6px;line-height:1.3}
+  #editor h2{font-size:19px;margin:16px 0 4px;line-height:1.35}
+  #editor h3{font-size:16px;margin:14px 0 4px}
+  #editor p,#editor div{margin:0 0 8px}
+  #editor ul,#editor ol{margin:0 0 8px;padding-left:24px}
+  #editor blockquote{margin:8px 0;padding:4px 14px;border-left:3px solid var(--accent);color:var(--muted)}
+  #editor a{color:var(--accent);text-decoration:underline}
+  #editor > :first-child{margin-top:0}
+  .pick{display:none}
+  .empty .btn{margin-top:14px}
+  .btn.solid-danger{background:var(--bad);border-color:var(--bad);color:#fff}
+  @media (max-width:640px){
+    .layout{grid-template-columns:minmax(0,1fr);gap:10px}
+    .side{display:none}
+    .pick{display:flex;gap:8px}
+    .doc-head{padding:14px 14px 2px}
+    #doc-title{font-size:21px}
+    .doc-meta{padding:0 14px 10px}
+    .toolbar{padding:4px 8px;flex-wrap:nowrap;overflow-x:auto}
+    .toolbar .icon-btn{flex:none}
+    #editor{padding:16px 14px 40px;min-height:50vh}
+  }
+</style>
+</head>
+<body>
+<div class="app">
+  <header class="app-bar">
+    <h1><span class="app-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6M16 13H8M16 17H8M10 9H8"/></svg></span><span id="app-name">Docs</span></h1>
+    <span class="spacer"></span>
+    <button class="btn primary" id="new-doc" aria-label="New doc"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg><span class="hide-sm">New doc</span></button>
+  </header>
+  <main class="app-main">
+    <div id="no-docs" class="empty" hidden>
+      <p><b>No documents yet</b></p>
+      <p class="small">Write notes, briefs or SOPs. Your bots can read and write them too.</p>
+      <button class="btn primary" id="first-doc">Write the first doc</button>
+    </div>
+    <div class="layout" id="layout" hidden>
+      <aside class="side">
+        <input class="search" id="search" type="search" placeholder="Search docs" aria-label="Search docs">
+        <nav class="list doc-list" id="doc-list" aria-label="Documents"></nav>
+      </aside>
+      <div class="stack">
+        <div class="pick"><select id="doc-pick" aria-label="Open document"></select></div>
+        <article class="paper">
+          <div class="doc-head">
+            <input id="doc-title" aria-label="Title" placeholder="Untitled" autocomplete="off">
+            <button class="icon-btn" id="delete-doc" title="Delete doc" aria-label="Delete doc"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m3 0-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/></svg></button>
+          </div>
+          <div class="doc-meta"><span id="meta-text"></span><span id="save-state"></span><span class="chip" id="chip" hidden><span id="chip-text"></span><button type="button" id="chip-reload">Reload</button></span></div>
+          <div class="toolbar" role="toolbar" aria-label="Formatting">
+            <button class="icon-btn" data-cmd="bold" title="Bold (Ctrl+B)" aria-label="Bold"><b>B</b></button>
+            <button class="icon-btn" data-cmd="italic" title="Italic (Ctrl+I)" aria-label="Italic"><i style="font-family:Georgia,serif">I</i></button>
+            <button class="icon-btn" data-cmd="underline" title="Underline (Ctrl+U)" aria-label="Underline"><u>U</u></button>
+            <span class="sep"></span>
+            <button class="icon-btn" data-block="h1" title="Heading 1" aria-label="Heading 1">H1</button>
+            <button class="icon-btn" data-block="h2" title="Heading 2" aria-label="Heading 2">H2</button>
+            <span class="sep"></span>
+            <button class="icon-btn" data-cmd="insertUnorderedList" title="Bullets" aria-label="Bullets"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M9 6h11M9 12h11M9 18h11"/><circle cx="4" cy="6" r="1"/><circle cx="4" cy="12" r="1"/><circle cx="4" cy="18" r="1"/></svg></button>
+            <button class="icon-btn" data-cmd="insertOrderedList" title="Numbers" aria-label="Numbered list"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M10 6h10M10 12h10M10 18h10M4 6h1v4M4 10h2M6 18H4c0-1 2-2 2-3s-1-1.5-2-1"/></svg></button>
+            <button class="icon-btn" id="check-btn" title="Checklist" aria-label="Checklist"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="6" height="6" rx="1"/><path d="m4.5 15.5 1.5 1.5 3-3M13 7h8M13 16h8"/></svg></button>
+            <button class="icon-btn" data-block="blockquote" title="Quote" aria-label="Quote"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 6v12M9 8h11M9 12h11M9 16h7"/></svg></button>
+            <span class="sep"></span>
+            <button class="icon-btn" id="link-btn" title="Link (Ctrl+K)" aria-label="Link"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg></button>
+            <button class="icon-btn" id="clear-btn" title="Clear formatting" aria-label="Clear formatting"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7V5h14v2M9 19h4M11 5 8 19M15 14l5 5M20 14l-5 5"/></svg></button>
+          </div>
+          <div id="editor" contenteditable="true" role="textbox" aria-multiline="true" aria-label="Document body" data-placeholder="Start writing..."></div>
+        </article>
+      </div>
+    </div>
+  </main>
+</div>
+
+<dialog class="sheet" id="link-sheet">
+  <div>
+    <h2>Add link</h2>
+    <label class="field"><span>Address</span><input id="link-url" type="url" placeholder="https://example.com" autocomplete="off"></label>
+    <p class="small muted">Leave empty to remove a link. Works with http, https and mailto.</p>
+    <div class="sheet-actions"><button type="button" class="btn" data-close>Cancel</button><button type="button" class="btn primary" id="link-ok">Apply</button></div>
+  </div>
+</dialog>
+
+<dialog class="sheet" id="confirm-sheet">
+  <div>
+    <h2 id="confirm-text">Are you sure?</h2>
+    <p class="muted" id="confirm-sub"></p>
+    <div class="sheet-actions"><button type="button" class="btn" data-close>Cancel</button><button type="button" class="btn solid-danger" id="confirm-ok">Delete</button></div>
+  </div>
+</dialog>
+
+<script>
+const $ = s => document.querySelector(s);
+const esc = bos.esc;
+const editor = $("#editor"), titleIn = $("#doc-title");
+const state = { docs: [], cur: null, q: "", me: null, timer: null, lastHtml: "", lastTitle: "", saving: false, incoming: null, sent: [] };
+
+// ---------- sanitizer (runs on save and on render) ----------
+const ALLOWED = new Set(["P","H1","H2","H3","UL","OL","LI","B","STRONG","I","EM","U","BLOCKQUOTE","A","BR","DIV","SPAN"]);
+const DROP = new Set(["SCRIPT","STYLE","IFRAME","OBJECT","EMBED","TEMPLATE","SVG","MATH","HEAD","TITLE","META","LINK","NOSCRIPT","TEXTAREA","SELECT","BUTTON","INPUT","IMG","VIDEO","AUDIO","CANVAS","FORM"]);
+function sanitize(html) {
+  const doc = new DOMParser().parseFromString("<body>" + String(html || ""), "text/html");
+  const clean = node => {
+    for (const el of [...node.childNodes]) {
+      if (el.nodeType === 8) { el.remove(); continue; }
+      if (el.nodeType !== 1) continue;
+      const tag = el.tagName;
+      if (DROP.has(tag)) { el.remove(); continue; }
+      clean(el);
+      if (!ALLOWED.has(tag)) { el.replaceWith(...el.childNodes); continue; }
+      const href = tag === "A" ? (el.getAttribute("href") || "").trim() : "";
+      for (const a of [...el.attributes]) el.removeAttribute(a.name);
+      if (tag === "A") { if (/^(https?:|mailto:)/i.test(href)) { el.setAttribute("href", href); el.setAttribute("target", "_blank"); el.setAttribute("rel", "noopener"); } else el.replaceWith(...el.childNodes); }
+    }
+  };
+  clean(doc.body);
+  // attribute-less spans carry nothing once styles are stripped
+  doc.body.querySelectorAll("span").forEach(sp => sp.replaceWith(...sp.childNodes));
+  // checklist marker keeps a plain space in storage (the editor uses a no-break space so it survives typing)
+  doc.body.querySelectorAll("li").forEach(li => { const t = li.firstChild; if (t && t.nodeType === 3) t.data = t.data.replace(/^\[([ xX])\][\s\u00a0]*/, "[$1] "); });
+  // loose top-level text and inline tags get wrapped in paragraphs
+  const BLOCK = /^(P|H1|H2|H3|UL|OL|BLOCKQUOTE|DIV)$/;
+  let run = null;
+  for (const n of [...doc.body.childNodes]) {
+    if (n.nodeType === 1 && BLOCK.test(n.tagName)) { run = null; continue; }
+    if (!run) { if (n.nodeType === 3 && !n.data.trim()) { n.remove(); continue; } run = doc.createElement("p"); n.before(run); }
+    run.appendChild(n);
+  }
+  doc.body.querySelectorAll("p,li,h1,h2,h3").forEach(el => { if (el.lastChild && el.lastChild.nodeName === "BR" && el.childNodes.length > 1) el.lastChild.remove(); if (el.tagName === "P" && !el.childNodes.length) el.remove(); });
+  return doc.body.innerHTML.replace(/ target="_blank" rel="noopener"/g, "").replace(/&nbsp;/g, " ");
+}
+// target/rel only live in the editor DOM so links open outside the frame; they are never stored
+const forEditor = html => sanitize(html).replace(/<a href="([^"]*)">/g, '<a href="$1" target="_blank" rel="noopener">');
+const wordCount = el => { const t = (el.innerText || el.textContent || "").replace(/\[[ xX]\]/g, " ").trim(); return t ? t.split(/\s+/).length : 0; };
+
+// ---------- helpers ----------
+const ago = ms => { if (!ms) return ""; const m = Math.round((Date.now() - ms) / 60000); if (m < 1) return "just now"; if (m < 60) return m + "m ago"; const h = Math.round(m / 60); if (h < 24) return h + "h ago"; return new Date(ms).toLocaleDateString(undefined, { day: "numeric", month: "short" }); };
+const titleOf = d => (typeof d.title === "string" && d.title.trim()) || "Untitled";
+const snippet = d => { const div = document.createElement("div"); div.innerHTML = sanitize(d.html); return (div.textContent || "").replace(/\s+/g, " ").trim().slice(0, 80); };
+const curDoc = () => state.docs.find(d => d.id === state.cur);
+const whoOf = d => d.updated_by || d._by || "";
+
+// ---------- render ----------
+function renderList() {
+  const q = state.q.toLowerCase();
+  const list = state.docs.filter(d => !q || (titleOf(d) + " " + snippet(d)).toLowerCase().includes(q));
+  $("#doc-list").innerHTML = list.length ? list.map(d => `<button type="button" data-id="${esc(d.id)}" aria-current="${d.id === state.cur}"><div class="t">${esc(titleOf(d))}</div><div class="s">${esc(ago(d._at))}${whoOf(d) ? " by " + esc(whoOf(d)) : ""}</div></button>`).join("") : `<div class="small muted">No docs match.</div>`;
+  $("#doc-pick").innerHTML = state.docs.map(d => `<option value="${esc(d.id)}"${d.id === state.cur ? " selected" : ""}>${esc(titleOf(d))}</option>`).join("");
+}
+function renderMeta() {
+  const d = curDoc(); if (!d) return;
+  const words = wordCount(editor);
+  $("#meta-text").textContent = `${words} ${words === 1 ? "word" : "words"} · edited ${ago(d._at)}${whoOf(d) ? " by " + whoOf(d) : ""}`;
+  $("#save-state").textContent = state.timer || state.saving ? "· Saving..." : "";
+}
+function loadDoc(d) {
+  const html = forEditor(d.html);
+  editor.innerHTML = html;
+  state.lastHtml = sanitize(d.html);
+  if (document.activeElement !== titleIn) titleIn.value = typeof d.title === "string" ? d.title : "";
+  state.lastTitle = titleIn.value;
+  state.incoming = null; $("#chip").hidden = true;
+}
+function render() {
+  const has = state.docs.length > 0;
+  $("#no-docs").hidden = has; $("#layout").hidden = !has; $("#delete-doc").disabled = !has;
+  if (!has) { state.cur = null; return; }
+  renderList(); renderMeta();
+}
+function open(id) {
+  flush();
+  state.cur = id;
+  const d = curDoc(); if (!d) return;
+  loadDoc(d);
+  render();
+}
+
+// ---------- live data ----------
+bos.subscribe("docs", rows => {
+  state.docs = rows.slice().sort((a, b) => (b._at || 0) - (a._at || 0));
+  if (!state.docs.length) { state.cur = null; editor.innerHTML = ""; render(); return; }
+  let d = curDoc();
+  if (!d) { state.cur = state.docs[0].id; loadDoc(state.docs[0]); render(); return; }
+  // caret protection: only swap the body when it really changed and the writer is not mid-edit
+  const incoming = sanitize(d.html);
+  if (incoming !== state.lastHtml && !state.sent.includes(incoming)) {
+    if (document.activeElement === editor || state.timer || state.saving) {
+      state.incoming = d;
+      $("#chip-text").textContent = `Updated by ${whoOf(d) || "someone"}`;
+      $("#chip").hidden = false;
+    } else loadDoc(d);
+  }
+  const t = typeof d.title === "string" ? d.title : "";
+  if (t !== state.lastTitle && document.activeElement !== titleIn) { titleIn.value = t; state.lastTitle = t; }
+  render();
+});
+$("#chip-reload").addEventListener("click", () => { clearTimeout(state.timer); state.timer = null; const d = curDoc(); if (d) loadDoc(d); render(); });
+
+// ---------- saving (debounced 600ms, bos.patch of html/title/words) ----------
+function schedule() { clearTimeout(state.timer); state.timer = setTimeout(save, 600); renderMeta(); }
+async function save() {
+  clearTimeout(state.timer); state.timer = null;
+  const id = state.cur; if (!id || !curDoc()) return;
+  const html = sanitize(editor.innerHTML), title = titleIn.value.trim();
+  const fields = { html, title: title || "Untitled", words: wordCount(editor) };
+  if (state.me) fields.updated_by = state.me;
+  state.lastHtml = html; state.lastTitle = titleIn.value; state.saving = true; renderMeta();
+  state.sent = [...state.sent.slice(-9), html]; // our own echoes never trigger the reload chip
+  try {
+    const rec = await bos.patch("docs", id, fields);
+    if (rec && rec._by && !state.me) { state.me = rec._by; await bos.patch("docs", id, { updated_by: rec._by }); }
+  } catch (e) { bos.toast("Could not save: " + e.message); }
+  state.saving = false; renderMeta();
+}
+function flush() { if (state.timer) save(); }
+editor.addEventListener("input", schedule);
+titleIn.addEventListener("input", schedule);
+titleIn.addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); editor.focus(); } });
+editor.addEventListener("blur", flush);
+document.addEventListener("visibilitychange", () => { if (document.hidden) flush(); });
+
+// paste as clean HTML
+editor.addEventListener("paste", e => {
+  const html = e.clipboardData.getData("text/html"), text = e.clipboardData.getData("text/plain");
+  e.preventDefault();
+  if (html) document.execCommand("insertHTML", false, forEditor(html));
+  else document.execCommand("insertText", false, text);
+});
+
+// ---------- toolbar ----------
+const exec = (cmd, val) => { editor.focus(); document.execCommand(cmd, false, val); schedule(); syncToolbar(); };
+document.querySelectorAll(".toolbar button").forEach(b => b.addEventListener("mousedown", e => e.preventDefault())); // keep selection
+document.querySelectorAll("[data-cmd]").forEach(b => b.addEventListener("click", () => exec(b.dataset.cmd)));
+document.querySelectorAll("[data-block]").forEach(b => b.addEventListener("click", () => {
+  const tag = b.dataset.block;
+  const cur = (document.queryCommandValue("formatBlock") || "").toLowerCase();
+  exec("formatBlock", cur === tag ? "p" : tag);
+}));
+$("#clear-btn").addEventListener("click", () => { exec("removeFormat"); exec("unlink"); exec("formatBlock", "p"); });
+$("#check-btn").addEventListener("click", () => {
+  const li = closestLi();
+  if (!li) { exec("insertUnorderedList"); }
+  const item = closestLi();
+  if (item && !/^\[[ xX]\]/.test(item.textContent)) { item.insertBefore(document.createTextNode("[ ]\u00a0"), item.firstChild); placeCaretEnd(item); schedule(); }
+});
+function closestLi() { const s = getSelection(); if (!s.rangeCount) return null; let n = s.anchorNode; while (n && n !== editor) { if (n.nodeName === "LI") return n; n = n.parentNode; } return null; }
+function placeCaretEnd(el) { const r = document.createRange(); r.selectNodeContents(el); r.collapse(false); const s = getSelection(); s.removeAllRanges(); s.addRange(r); }
+// clicking the [ ] / [x] marker toggles it
+editor.addEventListener("click", e => {
+  const li = e.target.closest && e.target.closest("li"); if (!li) return;
+  const first = li.firstChild; if (!first || first.nodeType !== 3) return;
+  const m = /^\[([ xX])\]/.exec(first.data); if (!m) return;
+  const r = document.createRange(); r.setStart(first, 0); r.setEnd(first, 3);
+  const box = r.getBoundingClientRect();
+  if (e.clientX > box.right + 2) return;
+  first.data = (m[1] === " " ? "[x]" : "[ ]") + first.data.slice(3);
+  schedule();
+});
+function syncToolbar() {
+  if (!editor.contains(getSelection().anchorNode)) { if (document.activeElement !== editor) document.querySelectorAll(".toolbar [aria-pressed]").forEach(b => b.setAttribute("aria-pressed", "false")); return; }
+  document.querySelectorAll("[data-cmd]").forEach(b => { let on = false; try { on = document.queryCommandState(b.dataset.cmd); } catch (e) {} b.setAttribute("aria-pressed", on); });
+  const blk = (document.queryCommandValue("formatBlock") || "").toLowerCase();
+  document.querySelectorAll("[data-block]").forEach(b => b.setAttribute("aria-pressed", blk === b.dataset.block));
+}
+document.addEventListener("selectionchange", syncToolbar);
+
+// links: in-page dialog (prompt() is blocked in the sandbox)
+let savedRange = null;
+function openLink() {
+  const s = getSelection(); savedRange = s.rangeCount && editor.contains(s.anchorNode) ? s.getRangeAt(0).cloneRange() : null;
+  let a = s.anchorNode; while (a && a !== editor && a.nodeName !== "A") a = a.parentNode;
+  $("#link-url").value = a && a.nodeName === "A" ? a.getAttribute("href") : "";
+  $("#link-sheet").showModal(); $("#link-url").focus();
+}
+function applyLink() {
+  let url = $("#link-url").value.trim();
+  $("#link-sheet").close();
+  editor.focus();
+  if (savedRange) { const s = getSelection(); s.removeAllRanges(); s.addRange(savedRange); }
+  if (!url) { exec("unlink"); return; }
+  if (!/^(https?:|mailto:)/i.test(url)) url = url.includes("@") && !url.includes("/") ? "mailto:" + url : "https://" + url;
+  if (savedRange && savedRange.collapsed) exec("insertHTML", `<a href="${esc(url)}" target="_blank" rel="noopener">${esc(url.replace(/^mailto:/, ""))}</a>`);
+  else exec("createLink", url);
+  editor.querySelectorAll("a").forEach(a => { a.target = "_blank"; a.rel = "noopener"; });
+}
+$("#link-btn").addEventListener("click", openLink);
+$("#link-ok").addEventListener("click", applyLink);
+$("#link-url").addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); applyLink(); } });
+editor.addEventListener("keydown", e => { if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") { e.preventDefault(); openLink(); } });
+
+// ---------- doc list, new, delete ----------
+$("#doc-list").addEventListener("click", e => { const b = e.target.closest("button[data-id]"); if (b) open(b.dataset.id); });
+$("#doc-pick").addEventListener("change", e => open(e.target.value));
+$("#search").addEventListener("input", e => { state.q = e.target.value; renderList(); });
+async function newDoc() {
+  flush();
+  try {
+    const rec = await bos.put("docs", { title: "Untitled", html: "", words: 0, ...(state.me ? { updated_by: state.me } : {}) });
+    state.cur = rec.id;
+    state.docs.unshift(rec);
+    loadDoc(rec); render();
+    titleIn.value = ""; titleIn.focus();
+  } catch (e) { bos.toast("Could not create: " + e.message); }
+}
+$("#new-doc").addEventListener("click", newDoc);
+$("#first-doc").addEventListener("click", newDoc);
+function confirmBox(text, sub) {
+  const d = $("#confirm-sheet");
+  $("#confirm-text").textContent = text; $("#confirm-sub").textContent = sub || "";
+  d.returnValue = ""; d.showModal(); $("#confirm-ok").focus();
+  return new Promise(ok => d.addEventListener("close", () => ok(d.returnValue === "yes"), { once: true }));
+}
+$("#confirm-ok").addEventListener("click", () => $("#confirm-sheet").close("yes"));
+$("#delete-doc").addEventListener("click", async () => {
+  const d = curDoc(); if (!d) return;
+  if (!(await confirmBox(`Delete "${titleOf(d)}"?`, "This cannot be undone."))) return;
+  clearTimeout(state.timer); state.timer = null;
+  try { await bos.remove("docs", d.id); state.cur = null; bos.toast("Doc deleted"); } catch (e) { bos.toast("Could not delete: " + e.message); }
+});
+document.addEventListener("click", e => { const c = e.target.closest("[data-close]"); if (c) c.closest("dialog").close(); });
+
+try { document.execCommand("defaultParagraphSeparator", false, "p"); } catch (e) {}
+bos.app().then(a => { if (a && a.name) { $("#app-name").textContent = a.name; document.title = a.name; } });
+setInterval(renderMeta, 60000);
+</script>
+</body>
+</html>

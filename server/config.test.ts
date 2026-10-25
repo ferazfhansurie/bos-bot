@@ -26,6 +26,7 @@ import { customMcpServers,
   showToolCallsEnabled,
   saveConfig,
   skillAuthoringEnabled,
+  autoSkillsEnabled,
   sharedComputersEnabled,
   builtInBrowserEnabled,
   browserProfilePartitionId,
@@ -459,6 +460,13 @@ describe("configuration boundaries", () => {
     });
     expect(localVmMode({ localVm: { mode: "per-bot" } })).toBe("per-bot");
     expect(localVmMaxInstances({ localVm: { maxInstances: 3 } })).toBe(3);
+  });
+
+  it("learns skills automatically when skill authoring is on, unless switched off", () => {
+    expect(autoSkillsEnabled({})).toBe(true);
+    expect(parseConfigPatch({ features: { autoSkills: false } })).toEqual({ features: { autoSkills: false } });
+    expect(autoSkillsEnabled({ features: { autoSkills: false } })).toBe(false);
+    expect(autoSkillsEnabled({ features: { skillAuthoring: false, autoSkills: true } })).toBe(false);
   });
 
   it("keeps skill authoring on by default with an explicit opt-out, and the browser off by default", () => {

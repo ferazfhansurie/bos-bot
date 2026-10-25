@@ -212,7 +212,7 @@ export function JobInboxPage() {
             expanded={expanded}
             onToggle={toggle}
             onOpen={(item) => openJobThread(dispatch, item, state)}
-            onOpenAsk={(item) => openThread(dispatch, { botId: item.botId, threadId: item.threadId }, state)}
+            onOpenAsk={(item) => openThread(dispatch, { botId: item.botId, threadId: item.threadId, ...(item.messageId ? { messageId: item.messageId } : {}) }, state)}
             onAnswer={answer}
           />
         </div>

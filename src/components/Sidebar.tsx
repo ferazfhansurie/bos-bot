@@ -487,6 +487,8 @@ function RoomContextMenu({
 interface SharedPickContact {
   id: string; name: string; kind: "person" | "bot"; avatar?: string | null;
   color?: MausColor; mascotBody?: MascotBodyId | null; ownerName?: string | null;
+  /** a friend met through the BOS Bot people service */
+  hub?: boolean;
 }
 
 /** Pick members and an optional Work/Personal/project context, then create. */
@@ -515,6 +517,16 @@ function NewRoomPanel({ onClose }: { onClose: () => void }) {
     })();
     return () => { alive = false; };
   }, []);
+  const [pickedBots, setPickedBots] = useState<Set<string>>(new Set());
+  const friendsGroup = memberMode === "people" && Boolean(shared?.contacts.some(contact => contact.hub && picked.has(contact.id)));
+  // people groups pick people in `picked`, so only their bots count as bots
+  const botCount = shared && memberMode === "people" ? pickedBots.size : picked.size;
+  const shareableBots = bots.filter(bot => !bot.remote && !bot.hidden && bot.visibility !== "private");
+  const toggleBot = (id: string) => setPickedBots(prev => {
+    const next = new Set(prev);
+    if (next.has(id)) next.delete(id); else next.add(id);
+    return next;
+  });
   const toggle = (id: string) =>
     setPicked((prev) => {
       const next = new Set(prev);
@@ -527,7 +539,9 @@ function NewRoomPanel({ onClose }: { onClose: () => void }) {
     if (memberMode === "people" && shared) {
       setCreating(true); setError("");
       try {
-        const memberIds = [...picked].filter(id => shared.contacts.some(contact => contact.id === id && contact.kind === "person"));
+        const people = [...picked].filter(id => shared.contacts.some(contact => contact.id === id && contact.kind === "person"));
+        // friends' groups can hold your bots too, so everyone there can @mention them
+        const memberIds = friendsGroup ? [...people, ...[...pickedBots].map(id => `${shared.homeId}:bot:${id}`)] : people;
         const result = await api<{ room: { id: string } }>("/api/multiplayer/rooms", {
           method: "POST", body: JSON.stringify({ kind: "group", name: name.trim() || "Group chat", memberIds: [shared.actorId, ...memberIds] }),
         });
@@ -555,7 +569,7 @@ function NewRoomPanel({ onClose }: { onClose: () => void }) {
     >
       <div className="w-[340px] rounded-2xl border border-hairline/50 bg-card p-4 shadow-2xl">
         <div className="mb-3 flex items-center justify-between"><h2 className="text-[15px] font-semibold text-ink">{memberMode === "people" ? "New group chat" : t("sidebar.newChannel.title")}</h2><button type="button" aria-label="Close new group" onClick={onClose} className="rounded-md p-1 text-ink-secondary hover:bg-control"><X size={16} /></button></div>
-        {shared && <div className="mb-3 flex gap-1 rounded-lg bg-control p-1" role="group" aria-label="Group type">{(["people", "bots"] as const).map(mode => <button key={mode} type="button" aria-pressed={memberMode === mode} onClick={() => { setMemberMode(mode); setPicked(new Set()); setError(""); }} className={cn("flex-1 rounded-md px-3 py-1.5 text-xs", memberMode === mode ? "bg-panel text-ink" : "text-ink-secondary")}>{mode === "people" ? "People" : "Bot channel"}</button>)}</div>}
+        {shared && <div className="mb-3 flex gap-1 rounded-lg bg-control p-1" role="group" aria-label="Group type">{(["people", "bots"] as const).map(mode => <button key={mode} type="button" aria-pressed={memberMode === mode} onClick={() => { setMemberMode(mode); setPicked(new Set()); setPickedBots(new Set()); setError(""); }} className={cn("flex-1 rounded-md px-3 py-1.5 text-xs", memberMode === mode ? "bg-panel text-ink" : "text-ink-secondary")}>{mode === "people" ? "People" : "Bot channel"}</button>)}</div>}
         <input
           autoFocus
           maxLength={100}
@@ -587,9 +601,9 @@ function NewRoomPanel({ onClose }: { onClose: () => void }) {
           disableUnavailable
           emptyHint={t("sidebar.newChannel.emptyHint")}
         />}
-        {memberMode === "people" && <p className="mb-2 text-xs leading-relaxed text-ink-secondary">@mention your bots here — no need to add them</p>}
+        {memberMode === "people" && <p className="mb-2 text-xs leading-relaxed text-ink-secondary">{friendsGroup ? "Add your bots so everyone here can @mention them. You can always @mention your own." : "@mention your bots here — no need to add them"}</p>}
         {memberMode === "people" && loadingPeople && <p role="status" className="py-3 text-sm text-ink-secondary">Loading people…</p>}
-        {memberMode === "people" && shared?.contacts.length === 0 && <p className="py-3 text-sm text-ink-secondary">Connect a person to start a group chat.</p>}
+        {memberMode === "people" && shared?.contacts.length === 0 && <p className="py-3 text-sm text-ink-secondary">Add a friend from the chat list to start a group chat.</p>}
         {memberMode === "people" && shared && shared.contacts.length > 0 && <div className="mt-2 flex max-h-56 flex-col gap-0.5 overflow-y-auto border-t border-hairline/40 pt-2">
           {[...shared.contacts].sort((a, b) => (a.kind === b.kind ? 0 : a.kind === "person" ? -1 : 1)).map(contact => (
             <button key={contact.id} type="button" onClick={() => toggle(contact.id)} role="checkbox" aria-label={contact.name} aria-checked={picked.has(contact.id)}
@@ -609,17 +623,27 @@ function NewRoomPanel({ onClose }: { onClose: () => void }) {
             </button>
           ))}
         </div>}
+        {friendsGroup && shareableBots.length > 0 && <div aria-label="Your bots" role="group" className="mt-2 flex max-h-40 flex-col gap-0.5 overflow-y-auto border-t border-hairline/40 pt-2">
+          {shareableBots.map(bot => <button key={bot.id} type="button" onClick={() => toggleBot(bot.id)} role="checkbox" aria-label={bot.name} aria-checked={pickedBots.has(bot.id)}
+            className="flex items-center gap-2.5 rounded-lg px-2 py-1.5 text-left hover:bg-raised/50">
+            <BotAvatar bot={bot} size={28} />
+            <span className="min-w-0 flex-1 truncate text-[14px] text-ink">{bot.name}<span className="ml-1.5 text-[12px] text-ink-secondary">your bot</span></span>
+            <span className={cn("flex size-[18px] shrink-0 items-center justify-center rounded-full border", pickedBots.has(bot.id) ? "border-accent bg-accent text-white" : "border-hairline/60")}>
+              {pickedBots.has(bot.id) && <Check size={12} />}
+            </span>
+          </button>)}
+        </div>}
         {error && <p role="alert" className="mt-2 text-xs text-danger">{error}</p>}
         <button
           onClick={() => void create()}
           disabled={!picked.size || creating}
           className="mt-3 w-full rounded-lg bg-accent py-2 text-[14px] font-medium text-white hover:brightness-110 disabled:opacity-40"
         >
-          {picked.size === 0
+          {botCount === 0
             ? t("sidebar.newChannel.create")
-            : picked.size === 1
+            : botCount === 1
               ? t("sidebar.newChannel.createOne")
-              : t("sidebar.newChannel.createMany", { count: picked.size })}
+              : t("sidebar.newChannel.createMany", { count: botCount })}
         </button>
       </div>
     </div>
@@ -1919,7 +1943,6 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
   };
 
   const macInset = capabilities.windowChrome === "mac-inset";
-  const browser = capabilities.host.label === "Browser";
   // macOS owns inset traffic lights; Windows hides the native bar and draws
   // caption buttons over the header's right end. Either way this top row is
   // the window's drag handle (ChatView/GroupView headers do the same).
@@ -2132,19 +2155,14 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
           )}
         />
       </div>
-      {/* macOS owns inset traffic lights; Linux/Windows use native chrome. */}
+      {/* macOS owns inset traffic lights; Linux/Windows use native chrome. A
+          browser tab has its own: no decorative window dots there. */}
       <div
         className={cn("flex items-center pt-3.5 pb-1", density === "icons" ? "flex-col gap-1 px-2" : "justify-between px-4")}
         style={windowDragStyle}
       >
         {macInset ? (
           <div className={density === "icons" ? "h-5 w-full" : "w-14"} />
-        ) : browser ? (
-          <div className="flex items-center gap-2">
-            <span className="size-3 rounded-full bg-[#ff5f57]" />
-            <span className="size-3 rounded-full bg-[#febc2e]" />
-            <span className="size-3 rounded-full bg-[#28c840]" />
-          </div>
         ) : <div />}
         <div
           className={cn("relative flex items-center", density === "icons" ? "flex-col gap-1" : "gap-1")}

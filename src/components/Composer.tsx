@@ -3,6 +3,7 @@ import { RemoteFullAccess } from "./RemoteFullAccess";
 import { useSharedDelivery } from "@/lib/shared-delivery";
 import { track } from "@/lib/analytics";
 import { useCallback, useEffect, useMemo, useRef, useState, type SetStateAction } from "react";
+import { workingFolderLabel } from "./ComposerTray";
 import { ArrowUp, AudioLines, BookOpen, Clock, Folder, ListEnd, Loader2, Mic, Paperclip, Square, Target, Users, X } from "lucide-react";
 import { startRealtimeCall, useRealtimeCall } from "@/lib/voice-call/session";
 import { callIsOn, useCallSnapshot } from "./voice-call/VoiceCall";
@@ -1283,7 +1284,7 @@ export function Composer({
           </div>
         ))}
         {modeBot && !shared && !group && !remoteClient && <div className="composer-context-strip relative mx-3 flex items-center gap-4 rounded-t-[20px] bg-raised px-3 pb-5 pt-2 text-[13px] text-ink-secondary">
-          <span className="flex min-w-0 items-center gap-2" title={composerTask?.cwd ?? modeBot.cwd ?? "Private bot workspace"}><Folder size={16} className="shrink-0"/><span className="composer-chip-label max-w-48 truncate">{(composerTask?.cwd ?? modeBot.cwd)?.split(/[\\/]/).filter(Boolean).pop() ?? "Bot workspace"}</span></span>
+          <span className="flex min-w-0 items-center gap-2" title={composerTask?.cwd ?? modeBot.cwd ?? "Private bot workspace"}><Folder size={16} className="shrink-0"/><span className="composer-chip-label max-w-48 truncate">{(() => { const cwd = composerTask?.cwd ?? modeBot.cwd; return cwd ? workingFolderLabel(cwd, modeBot.id, modeBot.threadId) : "Bot workspace"; })()}</span></span>
               {modeBot && !remoteClient && (
                 <PlaceChip
                   bot={modeBot}
@@ -1479,7 +1480,7 @@ export function Composer({
             className="block max-h-[12rem] min-h-[36px] w-full resize-none overflow-y-auto bg-transparent px-2 py-1.5 text-[15px] leading-6 placeholder:text-ink-secondary focus:outline-none"
           />
           <div className="composer-end flex min-w-0 items-center justify-end gap-1">
-          {bot && !group && !shared && !remoteClient && <ModelPicker bot={bot} threadId={threadId} placement="above" className="composer-model min-w-0"/>}
+          {bot && !group && !shared && !remoteClient && !bot.remote && <ModelPicker bot={bot} threadId={threadId} placement="above" className="composer-model min-w-0"/>}
           {/* No queue/block chip: sending while busy queues; option-enter
               still interrupts for the rare case it is wanted. */}
           {/* Stop stays a stop. Stop-then-steer is named beside the queued

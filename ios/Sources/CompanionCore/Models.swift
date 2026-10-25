@@ -803,13 +803,27 @@ public struct Fleet: Decodable, Sendable {
     /// Held sends for every bot thread, the same snapshot the
     /// bot.queued frames carry. Older computers omit it.
     public var botQueuedMessages: [String: [QueuedSend]]?
+    /// The stream position (`streamId:seq`) this snapshot covers at least.
+    /// Older computers, and peer views, omit it.
+    public var cursor: String?
 
-    private enum CodingKeys: String, CodingKey { case bots, groups, botQueuedMessages }
+    private enum CodingKeys: String, CodingKey { case bots, groups, botQueuedMessages, cursor }
 
-    public init(bots: [Bot], groups: [Room], botQueuedMessages: [String: [QueuedSend]]? = nil) {
+    public init(bots: [Bot], groups: [Room], botQueuedMessages: [String: [QueuedSend]]? = nil, cursor: String? = nil) {
         self.bots = bots
         self.groups = groups
         self.botQueuedMessages = botQueuedMessages
+        self.cursor = cursor
+    }
+
+    /// Whether this snapshot already holds everything up to `hello`: the
+    /// same stream, at or past its seq. Unknown or different means no.
+    public func covers(hello: String) -> Bool {
+        guard let cursor else { return false }
+        let mine = cursor.split(separator: ":"), theirs = hello.split(separator: ":")
+        guard mine.count == 2, theirs.count == 2, mine[0] == theirs[0],
+              let seq = Int(mine[1]), let helloSeq = Int(theirs[1]) else { return false }
+        return seq >= helloSeq
     }
 
     public init(from decoder: Decoder) throws {
@@ -822,6 +836,7 @@ public struct Fleet: Decodable, Sendable {
             [String: [Lossy<QueuedSend>]].self,
             forKey: .botQueuedMessages
         ))??.mapValues { list in list.compactMap(\.value) }
+        cursor = try? container.decodeIfPresent(String.self, forKey: .cursor)
     }
 }
 

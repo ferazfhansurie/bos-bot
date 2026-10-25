@@ -23,9 +23,12 @@ export function DigestChip({ message }: { message: Message }) {
   if (!digest) return null;
   const tools = digest.toolCalls ?? `${digest.tools.reduce((n, tool) => n + tool.count, 0)}${digest.toolsDropped ? "+" : ""}`;
   const files = digest.files ? digest.files.changed.length + digest.files.added.length + digest.files.deleted.length + (digest.files.truncated ?? 0) : null;
+  const oneTool = String(tools) === "1";
   const label = files === null
-    ? t("chat.digestChipNoFiles", { tools })
-    : t("chat.digestChip", { tools, files });
+    ? oneTool ? t("chat.digestChipNoFilesOne") : t("chat.digestChipNoFiles", { tools })
+    : files === 1
+      ? oneTool ? t("chat.digestChipOneEach") : t("chat.digestChipOneFile", { tools })
+      : oneTool ? t("chat.digestChipOneTool", { files }) : t("chat.digestChip", { tools, files });
   const paths = digest.files ? [...digest.files.changed, ...digest.files.added, ...digest.files.deleted] : [];
   const lines = digest.files?.lines;
   const checkpoint = digest.files?.checkpoint;

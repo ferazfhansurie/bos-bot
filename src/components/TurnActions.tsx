@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { Check, Copy, Share, ThumbsDown, ThumbsUp } from "lucide-react";
-import { BotAvatar } from "./Avatar";
+import { BotAvatar, GroupMark } from "./Avatar";
 import { activeLocale } from "@/lib/i18n";
 import { cn } from "@/lib/cn";
 import { api, type Bot } from "@/state/store";
@@ -183,10 +183,11 @@ export function TurnActionRow({
 
 /** Firaz's one change to chatgpt: who is talking, beside the first line of
  * each bot reply — avatar plus name, slack-style, in 1:1s and rooms. */
-export function SpeakerHeader({ bot, name }: { bot: Pick<Bot, "name" | "color"> & Partial<Bot>; name: string }) {
+/** A person in a shared chat gets their face, not a mascot. */
+export function SpeakerHeader({ bot, name, person }: { bot: Pick<Bot, "name" | "color"> & Partial<Bot>; name: string; person?: { avatar?: string | null } }) {
   return (
     <div data-testid="speaker-header" className="flex min-w-0 items-center gap-2">
-      <BotAvatar bot={bot} size={22} animated={false} />
+      {person ? <GroupMark members={[{ id: name, name, kind: "person", avatar: person.avatar }]} size={22} /> : <BotAvatar bot={bot} size={22} animated={false} />}
       <span className="truncate text-[14px] leading-5 font-semibold text-ink">{name}</span>
     </div>
   );

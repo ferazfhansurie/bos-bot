@@ -662,7 +662,10 @@ describe("WhatsApp is read-only", () => {
   it("the wrapper returns only the three read-only methods from whatsapp-web.js", () => {
     const text = readFileSync(join(import.meta.dirname, "whatsapp-wwebjs.ts"), "utf8");
     const returned = text.slice(text.indexOf("\n  return {\n    history:"));
-    expect(returned.match(/^\s{4}(\w+):/gm)?.map((key) => key.trim().slice(0, -1))).toEqual(["history", "replies", "initialize", "getState", "destroy", "goInvisible", "browserPid"]);
+    expect(returned.match(/^\s{4}(\w+):/gm)?.map((key) => key.trim().slice(0, -1))).toEqual(["history", "replies", "initialize", "getState", "destroy", "goInvisible", "screenshot", "browserPid"]);
+    // the desk's live view: a jpeg of the page, nothing typed or clicked
+    const screenshot = returned.slice(returned.indexOf("screenshot:"));
+    expect(screenshot.slice(0, screenshot.indexOf("\n    },") + 7)).not.toMatch(/\.(click|type|keyboard|mouse|evaluate|tap|focus|send\w*)\b/);
     const invisible = returned.slice(returned.indexOf("goInvisible:"));
     expect(invisible.slice(0, invisible.indexOf("},") + 2)).toMatch(/^goInvisible: async \(\) => \{\s*await client\.sendPresenceUnavailable\(\);\s*\},$/);
   });

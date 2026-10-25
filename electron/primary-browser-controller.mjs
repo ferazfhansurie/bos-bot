@@ -96,6 +96,15 @@ export function createPrimaryBrowserController({ root, encryption, registry, ses
         for (const [download, saved] of downloadPaths) if (saved.profile === id) downloadPaths.delete(download);
         return next;
       }
+      if (action === 'thumbnail') {
+        // a desk's live view: a small jpeg of the page, no dialog, nothing saved
+        const guest = guestFor(id, input.guestId);
+        // a closing or hidden page has no frame to give (UnknownVizError): the desk keeps its last one
+        const image = await guest.capturePage(undefined, { stayHidden: true }).catch(() => null);
+        if (!image || image.isEmpty()) return null;
+        const small = image.getSize().width > 960 ? image.resize({ width: 960 }) : image;
+        return `data:image/jpeg;base64,${small.toJPEG(62).toString('base64')}`;
+      }
       if (action === 'screenshot') {
         const guest = guestFor(id, input.guestId);
         // Capture before the dialog, so switching tabs while choosing a path cannot

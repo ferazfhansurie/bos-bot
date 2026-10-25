@@ -120,17 +120,19 @@ data class OptionCard(
 data class NotificationTarget private constructor(
     val botId: String,
     val threadId: String,
+    /** The message the tap lands on (an ask's card, a finished reply); optional. */
+    val messageId: String? = null,
 ) {
     fun requiresTaskSwitch(activeThreadId: String): Boolean = threadId != activeThreadId
 
     companion object {
-        fun from(botId: String?, threadId: String?): NotificationTarget? {
+        fun from(botId: String?, threadId: String?, messageId: String? = null): NotificationTarget? {
             if (botId.isNullOrBlank() || threadId.isNullOrBlank()) return null
-            return NotificationTarget(botId, threadId)
+            return NotificationTarget(botId, threadId, messageId?.takeIf { it.isNotBlank() })
         }
 
         fun from(payload: Map<String, String>): NotificationTarget? =
-            from(payload["botId"], payload["threadId"])
+            from(payload["botId"], payload["threadId"], payload["messageId"])
     }
 }
 

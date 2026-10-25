@@ -481,6 +481,29 @@ class SessionP1Test {
     }
 
     @Test
+    fun notificationWithMessageLoadsAroundItAndFocusesIt() = runTest {
+        val session = session { Fleet(listOf(bot("b1", "task-1", "task-1")), emptyList()) }
+        server.enqueue(json("""{"messages":[{"id":"ask-card","role":"assistant","kind":"text","at":2,"text":"may i?"}],"hasMore":true}"""))
+
+        val opened = session.openNotification(requireNotNull(NotificationTarget.from("b1", "task-1", "ask-card")))
+
+        assertEquals("task-1", assertIs<Chat.BotChat>(opened).threadId)
+        assertEquals("/api/threads/task-1/messages?limit=50&around=ask-card", server.takeRequest().path)
+        assertEquals("ask-card", session.focusedMessageId.value)
+    }
+
+    @Test
+    fun notificationWhoseMessageIsGoneStillOpensWithoutFocus() = runTest {
+        val session = session { Fleet(listOf(bot("b1", "task-1", "task-1")), emptyList()) }
+        server.enqueue(json("""{"messages":[],"hasMore":false}"""))
+
+        val opened = session.openNotification(requireNotNull(NotificationTarget.from("b1", "task-1", "deleted")))
+
+        assertEquals("task-1", assertIs<Chat.BotChat>(opened).threadId)
+        assertEquals(null, session.focusedMessageId.value)
+    }
+
+    @Test
     fun inactiveTaskNotificationKeepsSelectionLocalAndRepeatedOpenIsIdempotent() = runTest {
         var hydrates = 0
         val session = session {

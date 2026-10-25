@@ -5,7 +5,7 @@ import { afterAll, describe, expect, it, vi } from "vitest";
 
 vi.mock("electron", () => ({ app: {}, BrowserWindow: class {}, ipcMain: {}, screen: {} }));
 
-import { parseNotchAction, parseNotchDrop, pickNotchScreen } from "./notch.mjs";
+import { chooseNotchDisplay, parseNotchAction, parseNotchDrop, pickNotchScreen, snapshotIdle } from "./notch.mjs";
 
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), "notch-test-"));
 const file = path.join(dir, "brief.pdf");
@@ -53,6 +53,14 @@ describe("parseNotchAction", () => {
     expect(parseNotchDrop({ botId: "b1", files: [{ path: file }] })).toBeNull();
   });
 
+  it("keeps a quick ask with words, and only with words", () => {
+    expect(parseNotchAction({ type: "ask", botId: "b1", threadId: "t1", text: "  what's left on acme?  " }))
+      .toEqual({ type: "ask", botId: "b1", threadId: "t1", text: "what's left on acme?" });
+    expect(parseNotchAction({ type: "ask", botId: "b1", threadId: "t1", text: "   " })).toBeNull();
+    expect(parseNotchAction({ type: "ask", botId: "b1", threadId: "", text: "hi" })).toBeNull();
+    expect(parseNotchAction({ type: "ask", botId: "../x", threadId: "t1", text: "hi" })).toBeNull();
+  });
+
   it("never takes a drop through the action channel", () => {
     expect(parseNotchAction({ type: "drop", botId: "b1", threadId: "t1", files: [{ name: "brief.pdf", path: file }] })).toBeNull();
   });
@@ -77,5 +85,46 @@ describe("pickNotchScreen", () => {
   it("never draws a sliver when the menu bar hides itself", () => {
     const hidden = { ...primary, workArea: { ...primary.workArea, y: 0 } };
     expect(pickNotchScreen([], hidden).notch.height).toBe(24);
+  });
+});
+
+describe("chooseNotchDisplay", () => {
+  const laptop = { id: 1, bounds: { x: 0, y: 0, width: 1470, height: 956 } };
+  const external = { id: 2, bounds: { x: 1470, y: -200, width: 2560, height: 1440 } };
+  const displays = [laptop, external];
+  const onExternal = { x: 2000, y: 300 };
+
+  it("wakes on the screen under the pointer", () => {
+    expect(chooseNotchDisplay({ displays, primary: laptop, cursor: onExternal, current: 1, idle: false, waking: true, notched: [1] })).toBe(external);
+  });
+
+  it("stays put while it shows something", () => {
+    expect(chooseNotchDisplay({ displays, primary: laptop, cursor: onExternal, current: 1, idle: false, notched: [1] })).toBe(laptop);
+  });
+
+  it("goes home to the camera housing when quiet", () => {
+    expect(chooseNotchDisplay({ displays, primary: external, cursor: onExternal, current: 2, idle: true, notched: [1] })).toBe(laptop);
+  });
+
+  it("follows the pointer when no screen has a housing, and survives a lost display", () => {
+    expect(chooseNotchDisplay({ displays, primary: laptop, cursor: onExternal, current: null, idle: true })).toBe(external);
+    expect(chooseNotchDisplay({ displays: [laptop], primary: laptop, cursor: onExternal, current: 2, idle: false })).toBe(laptop);
+  });
+});
+
+describe("snapshotIdle", () => {
+  it("is quiet only with nothing working, waiting or just done", () => {
+    expect(snapshotIdle(null)).toBe(true);
+    expect(snapshotIdle({ working: [], asks: [], moments: [] })).toBe(true);
+    expect(snapshotIdle({ working: [{}], asks: [], moments: [] })).toBe(false);
+    expect(snapshotIdle({ working: [], asks: [], moments: [{}] })).toBe(false);
+  });
+});
+
+describe("pickNotchScreen full screen", () => {
+  it("passes on an app full screen on that display", () => {
+    const laptop = { id: 1, bounds: { x: 0, y: 0, width: 1470, height: 956 }, workArea: { x: 0, y: 33, width: 1470, height: 923 } };
+    expect(pickNotchScreen([{ id: 1, notch: { x: 646, width: 179, height: 32 }, menuBar: 33, fullscreen: true }], laptop).fullscreen).toBe(true);
+    expect(pickNotchScreen([{ id: 1, menuBar: 25 }], laptop).fullscreen).toBe(false);
   });
 });

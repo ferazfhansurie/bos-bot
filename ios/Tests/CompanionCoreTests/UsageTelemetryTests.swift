@@ -88,10 +88,10 @@ import XCTest
     }
 
     func testPushReceiptRequiresDeliveryConfiguration() throws {
-        let receipt = try JSONDecoder().decode(CompanionClient.PushRegistrationReceipt.self, from: Data("{\"registered\":true,\"deliveryConfigured\":false}".utf8))
-        XCTAssertEqual(receipt.registered, true)
+        let receipt = try JSONDecoder().decode(PushTokenRegistrationResponse.self, from: Data("{\"registered\":true,\"deliveryConfigured\":false}".utf8))
+        XCTAssertEqual(receipt.state, .deliveryUnavailable)
         XCTAssertEqual(receipt.deliveryConfigured, false)
-        let legacy = try JSONDecoder().decode(CompanionClient.PushRegistrationReceipt.self, from: Data("{}".utf8))
+        let legacy = try JSONDecoder().decode(PushTokenRegistrationResponse.self, from: Data("{}".utf8))
         XCTAssertNil(legacy.deliveryConfigured)
     }
 

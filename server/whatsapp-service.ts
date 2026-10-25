@@ -157,7 +157,7 @@ export class WhatsAppService {
       return authorize ? null : { status: 404, body: { error: "native WhatsApp is turned off" } };
     }
     if (method === "GET" && path === "/api/whatsapp/native") {
-      return { status: 200, body: { native: true, whatsapp: this.native.snapshot() } };
+      return { status: 200, body: { native: true, whatsapp: this.native.snapshot(), held: this.replies.held() } };
     }
     if (method === "POST" && (path === "/api/whatsapp/native/connect" || authorize)) {
       return { status: 200, body: { native: true, whatsapp: await this.native.connect() } };

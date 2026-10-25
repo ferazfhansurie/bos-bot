@@ -6,3 +6,4 @@ import "@/components/workbench/builtins";
 import "@/components/pages/register";
 import "@/components/videos/register";
 import "@/components/canvas/register";
+import "@/components/desks/register";

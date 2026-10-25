@@ -59,6 +59,7 @@ Use only mapped, tested commands:
 - [Output working copies and comments](output-drafts.md)
 - [Document pages, comments, history and bot tools](pages.md)
 - [Blank tab: pages bos writes, follow-ups and present mode](blank-tab.md)
+- [Desks: apps bos works in, live view, cards you customise by asking](desks.md)
 - [Videos: timeline editor, media, renders and bot tools](videos.md)
 - [Imported voice memos](voice-memos.md)
 - [Exact outbound message review](outbound-reviews.md)
@@ -186,6 +187,10 @@ approvals and provider safety errors in an isolated desktop UI.
 The [skill approval lifecycle recipe](skill-approval-lifecycle.md) checks Deny,
 missing staged records and active-thread deletion in two isolated app windows,
 including the surviving conversation and sending again without deleting the bot.
+
+The [automatic skills recipe](auto-skills.md) runs a scripted qualifying turn
+through the fake CLI and checks the review card, the full-access receipt, name
+collisions and the off switch, down to the SKILL.md on disk.
 
 The [Codex account recipe](codex-account.md) checks account switching against an
 offline Codex CLI whose identity is synthetic and whose credential directory is empty.

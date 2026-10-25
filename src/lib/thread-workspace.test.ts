@@ -1,5 +1,5 @@
 import {describe,it,expect} from 'vitest';
-import {emptyWorkspace,openTab,replaceTab,sanitizeWorkspace,closeTab,moveTab,rightVisible,bottomVisible,showPage} from './thread-workspace';
+import {emptyWorkspace,openTab,replaceTab,sanitizeWorkspace,closeTab,moveTab,rightVisible,bottomVisible,showPage,showDesk} from './thread-workspace';
 describe('conversation workbench persistence and transitions',()=>{
  it('restores every real kind while rejecting side chats with no thread and unsafe file paths',()=>{
   const restored=sanitizeWorkspace({layout:'split',tabs:[{id:'file',kind:'files',path:'../private'},{id:'side',kind:'sidechat',ref:'thread-1',title:'Side chat'},{id:'orphan',kind:'sidechat'},{id:'page',kind:'page',ref:'page-1',title:'Draft'},{id:'new',kind:'newtab'}],active:{right:'page'}});
@@ -39,5 +39,14 @@ describe('conversation workbench persistence and transitions',()=>{
   expect(fromNew.state.tabs.map(t=>[t.kind,t.ref])).toEqual([['canvas','bos-pages/c.html']]);
   const hidden=showPage({...emptyWorkspace(),layout:'hidden'},'bos-pages/d.html');
   expect(hidden.state.layout).toBe('split');
+ });
+ it('shows a desk the bot opened in its own tab, reusing it and keeping it across reloads',()=>{
+  const fromNew=showDesk(openTab(emptyWorkspace(),'newtab',{id:'new'}).state,'d-0123abcd','whatsapp');
+  expect(fromNew.state.tabs.map(t=>[t.kind,t.ref,t.title])).toEqual([['desk','d-0123abcd','whatsapp']]);
+  expect(showDesk(fromNew.state,'d-0123abcd').id).toBe(fromNew.id);
+  expect(showDesk(fromNew.state,'d-99999999').state.tabs).toHaveLength(2);
+  expect(showDesk(emptyWorkspace(),'../x').state.tabs).toHaveLength(0);
+  expect(sanitizeWorkspace(JSON.parse(JSON.stringify(fromNew.state))).tabs).toEqual(fromNew.state.tabs);
+  expect(sanitizeWorkspace({tabs:[{id:'x',kind:'desk',ref:'bad'}]}).tabs).toEqual([]);
  });
 });

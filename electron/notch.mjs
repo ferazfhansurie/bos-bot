@@ -49,6 +49,12 @@ export function parseNotchAction(raw) {
       if (typeof answer?.text === "string" && answer.text.trim()) return { type: "answer", askId, answer: { text: text(answer.text, MAX_TEXT) } };
       return null;
     }
+    case "ask": {
+      const botId = id(raw.botId);
+      const threadId = id(raw.threadId);
+      const words = typeof raw.text === "string" ? raw.text.trim().slice(0, MAX_TEXT) : "";
+      return botId && threadId && words ? { type: "ask", botId, threadId, text: words } : null;
+    }
     default:
       return null;
   }
@@ -75,11 +81,13 @@ export function parseNotchDrop(raw) {
   return botId && threadId && files.length ? { type: "drop", botId, threadId, files } : null;
 }
 
-/** Which screen carries the notch, and how. The menu-bar screen wins: that
- * is where the person looks, lid open or shut. Its camera housing, when it
- * has one, gives the shape; otherwise a pill. */
+/** How the notch sits on the display chosen for it (chooseNotchDisplay).
+ * Its camera housing, when it has one, gives the shape; otherwise a pill
+ * inside the menu bar. An app full screen there is passed on, so the page
+ * keeps everything but an ask off it. */
 export function pickNotchScreen(helperScreens, primary) {
   const match = helperScreens.find((candidate) => candidate.id === primary.id);
+  const fullscreen = match?.fullscreen === true;
   const notch = match?.notch && match.notch.width > 0 && match.notch.height > 0 ? match.notch : null;
   const bounds = primary.bounds;
   if (notch) {
@@ -90,6 +98,7 @@ export function pickNotchScreen(helperScreens, primary) {
       centre: bounds.x + notch.x + notch.width / 2,
       notch: { width: notch.width, height: notch.height },
       menuBar: match.menuBar ?? 0,
+      fullscreen,
     };
   }
   const menuBar = match ? match.menuBar ?? 0 : Math.max(0, primary.workArea.y - bounds.y);
@@ -101,7 +110,34 @@ export function pickNotchScreen(helperScreens, primary) {
     // the pill is as tall as the menu bar it sits in, never a sliver
     notch: { width: 0, height: menuBar > 0 ? menuBar : 24 },
     menuBar,
+    fullscreen,
   };
+}
+
+/** Which display the notch belongs on. Waking from quiet it lands on the
+ * screen under the pointer, so what it says is seen; once it shows
+ * something it stays put, so it never jumps mid-sentence; quiet again, it
+ * goes home to the screen with a camera housing (where a click on the
+ * housing opens it), or failing that stays with the pointer. A display that
+ * went away hands it back. */
+export function chooseNotchDisplay({ displays, primary, cursor, current, idle, waking = false, notched = [] }) {
+  const under = cursor && displays.find(({ bounds }) =>
+    cursor.x >= bounds.x && cursor.x < bounds.x + bounds.width && cursor.y >= bounds.y && cursor.y < bounds.y + bounds.height);
+  if (waking) return under || primary;
+  if (!idle && current) {
+    const kept = displays.find((display) => display.id === current);
+    if (kept) return kept;
+  }
+  if (idle) {
+    const home = displays.find((display) => notched.includes(display.id));
+    if (home) return home;
+  }
+  return under || primary;
+}
+
+/** Nothing for the notch to show: no one working, waiting or just done. */
+export function snapshotIdle(snapshot) {
+  return !snapshot || !(snapshot.working?.length || snapshot.asks?.length || snapshot.moments?.length);
 }
 
 function helperPath() {
@@ -190,20 +226,49 @@ export function registerNotch({ mainWindow, pageUrl, focusMain, preload = path.j
     mode: placement.mode,
     notch: placement.notch,
     menuBar: placement.menuBar,
+    fullscreen: placement.fullscreen === true,
     window: NOTCH_WINDOW,
   };
 
-  const place = () => {
+  let homeTimer = null;
+  let geometryKey = "";
+  let boundsKey = "";
+  const place = (waking = false) => {
     if (!win || win.isDestroyed()) return;
-    const next = pickNotchScreen(helperScreens, screen.getPrimaryDisplay());
+    let display;
+    try {
+      display = chooseNotchDisplay({
+        displays: screen.getAllDisplays(),
+        primary: screen.getPrimaryDisplay(),
+        cursor: screen.getCursorScreenPoint(),
+        current: placement?.displayId ?? null,
+        idle: snapshotIdle(snapshot),
+        waking,
+        notched: helperScreens.filter((entry) => entry?.notch?.width > 0).map((entry) => entry.id),
+      });
+    } catch {
+      display = screen.getPrimaryDisplay();
+    }
+    const next = pickNotchScreen(helperScreens, display);
     placement = next;
-    win.setBounds({
+    const bounds = {
       x: Math.round(next.centre - NOTCH_WINDOW.width / 2),
       y: next.bounds.y,
       width: NOTCH_WINDOW.width,
       height: NOTCH_WINDOW.height,
-    });
-    toNotch("notch:geometry", geometry());
+    };
+    // the same place again is not a move: re-setting bounds and geometry on
+    // every screens report made the shape restart its springs
+    const bKey = JSON.stringify(bounds);
+    if (bKey !== boundsKey) {
+      boundsKey = bKey;
+      win.setBounds(bounds);
+    }
+    const gKey = JSON.stringify(geometry());
+    if (gKey !== geometryKey) {
+      geometryKey = gKey;
+      toNotch("notch:geometry", geometry());
+    }
     placeSensor();
   };
 
@@ -335,6 +400,8 @@ export function registerNotch({ mainWindow, pageUrl, focusMain, preload = path.j
     win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true, skipTransformProcessType: true });
     win.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
     win.webContents.on("will-navigate", (event) => event.preventDefault());
+    geometryKey = "";
+    boundsKey = "";
     win.webContents.on("did-finish-load", () => {
       toNotch("notch:geometry", geometry());
       if (snapshot) toNotch("notch:snapshot", snapshot);
@@ -365,6 +432,8 @@ export function registerNotch({ mainWindow, pageUrl, focusMain, preload = path.j
     const old = win;
     win = null;
     placement = null;
+    geometryKey = "";
+    boundsKey = "";
     try {
       old?.destroy();
     } catch {}
@@ -402,7 +471,14 @@ export function registerNotch({ mainWindow, pageUrl, focusMain, preload = path.j
     } catch {
       return;
     }
+    const wasIdle = snapshotIdle(snapshot);
     snapshot = next;
+    const idle = snapshotIdle(next);
+    // quiet to something: land on the screen the person is on now
+    if (wasIdle && !idle) place(true);
+    // something to quiet: home again once the fold has played out
+    clearTimeout(homeTimer);
+    if (!wasIdle && idle) homeTimer = setTimeout(() => snapshotIdle(snapshot) && place(), 1500);
     chime(next);
     toNotch("notch:snapshot", next);
   });
@@ -465,6 +541,7 @@ export function registerNotch({ mainWindow, pageUrl, focusMain, preload = path.j
   return {
     dispose() {
       enabled = false;
+      clearTimeout(homeTimer);
       destroy();
       watchDisplays(false);
     },

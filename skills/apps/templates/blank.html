@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="en">
+<head>
+<title>App</title>
+<meta name="bos-app" content="App">
+<meta name="bos-app-icon" content="box">
+<!-- Describe every collection and field here; bots read this to write valid records. -->
+<meta name="bos-app-schema" content="items: title, notes, done (true|false)">
+<style>
+  [hidden]{display:none!important}
+  .app-icon{display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;border-radius:8px;background:var(--accent);color:#fff;flex:none}
+  .app-icon svg,.btn svg,.icon-btn svg{width:16px;height:16px}
+  .add{display:flex;gap:8px}
+  .add input{flex:1;min-width:0}
+  .row{display:flex;align-items:center;gap:12px;padding:10px 14px}
+  .row input[type=checkbox]{width:18px;height:18px;accent-color:var(--accent);flex:none;margin:0}
+  .row .body{flex:1;min-width:0}
+  .row.done .title{text-decoration:line-through;color:var(--muted)}
+  .row .icon-btn{opacity:.5}
+  .row:hover .icon-btn,.row .icon-btn:focus-visible{opacity:1}
+  /* EXTEND: add per-app styles here. Use kit tokens (--accent, --line, --muted) so dark mode keeps working. */
+</style>
+</head>
+<body>
+<div class="app">
+  <header class="app-bar">
+    <h1><span class="app-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 8 12 3 3 8v8l9 5 9-5z"/><path d="m3 8 9 5 9-5M12 13v8"/></svg></span><span id="app-name">App</span></h1>
+    <span class="spacer"></span>
+    <button class="btn primary" id="new" aria-label="New item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg><span class="hide-sm">New</span></button>
+  </header>
+  <main class="app-main">
+    <!-- Not a <form>: the sandbox blocks form submission. Handle Enter and clicks instead. -->
+    <div class="add">
+      <input id="title" placeholder="Add an item and press Enter" aria-label="New item">
+      <button class="btn" id="add" type="button">Add</button>
+    </div>
+    <p class="small muted" id="summary"></p>
+    <div id="list"></div>
+    <!-- EXTEND: more views go here (tabs, a table, a board). Render them from bos.subscribe only. -->
+  </main>
+</div>
+
+<script>
+const $ = s => document.querySelector(s);
+const esc = bos.esc;
+const state = { items: [] };
+
+// Bots may write records with missing or odd fields. Normalise on read, never assume.
+const isDone = r => r.done === true || r.done === "true";
+
+function render() {
+  const items = [...state.items].sort((a, b) => isDone(a) - isDone(b) || (b._at || 0) - (a._at || 0));
+  const open = items.filter(r => !isDone(r)).length;
+  $("#summary").textContent = items.length ? `${open} open · ${items.length - open} done` : "";
+  $("#list").innerHTML = items.length
+    ? `<div class="list">` + items.map(r => `
+      <div class="row${isDone(r) ? " done" : ""}">
+        <input type="checkbox" data-toggle="${esc(r.id)}" ${isDone(r) ? "checked" : ""} aria-label="Done">
+        <div class="body"><div class="title">${esc(r.title || "Untitled")}</div>${r.notes ? `<div class="small muted">${esc(r.notes)}</div>` : ""}</div>
+        <button class="icon-btn" data-del="${esc(r.id)}" aria-label="Delete" title="Delete"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg></button>
+      </div>`).join("") + `</div>`
+    : `<div class="empty"><p><b>Nothing here yet</b></p><p class="small">Add your first item above, or ask a bot to add some.</p></div>`;
+}
+
+async function add() {
+  const input = $("#title"), title = input.value.trim();
+  if (!title) return input.focus();
+  input.value = "";
+  // bos.put creates (no id) or replaces (with id). The list redraws from subscribe, not from here.
+  try { await bos.put("items", { title, notes: "", done: false }); } catch (e) { bos.toast("Could not add: " + e.message); }
+  input.focus();
+}
+
+$("#add").addEventListener("click", add);
+$("#new").addEventListener("click", () => $("#title").focus());
+$("#title").addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); add(); } });
+
+document.addEventListener("change", e => {
+  const id = e.target.dataset.toggle;
+  // bos.patch changes only the fields you pass.
+  if (id) bos.patch("items", id, { done: e.target.checked }).catch(err => bos.toast("Could not update: " + err.message));
+});
+document.addEventListener("click", e => {
+  const b = e.target.closest("[data-del]");
+  if (b) bos.remove("items", b.dataset.del).catch(err => bos.toast("Could not delete: " + err.message));
+});
+
+// The only place data enters the page: every write (yours or a bot's) re-runs this.
+bos.subscribe("items", rows => { state.items = rows; render(); });
+// EXTEND: subscribe to more collections the same way, e.g. bos.subscribe("settings", ...).
+
+bos.app().then(a => { if (a && a.name) { $("#app-name").textContent = a.name; document.title = a.name; } });
+render();
+</script>
+</body>
+</html>

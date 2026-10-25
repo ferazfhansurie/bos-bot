@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { builtInBrowserEnabled, sharedComputersEnabled, showToolCallsEnabled, skillAuthoringEnabled } from "./feature-flags";
+import { autoSkillsEnabled, builtInBrowserEnabled, sharedComputersEnabled, showToolCallsEnabled, skillAuthoringEnabled } from "./feature-flags";
 
 describe("experimental feature flags", () => {
   it("keeps skill authoring on by default, before and after the config arrives", () => {
@@ -12,6 +12,14 @@ describe("experimental feature flags", () => {
 
   it("switches skill authoring off only on an explicit opt-out", () => {
     expect(skillAuthoringEnabled({ features: { skillAuthoring: false } })).toBe(false);
+  });
+
+  it("learns skills automatically whenever skill authoring is on, unless switched off", () => {
+    expect(autoSkillsEnabled(null)).toBe(true);
+    expect(autoSkillsEnabled({ features: {} })).toBe(true);
+    expect(autoSkillsEnabled({ features: { autoSkills: false } })).toBe(false);
+    expect(autoSkillsEnabled({ features: { skillAuthoring: false } })).toBe(false);
+    expect(autoSkillsEnabled({ features: { skillAuthoring: false, autoSkills: true } })).toBe(false);
   });
 
   it("keeps the built-in browser on unless a saved config switched it off", () => {

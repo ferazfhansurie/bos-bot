@@ -1,0 +1,37 @@
+{
+  "id": "apps",
+  "name": "Apps",
+  "version": "1.0.0",
+  "description": "Make a working app in a tab (crm, hr, sheet, docs, tasks, invoices or anything custom) whose data bos keeps, and read or change that data for the person.",
+  "defaultEnabled": true,
+  "triggerTerms": [
+    "crm",
+    "an app",
+    "my app",
+    "the app",
+    "this app",
+    "my apps",
+    "app to track",
+    "tracker",
+    "spreadsheet",
+    "sheet",
+    "kanban",
+    "invoice",
+    "hr management",
+    "hr app",
+    "hr system",
+    "leave request",
+    "annual leave",
+    "leave management",
+    "payroll",
+    "staff list",
+    "contacts",
+    "pipeline",
+    "to-do",
+    "todo",
+    "task board"
+  ],
+  "requiredCapabilities": [
+    "pageTabs"
+  ]
+}

@@ -88,8 +88,12 @@ private struct BosRefreshModifier: ViewModifier {
 #if DEBUG
         debugRefreshCompleted = false
 #endif
+#if DEBUG
+        PerfProbe.mark("refresh.begin")
+#endif
         await action()
 #if DEBUG
+        PerfProbe.mark("refresh.done")
         // XCTest waits for animations to idle before returning from a drag.
         // Preserve proof that its five-second check actually completed, rather
         // than merely asserting Ready after a cancelled 30ms refresh.
@@ -101,6 +105,9 @@ private struct BosRefreshModifier: ViewModifier {
         let held = Date().timeIntervalSince(startedAt)
         if held < 0.5 { try? await Task.sleep(for: .seconds(0.5 - held)) }
         phase = .landing
+#if DEBUG
+        PerfProbe.mark("refresh.landing")
+#endif
         Task { @MainActor [weak self] in
             try? await Task.sleep(for: .seconds(0.45))
             guard let self, phase == .landing else { return }

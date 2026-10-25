@@ -108,6 +108,13 @@ describe("bundled verification skill", () => {
     expect(pick("is the build stable? fix the paragraph", ["smartUi"])).not.toContain("smart-ui");
     expect(pick("ok and the second one?\n```openui", ["smartUi"])).toContain("smart-ui");
   });
+  it("mounts desks for app work only where desk tools exist", () => {
+    const pick = (text: string, caps: string[]) => selectBundledSkills(text, caps, skills).map((skill) => skill.manifest.id);
+    expect(pick("run my meta ads manager for me", ["desks"])).toContain("desks");
+    expect(pick("add a button that drafts replies for unread chats", ["desks"])).toContain("desks");
+    expect(pick("run my meta ads manager for me", [])).not.toContain("desks");
+    expect(pick("what's the weather", ["desks"])).not.toContain("desks");
+  });
 });
 // branding compatibility (electron/branding-compat.json): data-home: existing desktop and companion homes, backups and lease recovery must open the same data
 

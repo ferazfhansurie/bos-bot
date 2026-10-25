@@ -8,6 +8,7 @@ import { readSessionState } from "@/lib/session";
 import { GroupMark, PersonPhoto } from "./Avatar";
 import { isDirectSharedRoom, sharedRoomUnread, sidebarPeople } from "./shared-conversation";
 import { openRowMenu, RowContextMenu, type RowMenuAt, type RowMenuItem } from "./RowContextMenu";
+import { AddFriendButton, FriendInvitePanel, useInviteFromAddress } from "./FriendInvite";
 
 interface Contact { id: string; name: string; kind: "person" | "bot"; homeId?: string; homeName?: string; title?: string; avatar?: string | null; color?: string | null; mascotBody?: string | null }
 interface Room { id: string; name: string; kind?: "direct" | "group"; memberIds: string[]; lastActivity?: number; preview?: string; unreadCount?: number; readSequence?: number; notifications?: "all" | "mentions" | "muted" }
@@ -53,6 +54,8 @@ export function SharedContactsSidebar({ compact = false, placement = "people", l
   const [teamInvite, setTeamInvite] = useState("");
   const [setupError, setSetupError] = useState("");
   const [setupBusy, setSetupBusy] = useState(false);
+  const [addingFriend, setAddingFriend] = useState(false);
+  useInviteFromAddress();
 
   useEffect(() => { void readSessionState().then(session => setOwner(session.kind === "loopback" || (session.kind === "session" && session.scopes.includes("admin")))); }, []);
 
@@ -193,6 +196,8 @@ export function SharedContactsSidebar({ compact = false, placement = "people", l
         {(peopleShown || compact) && personEntries.map(entry => <div key={entry.id}>{entry.element}</div>)}
       </>}
 
+      {owner && !compact && <AddFriendButton open={addingFriend} onToggle={() => setAddingFriend(value => !value)} />}
+      {owner && !compact && addingFriend && <FriendInvitePanel onClose={() => setAddingFriend(false)} />}
       {rowMenu && <RowContextMenu at={rowMenu.at} label={rowMenu.label} items={rowMenu.items} onClose={closeRowMenu} />}
       {settingUp && owner && !compact && <div className="mb-2 space-y-2 rounded-lg bg-raised p-2 text-xs">
         <p className="font-semibold">Connect a team member</p>
@@ -208,6 +213,7 @@ export function SharedContactsSidebar({ compact = false, placement = "people", l
   return <section aria-label="Connected conversations" className="px-1">
     {placement === "people" && !compact && <div className="flex justify-end gap-2 px-2 pb-1">
       {owner && <InviteToggle open={settingUp} onToggle={() => setSettingUp(value => !value)} />}</div>}
+    {placement === "people" && settingUp && owner && !compact && <FriendInvitePanel onClose={() => setSettingUp(false)} />}
     {placement === "people" && settingUp && owner && !compact && <div className="mb-2 space-y-2 rounded-lg bg-raised p-2 text-xs">
       <p className="font-semibold">Connect a team member</p>
       <p className="text-ink-secondary">Invite once. Both people and their bots then appear in the conversation list.</p>

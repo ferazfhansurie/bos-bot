@@ -15,6 +15,7 @@ fun Intent.notificationTarget(): NotificationTarget? =
     NotificationTarget.from(
         getStringExtra(LocalNotificationPoster.EXTRA_BOT_ID),
         getStringExtra(LocalNotificationPoster.EXTRA_THREAD_ID),
+        getStringExtra(LocalNotificationPoster.EXTRA_MESSAGE_ID),
     )
 
 /**
@@ -53,6 +54,7 @@ object NotificationIntents {
         putExtra(LocalNotificationPoster.EXTRA_THREAD_ID, notification.threadId)
         putExtra(LocalNotificationPoster.EXTRA_BOT_ID, notification.botId)
         putExtra(LocalNotificationPoster.EXTRA_KIND, notification.kind)
+        notification.messageId?.let { putExtra(LocalNotificationPoster.EXTRA_MESSAGE_ID, it) }
     }
 
     /** Android's URI encoder is available throughout this app's API range. */

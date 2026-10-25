@@ -46,6 +46,8 @@ export interface NotchMoment {
   botId: string;
   threadId: string;
   title: string;
+  /** the start of what the bot said when it finished, if it is on hand */
+  preview?: string;
   at: number;
 }
 
@@ -64,7 +66,9 @@ export type NotchAnswer = { behavior: "allow" | "deny" } | { option: string } | 
 
 export type NotchAction =
   | { type: "open"; botId: string; threadId: string }
-  | { type: "answer"; askId: string; answer: NotchAnswer };
+  | { type: "answer"; askId: string; answer: NotchAnswer }
+  /** quick ask: words for a bot, sent into the thread it is on now */
+  | { type: "ask"; botId: string; threadId: string; text: string };
 
 /** files dropped on a bot: built by the preload and electron/notch.mjs from
  * real dropped Files, never by the page; the main window receives it */
@@ -75,6 +79,8 @@ export type NotchGeometry = {
   /** the camera housing, points; width 0 in pill mode */
   notch: { width: number; height: number };
   menuBar: number;
+  /** an app is full screen on this display: only an ask may show */
+  fullscreen?: boolean;
   window: { width: number; height: number };
 };
 

@@ -39,4 +39,9 @@ describe("DigestChip", () => {
     expect(html).toContain("Did 12+ tool calls");
     expect(html).not.toContain("files changed");
   });
+  it("says one tool call, not one tool calls", () => {
+    const html = renderToStaticMarkup(createElement(DigestChip, { message: { ...message, digest: { ...message.digest!, tools: [{ name: "Bash", count: 1, failed: 0 }], toolsDropped: 0, toolCalls: 1, files: undefined } } }));
+    expect(html).toContain("Did 1 tool call");
+    expect(html).not.toContain("1 tool calls");
+  });
 });

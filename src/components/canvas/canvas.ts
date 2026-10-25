@@ -5,11 +5,14 @@
 // bundled blank-tab skill), so it persists, opens in Files and gets edited
 // in place by follow-up asks.
 import { ARTIFACT_CSP } from "@/components/HtmlArtifact";
+import { APP_BRIDGE, APP_KIT_CSS } from "./app-kit";
 
 export const CANVAS_DIR = "bos-pages";
 
-export type CanvasStarter = { id: "presentation" | "dashboard" | "doc" | "video"; label: string; prompt: string };
+export type CanvasStarter = { id: "presentation" | "dashboard" | "doc" | "video" | "crm" | "app"; label: string; prompt: string };
 export const CANVAS_STARTERS: readonly CanvasStarter[] = [
+  { id: "crm", label: "crm", prompt: "make me a crm for " },
+  { id: "app", label: "app", prompt: "make this tab an app for " },
   { id: "presentation", label: "presentation", prompt: "make this tab a presentation about " },
   { id: "dashboard", label: "dashboard", prompt: "make this tab a dashboard of " },
   { id: "doc", label: "doc", prompt: "make this tab a doc about " },
@@ -29,8 +32,10 @@ export type ComposerInsertDetail = { botId: string; threadId?: string; text: str
 
 /** The document the tab's iframe gets: the chat-preview CSP first, then
  * the present shim, then bos's markup. The shim marks slides, shows one at
- * a time while presenting, and talks to the tab only by postMessage. */
-export function canvasDocument(html: string, frameId: string): string {
+ * a time while presenting, and talks to the tab only by postMessage. An app
+ * page also gets the design kit and the `bos` data api, before its own css
+ * and scripts so both are there when they run. */
+export function canvasDocument(html: string, frameId: string, app = false): string {
   const id = JSON.stringify(frameId);
   const head = `<meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="${ARTIFACT_CSP}">`
     + `<meta name="viewport" content="width=device-width, initial-scale=1">`
@@ -38,7 +43,8 @@ export function canvasDocument(html: string, frameId: string): string {
     + `html.bos-present [data-bos-hide],html.bos-present [data-bos-slide]:not([data-bos-on]){display:none!important}`
     + `html.bos-present [data-bos-on]{width:100vw!important;height:100vh!important;max-width:none!important;max-height:none!important;margin:0!important;aspect-ratio:auto!important;box-sizing:border-box;overflow:hidden}`
     + `html.bos-present body{margin:0!important;padding:0!important}html.bos-present.bos-noslides,html.bos-present.bos-noslides body{overflow:auto!important}</style>`
-    + `<script>${PRESENT_SHIM.replace("__ID__", id)}</script>`;
+    + `<script>${PRESENT_SHIM.replace("__ID__", id)}</script>`
+    + (app ? `<style>${APP_KIT_CSS}</style><script>${APP_BRIDGE.replace("__ID__", id)}</script>` : "");
   const body = html.replace(/^\s*<!doctype[^>]*>/i, "");
   if (/<head[^>]*>/i.test(body)) return `<!doctype html>${body.replace(/<head[^>]*>/i, m => m + head)}`;
   if (/<html[^>]*>/i.test(body)) return `<!doctype html>${body.replace(/<html[^>]*>/i, m => `${m}<head>${head}</head>`)}`;
@@ -102,13 +108,13 @@ addEventListener("load",function(){post({count:slides().length,info:true});});
 })();`;
 
 /** One row of the blank tab's library: everything this bot made, in one list. */
-export type LibraryKind = "page" | "doc" | "video";
-export interface LibraryItem { kind: LibraryKind; id: string; title: string; at: number; detail?: string }
+export type LibraryKind = "app" | "page" | "doc" | "video";
+export interface LibraryItem { kind: LibraryKind; id: string; title: string; at: number; detail?: string; icon?: string }
 export type LibraryFilter = "all" | LibraryKind;
 export const LIBRARY_FILTERS: readonly { id: LibraryFilter; label: string }[] = [
-  { id: "all", label: "All" }, { id: "page", label: "Pages" }, { id: "doc", label: "Docs" }, { id: "video", label: "Videos" },
+  { id: "all", label: "All" }, { id: "app", label: "Apps" }, { id: "page", label: "Pages" }, { id: "doc", label: "Docs" }, { id: "video", label: "Videos" },
 ];
-export const LIBRARY_KIND_LABEL: Record<LibraryKind, string> = { page: "Page", doc: "Doc", video: "Video" };
+export const LIBRARY_KIND_LABEL: Record<LibraryKind, string> = { app: "App", page: "Page", doc: "Doc", video: "Video" };
 
 /** "2026-10-24-5-slide-deck-about-bos-bot-k3f9.html" → "5 slide deck about bos bot" */
 export function canvasFileTitle(name: string): string {

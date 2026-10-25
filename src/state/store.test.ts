@@ -811,12 +811,37 @@ describe("notification routing", () => {
     ]);
   });
 
-  it("lands on a plain bot select for a thread it cannot place, not an error", () => {
+  it("says the thread is gone instead of quietly opening the bot's last thread", () => {
     const dispatch = vi.fn();
 
-    openNotificationTarget(dispatch, { botId: "bot-1", threadId: "deleted-task-thread" }, { bots, groups });
+    expect(openNotificationTarget(dispatch, { botId: "bot-1", threadId: "deleted-task-thread" }, { bots, groups })).toBe(false);
 
-    expect(dispatch.mock.calls.map(([action]) => action)).toEqual([{ type: "select", id: "bot-1" }]);
+    expect(dispatch.mock.calls.map(([action]) => action)).toEqual([
+      { type: "select", id: "bot-1" },
+      { type: "notice", notice: { kind: "thread-gone", botName: null } },
+    ]);
+  });
+
+  it("lands on the exact message a notification is about", () => {
+    const dispatch = vi.fn();
+    openNotificationTarget(dispatch, { botId: "bot-1", threadId: "detached-thread", messageId: "m-7" }, { bots, groups });
+    expect(dispatch.mock.calls.map(([action]) => action)).toEqual([
+      { type: "select", id: "bot-1" },
+      { type: "switchTask", botId: "bot-1", threadId: "detached-thread" },
+      { type: "focusMessage", threadId: "detached-thread", messageId: "m-7" },
+    ]);
+    dispatch.mockClear();
+    openNotificationTarget(dispatch, { botId: "bot-1", threadId: "older-room-thread", messageId: "m-8" }, { bots, groups });
+    expect(dispatch.mock.calls.at(-1)?.[0]).toEqual({ type: "focusMessage", threadId: "older-room-thread", messageId: "m-8" });
+  });
+
+  it("opens a multiplayer room or dm in the shared view", () => {
+    const dispatch = vi.fn();
+    openNotificationTarget(dispatch, { botId: "", threadId: "", roomId: "dm-1", messageId: "s-1" }, { bots, groups });
+    expect(dispatch.mock.calls.map(([action]) => action)).toEqual([
+      { type: "selectSharedRoom", roomId: "dm-1" },
+      { type: "focusMessage", threadId: "shared:dm-1", messageId: "s-1" },
+    ]);
   });
 
   describe("openThread", () => {

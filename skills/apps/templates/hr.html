@@ -1,0 +1,472 @@
+<!doctype html>
+<html lang="en">
+<head>
+<title>HR</title>
+<meta name="bos-app" content="HR">
+<meta name="bos-app-icon" content="briefcase">
+<meta name="bos-app-schema" content="staff: name, role, department, email, phone, start_date (YYYY-MM-DD), salary (number, monthly), status (active|left), leave_balance (number, annual leave days left); leave: staff_id (a staff id), type (annual|sick|unpaid|other), from (YYYY-MM-DD), to (YYYY-MM-DD), days (number, working days), reason, status (pending|approved|rejected), decided_by. When approving annual leave also subtract its days from that staff leave_balance; payroll: month (YYYY-MM), staff_id, base, allowances, deductions, epf_employee, socso, net (base + allowances - deductions - epf_employee - socso), paid (true|false); settings: one record id app with currency (default RM), epf_rate (percent, default 11), socso_rate (percent, default 0.5), socso_cap (default 6000)">
+<style>
+  :root{--accent:#0e9384}
+  .app-icon{display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;border-radius:8px;background:var(--accent);color:#fff}
+  .app-icon svg,.btn svg,.icon-btn svg{width:16px;height:16px}
+  .stat .sub{font-size:12px;color:var(--muted);margin-top:2px}
+  .num{text-align:right;font-variant-numeric:tabular-nums}
+  .who{display:flex;align-items:center;gap:10px;min-width:0}
+  .who .small{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:220px}
+  .sheet-head{display:flex;align-items:center;gap:10px}
+  .sheet-head h2{flex:1}
+  .full{grid-column:1/-1}
+  .toolbar{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+  .toolbar select,.toolbar input[type=month]{width:auto}
+  .check{display:inline-flex;align-items:center;gap:6px;font-size:13px;color:var(--muted);cursor:pointer;white-space:nowrap}
+  .group-title{font-size:12px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;margin:4px 2px -4px}
+  .leave-item{display:flex;align-items:center;gap:12px;cursor:pointer}
+  .leave-item:hover{background:color-mix(in srgb,var(--raised) 60%,transparent)}
+  .leave-item .body{flex:1;min-width:0}
+  .leave-item .title{display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-weight:500}
+  .leave-item .acts{display:flex;gap:6px;flex:none}
+  .note{font-size:12px;padding:8px 10px;border-radius:8px;background:var(--raised);color:var(--muted)}
+  .note.warn{background:color-mix(in srgb,var(--warn) 14%,transparent);color:var(--warn)}
+  .num{white-space:nowrap}
+  [hidden]{display:none!important}
+  .pay input[type=number]{min-height:30px;height:30px;padding:4px 8px;text-align:right;min-width:92px;border-color:transparent;background:transparent;font-variant-numeric:tabular-nums}
+  .pay input[type=number]:hover{border-color:var(--line)}
+  .pay input[type=number]:focus{background:var(--surface)}
+  .pay td.num{padding-right:4px}
+  .pay td.num input[type=number]{width:100%}
+  .pay tfoot td.num{padding-right:13px}
+  .pay th.num{padding-right:13px}
+  .pay td{padding-top:5px;padding-bottom:5px}
+  .pay tfoot td{font-weight:600;background:var(--raised);border-top:1px solid var(--line);padding-top:10px;padding-bottom:10px}
+  .pay .net{font-weight:600;padding-right:13px!important}
+  .btn.solid-danger{background:var(--bad);border-color:var(--bad);color:#fff}
+  .btn.good{color:var(--good)}
+  @media (max-width:640px){
+    .stat .stat-value{font-size:20px} .grid.stats{grid-template-columns:1fr 1fr}
+    .leave-item{flex-wrap:wrap} .leave-item .acts{width:100%;padding-left:42px}
+    .toolbar .search{flex:1 1 100%}
+    .app-bar .tabs{order:5;width:100%;display:flex} .app-bar .tabs button{flex:1}
+    .app-bar h1{min-width:0}
+  }
+</style>
+</head>
+<body>
+<div class="app">
+  <header class="app-bar">
+    <h1><span class="app-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/></svg></span><span id="app-name">HR</span></h1>
+    <div class="tabs" role="tablist">
+      <button role="tab" data-view="staff" aria-selected="true">Staff</button>
+      <button role="tab" data-view="leave" aria-selected="false">Leave</button>
+      <button role="tab" data-view="payroll" aria-selected="false">Payroll</button>
+    </div>
+    <button class="icon-btn" id="open-settings" title="Settings" aria-label="Settings"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M12 1v3M12 20v3M4.2 4.2l2.1 2.1M17.7 17.7l2.1 2.1M1 12h3M20 12h3M4.2 19.8l2.1-2.1M17.7 6.3l2.1-2.1"/></svg></button>
+    <button class="btn primary" id="primary-action"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg><span class="hide-sm" id="primary-label">Add staff</span></button>
+  </header>
+  <main class="app-main">
+    <div class="grid stats" id="stats"></div>
+    <div id="view"></div>
+  </main>
+</div>
+
+<!-- The sandbox blocks form submission and window.confirm, so sheets are plain
+     divs: buttons have click handlers and Enter in a field saves. -->
+<dialog class="sheet" id="staff-sheet">
+  <div id="staff-form">
+    <div class="sheet-head"><h2 id="staff-title">Add staff</h2><button type="button" class="icon-btn" data-close aria-label="Close"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg></button></div>
+    <div class="form">
+      <label class="field"><span>Name</span><input name="name" placeholder="Full name"></label>
+      <label class="field"><span>Role</span><input name="role" placeholder="Designer"></label>
+      <label class="field"><span>Department</span><input name="department" list="departments" placeholder="Operations"></label>
+      <label class="field"><span>Start date</span><input name="start_date" type="date"></label>
+      <label class="field"><span>Email</span><input name="email" type="email" placeholder="name@company.com"></label>
+      <label class="field"><span>Phone</span><input name="phone" type="tel" placeholder="+60 12 345 6789"></label>
+      <label class="field"><span class="cur-label">Monthly salary</span><input name="salary" type="number" min="0" step="any" inputmode="decimal" placeholder="0"></label>
+      <label class="field"><span>Annual leave left (days)</span><input name="leave_balance" type="number" step="0.5" inputmode="decimal" placeholder="14"></label>
+      <label class="field"><span>Status</span><select name="status"><option value="active">Active</option><option value="left">Left</option></select></label>
+    </div>
+    <datalist id="departments"></datalist>
+    <div class="sheet-actions">
+      <button type="button" class="btn danger" id="staff-delete">Delete</button><span class="spacer"></span>
+      <button type="button" class="btn" data-close>Cancel</button><button type="button" class="btn primary" id="staff-save">Save</button>
+    </div>
+  </div>
+</dialog>
+
+<dialog class="sheet" id="leave-sheet">
+  <div id="leave-form">
+    <div class="sheet-head"><h2 id="leave-title">New leave request</h2><button type="button" class="icon-btn" data-close aria-label="Close"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg></button></div>
+    <div class="form">
+      <label class="field full"><span>Staff</span><select name="staff_id"></select></label>
+      <label class="field"><span>Type</span><select name="type"><option value="annual">Annual</option><option value="sick">Sick</option><option value="unpaid">Unpaid</option><option value="other">Other</option></select></label>
+      <label class="field"><span>Working days</span><input name="days" type="number" min="0" step="0.5" inputmode="decimal"></label>
+      <label class="field"><span>From</span><input name="from" type="date"></label>
+      <label class="field"><span>To</span><input name="to" type="date"></label>
+      <label class="field full"><span>Reason</span><input name="reason" placeholder="Optional"></label>
+    </div>
+    <div class="note" id="leave-note"></div>
+    <div class="sheet-actions">
+      <button type="button" class="btn danger" id="leave-delete">Delete</button><span class="spacer"></span>
+      <button type="button" class="btn" data-close>Cancel</button><button type="button" class="btn primary" id="leave-save">Save</button>
+    </div>
+  </div>
+</dialog>
+
+<dialog class="sheet" id="settings-sheet">
+  <div id="settings-form">
+    <div class="sheet-head"><h2>Settings</h2><button type="button" class="icon-btn" data-close aria-label="Close"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg></button></div>
+    <div class="form">
+      <label class="field"><span>Currency</span><input name="currency" maxlength="6" placeholder="RM"></label>
+      <label class="field"><span>EPF employee rate (%)</span><input name="epf_rate" type="number" step="0.1" placeholder="11"></label>
+      <label class="field"><span>SOCSO employee rate (%)</span><input name="socso_rate" type="number" step="0.01" placeholder="0.5"></label>
+      <label class="field"><span>SOCSO wage cap</span><input name="socso_cap" type="number" step="1" placeholder="6000"></label>
+    </div>
+    <p class="muted small">Used when generating payroll. Amounts stay editable per person.</p>
+    <div class="sheet-actions"><button type="button" class="btn" data-close>Cancel</button><button type="button" class="btn primary" id="settings-save">Save</button></div>
+  </div>
+</dialog>
+
+<dialog class="sheet" id="confirm-sheet">
+  <div>
+    <h2 id="confirm-text">Are you sure?</h2>
+    <p class="muted" id="confirm-sub"></p>
+    <div class="sheet-actions"><button type="button" class="btn" data-close>Cancel</button><button type="button" class="btn solid-danger" id="confirm-ok">Delete</button></div>
+  </div>
+</dialog>
+
+<script>
+// ---------- helpers ----------
+const $ = (s, el = document) => el.querySelector(s);
+const esc = bos.esc;
+const num = v => { const n = Number(v); return Number.isFinite(n) ? n : 0; };
+const round2 = n => Math.round(n * 100) / 100;
+const pad = n => String(n).padStart(2, "0");
+const ymd = d => d.getFullYear() + "-" + pad(d.getMonth() + 1) + "-" + pad(d.getDate());
+const today = () => ymd(new Date());
+const isDate = s => typeof s === "string" && /^\d{4}-\d{2}-\d{2}$/.test(s);
+const fmtDate = (s, year) => isDate(s) ? new Date(s + "T00:00").toLocaleDateString("en-GB", year ? { day: "numeric", month: "short", year: "numeric" } : { weekday: "short", day: "numeric", month: "short" }) : "";
+const monthLabel = m => /^\d{4}-\d{2}$/.test(m) ? new Date(m + "-01T00:00").toLocaleDateString("en-GB", { month: "long", year: "numeric" }) : m;
+const initials = s => (String(s || "?").trim().split(/\s+/).slice(0, 2).map(w => w[0]).join("") || "?").toUpperCase();
+const S = (form, name) => $(form).querySelector(`[name="${name}"]`);
+function workdays(from, to) {
+  if (!isDate(from) || !isDate(to) || to < from) return 0;
+  let n = 0, d = new Date(from + "T00:00");
+  for (let i = 0; i < 400 && ymd(d) <= to; i++, d.setDate(d.getDate() + 1)) if (d.getDay() !== 0 && d.getDay() !== 6) n++;
+  return n;
+}
+
+// ---------- state (rebuilt from bos.subscribe) ----------
+const state = { staff: [], leave: [], payroll: [], settings: {}, view: "staff", q: "", dept: "", showLeft: false, month: today().slice(0, 7), staffId: null, leaveId: null, pendingRender: false };
+const cfg = () => ({ currency: (state.settings.currency || "RM").trim() || "RM", epf: state.settings.epf_rate == null ? 11 : num(state.settings.epf_rate), socso: state.settings.socso_rate == null ? 0.5 : num(state.settings.socso_rate), cap: state.settings.socso_cap == null ? 6000 : num(state.settings.socso_cap) });
+const money = v => cfg().currency + " " + num(v).toLocaleString("en-MY", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const moneyShort = v => cfg().currency + " " + num(v).toLocaleString("en-MY", { maximumFractionDigits: 0 });
+const person = id => state.staff.find(s => s.id === id);
+const active = () => state.staff.filter(s => s.status !== "left");
+const netOf = p => round2(num(p.base) + num(p.allowances) - num(p.deductions) - num(p.epf_employee) - num(p.socso));
+const LEAVE_TYPES = { annual: ["Annual", "blue"], sick: ["Sick", "purple"], unpaid: ["Unpaid", ""], other: ["Other", ""] };
+const LEAVE_STATUS = { pending: ["Pending", "amber"], approved: ["Approved", "green"], rejected: ["Rejected", "red"] };
+
+// ---------- render ----------
+function render() {
+  // never redraw under someone typing in a payroll cell; catch up on blur
+  if (state.view === "payroll" && document.activeElement && document.activeElement.matches(".pay input")) { state.pendingRender = true; renderStats(); return; }
+  state.pendingRender = false;
+  renderStats();
+  document.querySelectorAll(".tabs button").forEach(b => b.setAttribute("aria-selected", String(b.dataset.view === state.view)));
+  $("#primary-label").textContent = state.view === "leave" ? "New request" : "Add staff";
+  $("#primary-action").setAttribute("aria-label", $("#primary-label").textContent);
+  $("#primary-action").hidden = state.view === "payroll"; // payroll has its own Generate button
+  const view = $("#view");
+  if (state.view === "staff") renderStaff(view);
+  else if (state.view === "leave") renderLeave(view);
+  else renderPayroll(view);
+}
+
+function renderStats() {
+  const t = today();
+  const onLeave = state.leave.filter(l => l.status === "approved" && isDate(l.from) && l.from <= t && (isDate(l.to) ? l.to : l.from) >= t);
+  const pending = state.leave.filter(l => l.status === "pending").length;
+  const rows = state.payroll.filter(p => p.month === state.month);
+  const paid = rows.filter(p => p.paid === true).length;
+  $("#stats").innerHTML = [
+    ["Headcount", active().length, `${state.staff.length - active().length} former`],
+    ["On leave today", onLeave.length, onLeave.slice(0, 2).map(l => (person(l.staff_id) || {}).name || "Someone").join(", ") || "everyone in"],
+    ["Pending requests", pending, pending ? "waiting for you" : "all decided"],
+    ["Payroll " + new Date(state.month + "-01T00:00").toLocaleDateString("en-GB", { month: "short", year: "numeric" }), moneyShort(rows.reduce((a, p) => a + netOf(p), 0)), rows.length ? `${paid} of ${rows.length} paid` : "not generated"],
+  ].map(([l, v, s]) => `<div class="card stat"><div class="stat-label">${esc(l)}</div><div class="stat-value">${esc(v)}</div><div class="sub">${esc(s)}</div></div>`).join("");
+}
+
+function renderStaff(view) {
+  const depts = [...new Set(state.staff.map(s => s.department).filter(Boolean))].sort();
+  $("#departments").innerHTML = depts.map(d => `<option value="${esc(d)}">`).join("");
+  if (!state.staff.length) { view.innerHTML = `<div class="empty"><h2>No staff yet</h2><p style="margin:6px 0 16px">Add your team to track leave and run payroll.</p><button class="btn primary" data-act="new-staff">Add staff</button></div>`; return; }
+  const q = state.q.toLowerCase();
+  const rows = state.staff
+    .filter(s => (state.showLeft || s.status !== "left") && (!state.dept || s.department === state.dept))
+    .filter(s => !q || ["name", "role", "department", "email", "phone"].some(k => String(s[k] || "").toLowerCase().includes(q)))
+    .sort((a, b) => String(a.name || "").localeCompare(String(b.name || "")));
+  const keep = document.activeElement && document.activeElement.id === "search";
+  view.innerHTML = `<div class="stack" style="gap:12px">
+    <div class="toolbar"><input class="search" id="search" type="search" placeholder="Search staff" value="${esc(state.q)}">
+      <select id="dept" aria-label="Department"><option value="">All departments</option>${depts.map(d => `<option ${d === state.dept ? "selected" : ""}>${esc(d)}</option>`).join("")}</select>
+      <label class="check"><input type="checkbox" id="show-left" ${state.showLeft ? "checked" : ""}> Show former staff</label></div>
+    <div class="table-wrap"><table class="table"><thead><tr><th>Name</th><th>Role</th><th class="hide-sm">Department</th><th class="hide-sm">Started</th><th class="num">Salary</th><th class="num">Leave left</th><th class="hide-sm">Status</th></tr></thead>
+    <tbody>${rows.map(s => `<tr data-click data-staff="${esc(s.id)}" tabindex="0">
+      <td><div class="who"><span class="avatar">${esc(initials(s.name))}</span><div><div>${esc(s.name || "Unnamed")}</div><div class="muted small">${esc(s.email || s.phone || "")}</div></div></div></td>
+      <td>${esc(s.role || "")}</td><td class="hide-sm">${esc(s.department || "")}</td>
+      <td class="hide-sm muted">${esc(fmtDate(s.start_date, true))}</td>
+      <td class="num">${s.salary ? esc(moneyShort(s.salary)) : `<span class="muted">-</span>`}</td>
+      <td class="num">${s.leave_balance == null || s.leave_balance === "" ? `<span class="muted">-</span>` : `${esc(num(s.leave_balance))} d`}</td>
+      <td class="hide-sm">${s.status === "left" ? `<span class="badge">Left</span>` : `<span class="badge" data-tone="green">Active</span>`}</td></tr>`).join("") || `<tr><td colspan="7" class="muted" style="text-align:center;padding:28px">No one matches</td></tr>`}</tbody></table></div></div>`;
+  if (keep) { const s = $("#search"); s.focus(); s.setSelectionRange(s.value.length, s.value.length); }
+}
+
+function leaveItem(l) {
+  const s = person(l.staff_id) || {};
+  const [tl, tt] = LEAVE_TYPES[l.type] || [l.type || "Leave", ""];
+  const [sl, st] = LEAVE_STATUS[l.status] || [l.status || "Pending", ""];
+  const range = isDate(l.from) ? fmtDate(l.from) + (isDate(l.to) && l.to !== l.from ? " to " + fmtDate(l.to) : "") : "No dates";
+  const right = l.status === "pending" || !l.status
+    ? `<div class="acts"><button class="btn sm" data-decide="rejected" data-id="${esc(l.id)}">Reject</button><button class="btn sm primary" data-decide="approved" data-id="${esc(l.id)}">Approve</button></div>`
+    : `<div class="acts"><span class="badge" data-tone="${st}">${esc(sl)}</span></div>`;
+  return `<div class="leave-item" data-leave="${esc(l.id)}" tabindex="0">
+    <span class="avatar">${esc(initials(s.name))}</span>
+    <div class="body"><div class="title">${esc(s.name || "Unknown staff")} <span class="badge" data-tone="${tt}">${esc(tl)}</span></div>
+    <div class="muted small">${esc(range)} &middot; ${esc(num(l.days))} ${num(l.days) === 1 ? "day" : "days"}${l.reason ? " &middot; " + esc(l.reason) : ""}${l.decided_by && l.status !== "pending" ? " &middot; by " + esc(l.decided_by) : ""}</div></div>
+    ${right}</div>`;
+}
+
+function renderLeave(view) {
+  if (!state.leave.length) { view.innerHTML = `<div class="empty"><h2>No leave requests</h2><p style="margin:6px 0 16px">${state.staff.length ? "Log a request when someone asks for time off." : "Add staff first, then log their leave here."}</p><button class="btn primary" data-act="${state.staff.length ? "new-leave" : "new-staff"}">${state.staff.length ? "New request" : "Add staff"}</button></div>`; return; }
+  const byFrom = (a, b) => String(b.from || "").localeCompare(String(a.from || ""));
+  const pending = state.leave.filter(l => l.status === "pending" || !l.status).sort((a, b) => String(a.from || "").localeCompare(String(b.from || "")));
+  const done = state.leave.filter(l => l.status && l.status !== "pending").sort(byFrom);
+  view.innerHTML = `<div class="stack" style="gap:12px">
+    ${pending.length ? `<div class="group-title">Waiting for a decision</div><div class="list">${pending.map(leaveItem).join("")}</div>` : `<div class="note">No pending requests.</div>`}
+    ${done.length ? `<div class="group-title">Decided</div><div class="list">${done.map(leaveItem).join("")}</div>` : ""}</div>`;
+}
+
+function renderPayroll(view) {
+  const rows = state.payroll.filter(p => p.month === state.month).sort((a, b) => String((person(a.staff_id) || {}).name || "").localeCompare(String((person(b.staff_id) || {}).name || "")));
+  const missing = active().filter(s => !rows.some(p => p.staff_id === s.id)).length;
+  const tools = `<div class="toolbar"><input type="month" id="month" value="${esc(state.month)}" aria-label="Month">
+    <button class="btn" data-act="generate" ${missing ? "" : "disabled"}>Generate from staff${missing && rows.length ? ` (${missing})` : ""}</button>
+    ${rows.length ? `<button class="btn" data-act="pay-all" ${rows.every(p => p.paid === true) ? "disabled" : ""}>Mark all paid</button>` : ""}
+    </div>`;
+  if (!rows.length) { view.innerHTML = `<div class="stack" style="gap:12px">${tools}<div class="empty"><h2>No payroll for ${esc(monthLabel(state.month))}</h2><p style="margin:6px 0 0">${active().length ? "Generate one row per active staff member from their salary, then adjust." : "Add staff with a monthly salary first."}</p></div></div>`; return; }
+  const cell = (p, k) => `<td class="num"><input type="number" step="any" inputmode="decimal" data-pay="${esc(p.id)}" data-k="${k}" value="${esc(num(p[k]))}" aria-label="${k}"></td>`;
+  const tot = k => rows.reduce((a, p) => a + num(p[k]), 0);
+  view.innerHTML = `<div class="stack" style="gap:12px">${tools}
+    <div class="table-wrap"><table class="table pay"><thead><tr><th>Staff</th><th class="num">Base</th><th class="num">Allowances</th><th class="num">Deductions</th><th class="num">EPF</th><th class="num">SOCSO</th><th class="num">Net pay</th><th>Paid</th><th></th></tr></thead>
+    <tbody>${rows.map(p => { const s = person(p.staff_id) || {}; return `<tr data-row="${esc(p.id)}">
+      <td><div class="who"><span class="avatar">${esc(initials(s.name))}</span><div><div>${esc(s.name || "Unknown staff")}</div><div class="muted small">${esc(s.role || "")}</div></div></div></td>
+      ${cell(p, "base")}${cell(p, "allowances")}${cell(p, "deductions")}${cell(p, "epf_employee")}${cell(p, "socso")}
+      <td class="num net" data-net="${esc(p.id)}">${esc(money(netOf(p)))}</td>
+      <td><label class="check"><input type="checkbox" data-paid="${esc(p.id)}" ${p.paid === true ? "checked" : ""}> ${p.paid === true ? "Paid" : "Unpaid"}</label></td>
+      <td><button class="icon-btn" data-remove-pay="${esc(p.id)}" title="Remove row" aria-label="Remove row"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg></button></td></tr>`; }).join("")}</tbody>
+    <tfoot><tr><td>Total (${rows.length})</td>${["base", "allowances", "deductions", "epf_employee", "socso"].map(k => `<td class="num" data-tot="${k}">${esc(money(tot(k)))}</td>`).join("")}<td class="num net" data-tot="net">${esc(money(rows.reduce((a, p) => a + netOf(p), 0)))}</td><td colspan="2"></td></tr></tfoot></table></div></div>`;
+}
+
+// ---------- staff ----------
+function openStaff(id) {
+  const s = id ? person(id) : { status: "active", start_date: today() };
+  if (!s) return;
+  state.staffId = id || null;
+  for (const k of ["name", "role", "department", "start_date", "email", "phone", "salary", "leave_balance"]) S("#staff-form", k).value = s[k] == null ? "" : String(s[k]);
+  S("#staff-form", "status").value = s.status === "left" ? "left" : "active";
+  $("#staff-form .cur-label").textContent = "Monthly salary (" + cfg().currency + ")";
+  $("#staff-title").textContent = id ? (s.name || "Staff") : "Add staff";
+  $("#staff-delete").hidden = !id;
+  $("#staff-sheet").showModal();
+  if (!id) S("#staff-form", "name").focus();
+}
+async function saveStaff() {
+  const f = {};
+  for (const k of ["name", "role", "department", "start_date", "email", "phone", "status"]) f[k] = S("#staff-form", k).value.trim();
+  f.salary = num(S("#staff-form", "salary").value);
+  const lb = S("#staff-form", "leave_balance").value;
+  f.leave_balance = lb === "" ? 0 : num(lb);
+  if (!f.name) { S("#staff-form", "name").focus(); bos.toast("Add a name first"); return; }
+  const id = state.staffId;
+  try { if (id) await bos.patch("staff", id, f); else await bos.put("staff", f); $("#staff-sheet").close(); bos.toast(id ? "Saved" : "Staff added"); }
+  catch (e) { bos.toast("Could not save: " + e.message); }
+}
+
+// ---------- leave ----------
+function fillStaffSelect(current) {
+  const list = state.staff.filter(s => s.status !== "left" || s.id === current).sort((a, b) => String(a.name || "").localeCompare(String(b.name || "")));
+  S("#leave-form", "staff_id").innerHTML = list.map(s => `<option value="${esc(s.id)}">${esc(s.name || "Unnamed")}</option>`).join("") + (current && !person(current) ? `<option value="${esc(current)}">Unknown staff</option>` : "");
+}
+function openLeave(id) {
+  if (!state.staff.length) { bos.toast("Add staff first"); return; }
+  const l = id ? state.leave.find(x => x.id === id) : { type: "annual", from: today(), to: today(), days: workdays(today(), today()) || 1, staff_id: (active()[0] || {}).id };
+  if (!l) return;
+  state.leaveId = id || null;
+  fillStaffSelect(l.staff_id);
+  for (const k of ["staff_id", "type", "from", "to", "days", "reason"]) S("#leave-form", k).value = l[k] == null ? "" : String(l[k]);
+  const [sl] = LEAVE_STATUS[l.status] || ["Pending"];
+  $("#leave-title").textContent = id ? `Leave request (${sl.toLowerCase()})` : "New leave request";
+  $("#leave-delete").hidden = !id;
+  leaveNote();
+  $("#leave-sheet").showModal();
+}
+function leaveNote() {
+  const s = person(S("#leave-form", "staff_id").value) || {};
+  const type = S("#leave-form", "type").value, days = num(S("#leave-form", "days").value);
+  const note = $("#leave-note");
+  if (type !== "annual") { note.className = "note"; note.textContent = "Only annual leave is taken from the balance."; return; }
+  const bal = num(s.leave_balance);
+  note.className = days > bal ? "note warn" : "note";
+  note.textContent = `${s.name || "This person"} has ${bal} annual leave ${bal === 1 ? "day" : "days"} left.` + (days > bal ? ` This request is ${days - bal} over.` : "");
+}
+$("#leave-form").addEventListener("change", e => {
+  if (e.target.name === "from" || e.target.name === "to") {
+    const from = S("#leave-form", "from"), to = S("#leave-form", "to");
+    if (e.target.name === "from" && (!to.value || to.value < from.value)) to.value = from.value;
+    S("#leave-form", "days").value = workdays(from.value, to.value);
+  }
+  leaveNote();
+});
+async function saveLeave() {
+  const f = {};
+  for (const k of ["staff_id", "type", "from", "to", "reason"]) f[k] = S("#leave-form", k).value.trim();
+  f.days = num(S("#leave-form", "days").value);
+  if (!f.staff_id || !isDate(f.from)) { bos.toast("Pick a person and a start date"); return; }
+  if (!isDate(f.to) || f.to < f.from) f.to = f.from;
+  const id = state.leaveId, old = id && state.leave.find(x => x.id === id);
+  try {
+    if (id) {
+      await bos.patch("leave", id, f);
+      // an approved annual request that changed size or person moves the balance with it
+      if (old && old.status === "approved") { await adjustBalance(old, +1); await adjustBalance({ ...old, ...f }, -1); }
+    } else await bos.put("leave", { ...f, status: "pending" });
+    $("#leave-sheet").close(); bos.toast(id ? "Saved" : "Request added");
+  } catch (e) { bos.toast("Could not save: " + e.message); }
+}
+async function adjustBalance(l, sign) {
+  if (l.type !== "annual" || !num(l.days)) return;
+  const s = person(l.staff_id); if (!s) return;
+  s.leave_balance = round2(num(s.leave_balance) + sign * num(l.days));
+  await bos.patch("staff", s.id, { leave_balance: s.leave_balance });
+}
+async function decide(id, status) {
+  const l = state.leave.find(x => x.id === id);
+  if (!l || (l.status && l.status !== "pending")) return;
+  try {
+    l.status = status; render();
+    const r = await bos.patch("leave", id, { status });
+    await bos.patch("leave", id, { decided_by: r._by || "owner" });
+    if (status === "approved") await adjustBalance(l, -1);
+    bos.toast(status === "approved" ? "Approved" : "Rejected");
+  } catch (e) { bos.toast("Could not update: " + e.message); }
+}
+
+// ---------- payroll ----------
+async function generate() {
+  const c = cfg(), have = new Set(state.payroll.filter(p => p.month === state.month).map(p => p.staff_id));
+  const todo = active().filter(s => !have.has(s.id));
+  if (!todo.length) { bos.toast("Everyone already has a row"); return; }
+  for (const s of todo) {
+    const base = num(s.salary);
+    const row = { month: state.month, staff_id: s.id, base, allowances: 0, deductions: 0, epf_employee: Math.ceil(base * c.epf / 100), socso: round2(Math.min(base, c.cap) * c.socso / 100), paid: false };
+    row.net = netOf(row);
+    await bos.put("payroll", { id: ("pay-" + state.month + "-" + s.id).slice(0, 64), ...row });
+  }
+  bos.toast(`Added ${todo.length} payroll ${todo.length === 1 ? "row" : "rows"}`);
+}
+function payTotals() {
+  const rows = [...document.querySelectorAll(".pay tbody tr")];
+  const sum = k => rows.reduce((a, tr) => a + num(tr.querySelector(`[data-k="${k}"]`).value), 0);
+  for (const k of ["base", "allowances", "deductions", "epf_employee", "socso"]) { const td = $(`[data-tot="${k}"]`); if (td) td.textContent = money(sum(k)); }
+  const net = $('[data-tot="net"]'); if (net) net.textContent = money(sum("base") + sum("allowances") - sum("deductions") - sum("epf_employee") - sum("socso"));
+}
+document.addEventListener("change", async e => {
+  const t = e.target;
+  if (t.dataset.pay) {
+    const p = state.payroll.find(x => x.id === t.dataset.pay); if (!p) return;
+    const v = round2(num(t.value)); t.value = v;
+    p[t.dataset.k] = v; p.net = netOf(p);
+    $(`[data-net="${CSS.escape(p.id)}"]`).textContent = money(p.net); payTotals();
+    bos.patch("payroll", p.id, { [t.dataset.k]: v, net: p.net }).catch(err => bos.toast("Could not save: " + err.message));
+  } else if (t.dataset.paid) {
+    bos.patch("payroll", t.dataset.paid, { paid: t.checked });
+  } else if (t.id === "month" && /^\d{4}-\d{2}$/.test(t.value)) { state.month = t.value; render(); }
+  else if (t.id === "dept") { state.dept = t.value; render(); }
+  else if (t.id === "show-left") { state.showLeft = t.checked; render(); }
+});
+document.addEventListener("focusout", () => setTimeout(() => { if (state.pendingRender && !(document.activeElement && document.activeElement.matches(".pay input"))) render(); }, 0));
+
+// ---------- settings + confirm ----------
+const SET = ["currency", "epf_rate", "socso_rate", "socso_cap"];
+$("#open-settings").addEventListener("click", () => { const c = cfg(); [c.currency, c.epf, c.socso, c.cap].forEach((v, i) => S("#settings-form", SET[i]).value = v); $("#settings-sheet").showModal(); });
+async function saveSettings() {
+  const v = k => S("#settings-form", k).value.trim();
+  await bos.put("settings", { ...state.settings, id: "app", currency: v("currency") || "RM", epf_rate: num(v("epf_rate") || 11), socso_rate: num(v("socso_rate") || 0.5), socso_cap: num(v("socso_cap") || 6000) });
+  $("#settings-sheet").close();
+}
+function confirmBox(text, sub) {
+  const d = $("#confirm-sheet");
+  $("#confirm-text").textContent = text; $("#confirm-sub").textContent = sub || "";
+  d.returnValue = ""; d.showModal(); $("#confirm-ok").focus();
+  return new Promise(ok => d.addEventListener("close", () => ok(d.returnValue === "yes"), { once: true }));
+}
+$("#confirm-ok").addEventListener("click", () => $("#confirm-sheet").close("yes"));
+$("#staff-save").addEventListener("click", saveStaff);
+$("#leave-save").addEventListener("click", saveLeave);
+$("#settings-save").addEventListener("click", saveSettings);
+for (const [form, fn] of [["#staff-form", saveStaff], ["#leave-form", saveLeave], ["#settings-form", saveSettings]])
+  $(form).addEventListener("keydown", e => { if (e.key === "Enter" && e.target.matches("input")) { e.preventDefault(); fn(); } });
+$("#staff-delete").addEventListener("click", async () => {
+  const s = person(state.staffId); if (!s) return;
+  if (!(await confirmBox(`Delete ${s.name || "this person"}?`, "Their leave and payroll rows stay. To keep history, set status to Left instead."))) return;
+  $("#staff-sheet").close(); await bos.remove("staff", s.id); bos.toast("Deleted");
+});
+$("#leave-delete").addEventListener("click", async () => {
+  const l = state.leave.find(x => x.id === state.leaveId); if (!l) return;
+  if (!(await confirmBox("Delete this leave request?", l.status === "approved" && l.type === "annual" ? "The days go back to their annual leave balance." : ""))) return;
+  $("#leave-sheet").close();
+  if (l.status === "approved") await adjustBalance(l, +1);
+  await bos.remove("leave", l.id); bos.toast("Deleted");
+});
+
+// ---------- events ----------
+$("#primary-action").addEventListener("click", () => state.view === "leave" ? openLeave() : openStaff());
+document.addEventListener("click", async e => {
+  const t = e.target;
+  if (t.closest("[data-close]")) { t.closest("dialog").close(); return; }
+  const tab = t.closest(".tabs button"); if (tab) { state.view = tab.dataset.view; render(); return; }
+  const dec = t.closest("[data-decide]"); if (dec) { decide(dec.dataset.id, dec.dataset.decide); return; }
+  const act = t.closest("[data-act]");
+  if (act) {
+    const a = act.dataset.act;
+    if (a === "new-staff") openStaff(); else if (a === "new-leave") openLeave(); else if (a === "generate") generate();
+    else if (a === "pay-all") for (const p of state.payroll.filter(p => p.month === state.month && p.paid !== true)) await bos.patch("payroll", p.id, { paid: true });
+    return;
+  }
+  const rm = t.closest("[data-remove-pay]"); if (rm) { bos.remove("payroll", rm.dataset.removePay); return; }
+  const st = t.closest("[data-staff]"); if (st) { openStaff(st.dataset.staff); return; }
+  const lv = t.closest("[data-leave]"); if (lv && !t.closest(".acts")) openLeave(lv.dataset.leave);
+});
+document.addEventListener("input", e => { if (e.target.id === "search") { state.q = e.target.value; render(); } });
+document.addEventListener("keydown", e => {
+  const t = e.target;
+  if (t.matches && t.matches(".pay input") && e.key === "Enter") {
+    e.preventDefault();
+    const tr = t.closest("tr").nextElementSibling, next = tr && tr.querySelector(`[data-k="${t.dataset.k}"]`);
+    if (next) { next.focus(); next.select(); } else t.blur();
+    return;
+  }
+  if (e.key !== "Enter" || !t.closest) return;
+  const st = t.closest("tr[data-staff]"); if (st) { openStaff(st.dataset.staff); return; }
+  const lv = t.closest("[data-leave]"); if (lv && t === lv) openLeave(lv.dataset.leave);
+});
+
+// ---------- live data ----------
+bos.subscribe("staff", rows => { state.staff = rows; render(); });
+bos.subscribe("leave", rows => { state.leave = rows; render(); });
+bos.subscribe("payroll", rows => { state.payroll = rows; render(); });
+bos.subscribe("settings", rows => { state.settings = rows.find(r => r.id === "app") || {}; render(); });
+bos.app().then(a => { if (a && a.name) { $("#app-name").textContent = a.name; document.title = a.name; } });
+render();
+</script>
+</body>
+</html>

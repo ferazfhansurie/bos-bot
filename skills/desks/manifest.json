@@ -1,0 +1,33 @@
+{
+  "id": "desks",
+  "name": "Desks",
+  "version": "1.0.0",
+  "description": "Work any app (whatsapp, ads manager, gmail, a site admin) like an employee: a live view beside the chat plus openui control cards the person customises by asking.",
+  "defaultEnabled": true,
+  "triggerTerms": [
+    "desk",
+    "live view",
+    "take over",
+    "hand back",
+    "ads manager",
+    "meta ads",
+    "facebook ads",
+    "gmail",
+    "whatsapp web",
+    "like an employee",
+    "my software",
+    "control my",
+    "control the",
+    "add a button",
+    "button that",
+    "button to",
+    "add a card",
+    "this card",
+    "the card",
+    "pin it",
+    "pin this"
+  ],
+  "requiredCapabilities": [
+    "desks"
+  ]
+}

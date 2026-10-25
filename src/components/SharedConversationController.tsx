@@ -317,6 +317,7 @@ export function SharedConversationController({ roomId }: { roomId: string }) {
           botId: actorId,
           name: actorBot ? `${actorBot.name} · ${actorBot.ownerName}` : actor?.name ?? (message.actor.kind === "bot" ? "Bot" : "Member"),
           color: (actorBot?.color ?? actor?.color ?? "blue") as MausColor,
+          ...(message.actor.kind === "person" ? { person: { avatar: actor?.avatar ?? null } } : {}),
         } : undefined,
       };
     });

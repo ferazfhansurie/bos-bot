@@ -801,6 +801,7 @@ const TranscriptRow = memo(function TranscriptRow({
       <SpeakerHeader
         bot={voice ? shared?.mentionBots.find((candidate) => candidate.id === voice.botId) ?? { name: voice.name, color: voice.color ?? bot.color } : bot}
         name={voice?.name ?? bot.name}
+        person={voice?.person}
       />
     </div>
   ) : null;
@@ -1734,8 +1735,10 @@ export function ChatView({ bot: profile, shared }: { bot: Bot; shared?: SharedCh
       {/* Header */}
       <ConversationHeader style={headerDragStyle}>
         {/* Grok's header: the bot as one pill in the middle, tools at the end.
-            The empty spacer keeps the pill centred while the tools grow. */}
-        <div className="min-w-0 flex-1 basis-0" aria-hidden="true" />
+            The empty spacer keeps the pill centred while the tools grow; on a
+            phone-width header there's no room to centre, so the pill sits left
+            and the tools keep their full width instead of overlapping it. */}
+        <div className="min-w-0 flex-1 basis-0 @max-xl/chathead:hidden" aria-hidden="true" />
         <div className="flex min-w-0 shrink items-center gap-2 rounded-full border border-hairline/50 bg-app py-1 pe-4 ps-1.5 shadow-[0_6px_24px_rgba(0,0,0,0.35)]" style={headerNoDragStyle} data-testid="chat-title-pill">
           {(messages.length > 0 || bot.busy || shared) && (
           <button
@@ -1784,7 +1787,7 @@ export function ChatView({ bot: profile, shared }: { bot: Bot; shared?: SharedCh
           {bot.busy && <WorkingDots className="text-ink-secondary" />}
         </div>
         <div
-          className="flex min-w-0 flex-1 basis-0 items-center justify-end gap-2"
+          className="flex min-w-0 flex-1 basis-0 items-center justify-end gap-2 @max-xl/chathead:flex-none @max-xl/chathead:basis-auto"
           // The caption buttons sit over the header's right end; drop this
           // icon row 16px (visual only — the header keeps its height) so the
           // buttons clear the 26px overlay while the rest of the layout stays.

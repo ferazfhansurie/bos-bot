@@ -72,6 +72,11 @@ body {
 
 .notch-overflow {
   position: absolute;
+  padding: 0;
+  border: 0;
+  background: none;
+  font-family: inherit;
+  cursor: pointer;
   display: flex;
   align-items: center;
   font-size: 11px;
@@ -79,14 +84,24 @@ body {
   color: rgba(255, 255, 255, .62);
   font-variant-numeric: tabular-nums;
 }
+/* the dot is drawn 8px; the button around it is a 16px target */
 .notch-dot {
   position: absolute;
-  width: 8px;
-  height: 8px;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border: 0;
+  background: none;
+  cursor: pointer;
+  animation: notch-dot-in 360ms cubic-bezier(.34, 1.5, .5, 1);
+}
+.notch-dot::after {
+  content: "";
+  position: absolute;
+  inset: 4px;
   border-radius: 50%;
   background: var(--dot);
   box-shadow: 0 0 8px var(--dot);
-  animation: notch-dot-in 360ms cubic-bezier(.34, 1.5, .5, 1);
 }
 @keyframes notch-dot-in { from { transform: scale(0); } }
 
@@ -161,8 +176,8 @@ body {
 
 .notch-moment {
   display: flex;
-  align-items: baseline;
-  gap: 6px;
+  flex-direction: column;
+  gap: 3px;
   width: 100%;
   padding: 4px 4px 0;
   border: 0;
@@ -174,7 +189,56 @@ body {
 }
 .notch-moment-word { color: rgba(255, 255, 255, .7); white-space: nowrap; }
 .notch-moment-failed .notch-moment-word { color: #ff6961; }
+.notch-moment-top { display: flex; align-items: baseline; gap: 6px; min-width: 0; width: 100%; }
 .notch-moment-title { flex: 1; }
+.notch-moment-preview {
+  color: rgba(255, 255, 255, .72);
+  font-size: 12px;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+}
+
+/* quick ask: a chip for the bot, a line for the words */
+.notch-quick { display: flex; align-items: center; gap: 6px; padding: 4px 4px 8px; }
+.notch-chip {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  height: 26px;
+  max-width: 130px;
+  padding: 0 9px 0 6px;
+  border: 0;
+  border-radius: 13px;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  color: #fff;
+  background: rgba(255, 255, 255, .1);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--row) 55%, transparent);
+  cursor: pointer;
+}
+.notch-chip > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.notch-chip:hover { background: rgba(255, 255, 255, .16); }
+.notch-quick input {
+  flex: 1;
+  min-width: 0;
+  height: 26px;
+  padding: 0 11px;
+  border: 0;
+  border-radius: 13px;
+  outline: none;
+  font: inherit;
+  font-size: 12.5px;
+  color: #fff;
+  background: rgba(255, 255, 255, .1);
+  user-select: text;
+}
+.notch-quick input::placeholder { color: rgba(255, 255, 255, .4); }
+.notch-quick input:focus { background: rgba(255, 255, 255, .14); }
 
 /* the shelf */
 .notch-shelf { display: flex; flex-direction: column; padding-top: 2px; }

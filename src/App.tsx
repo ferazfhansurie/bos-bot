@@ -1,5 +1,6 @@
 import { ModSurfaces } from "@/mods/ModSurfaces";
 import { HostedNextStep } from "@/components/HostedNextStep";
+import { WebPushHost } from "@/components/WebPushHost";
 import { RecruitmentWelcome } from "@/components/onboarding/RecruitmentWelcome";
 import { SayHiToFiraz } from "@/components/onboarding/SayHiToFiraz";
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -479,6 +480,7 @@ function Application() {
         <GuidedTour />
         <FirstConversationTour />
         <HostedNextStep />
+        <WebPushHost />
       </StoreProvider>
     </DesktopCapabilitiesProvider>
   );

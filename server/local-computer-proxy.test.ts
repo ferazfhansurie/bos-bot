@@ -102,9 +102,9 @@ describe("local computer proxy (isolated child and control endpoint)", () => {
       expect((await rpc("initialize")).result.forwarded).toBe("initialize");
       expect((await rpc("tools/list")).result.forwarded).toBe("tools/list");
       expect(reads).toBe(0);
-      expect((await rpc("ping")).result).toEqual({});
+      expect((await rpc("ping")).result).toEqual({ resultType: "complete" });
       const refused = await rpc("tools/call", { name: "click" });
-      expect(refused.result).toMatchObject({ isError: true, content: [{ type: "text", text: reason }] });
+      expect(refused.result).toMatchObject({ resultType: "complete", isError: true, content: [{ type: "text", text: reason }] });
       held = false;
       const allowed = await rpc("tools/call", { name: "screenshot" });
       expect(allowed.result).toMatchObject({ calls: 1, marker: "preserved-driver-env", tokenPresent: false, argv: ["two words; not a shell"] });

@@ -27,6 +27,13 @@ export function SharedConversationDetails({ room, selfId, contacts, title, pendi
   const direct = isDirectSharedRoom(room);
   const ownerId = room.createdBy ?? `${room.homeId}:person:owner`;
   const canManage = selfId === ownerId || selfId === `${room.homeId}:person:owner`;
+  // friends' groups live on the BOS Bot people service: anyone there can
+  // rename the group and add or remove their own bots
+  const friends = room.homeId === "bosbot-people";
+  const canRename = canManage || friends;
+  const myHome = selfId.split(":person:")[0];
+  const myBots = friends ? eligibleBots.filter(bot => bot.id.startsWith(`${myHome}:bot:`)) : [];
+  const removable = (id: string) => canManage || (friends && id.startsWith(`${myHome}:bot:`));
   const members = room.memberIds.map(id => contacts.find(contact => contact.id === id)
     ?? { id, name: id === selfId ? "You" : "Member", kind: "person" as const });
   const available = contacts.filter(contact => contact.kind === "person" && !room.memberIds.includes(contact.id));
@@ -63,18 +70,18 @@ export function SharedConversationDetails({ room, selfId, contacts, title, pendi
         </div>
         {!direct && <form onSubmit={event => { event.preventDefault(); if (name.trim()) void onChange("PATCH", "", { name: name.trim() }); }}>
           <label htmlFor="shared-room-name" className="mb-2 block text-xs font-medium text-ink-secondary">Group name</label>
-          <div className="flex gap-2"><input id="shared-room-name" value={name} onChange={event => setName(event.target.value)} maxLength={100} disabled={pending || !canManage} className="min-w-0 flex-1 rounded-lg bg-control px-3 py-2 text-sm text-ink focus:outline-none focus:ring-1 focus:ring-accent" />
-          {canManage && <button type="submit" disabled={pending || !name.trim() || name.trim() === room.name} className="rounded-lg bg-accent px-3 text-sm text-white disabled:opacity-40">Save</button>}</div>
-          {!canManage && <p className="mt-2 text-xs text-ink-secondary">Only the owner can rename the group or change members.</p>}
+          <div className="flex gap-2"><input id="shared-room-name" value={name} onChange={event => setName(event.target.value)} maxLength={100} disabled={pending || !canRename} className="min-w-0 flex-1 rounded-lg bg-control px-3 py-2 text-sm text-ink focus:outline-none focus:ring-1 focus:ring-accent" />
+          {canRename && <button type="submit" disabled={pending || !name.trim() || name.trim() === room.name} className="rounded-lg bg-accent px-3 text-sm text-white disabled:opacity-40">Save</button>}</div>
+          {!canRename && <p className="mt-2 text-xs text-ink-secondary">Only the owner can rename the group or change members.</p>}
         </form>}
         <section aria-label="Conversation members">
           <p className="mb-3 text-xs leading-relaxed text-ink-secondary">New members can see this conversation’s retained history and files. Removing someone stops future access; it cannot erase copies they already saved.</p>
           <h3 className="mb-1 flex items-center gap-2 text-[13px] font-semibold text-ink"><Users size={16} />Members · {members.length}</h3>
-          {!direct && <p className="mb-3 text-xs text-ink-secondary">Owner: can rename the group, add and remove people. Member: can chat, share files and @mention bots.</p>}
+          {!direct && <p className="mb-3 text-xs text-ink-secondary">{friends ? "Owner: can add and remove people. Everyone: can rename the group, chat, share files, @mention bots and add their own bots." : "Owner: can rename the group, add and remove people. Member: can chat, share files and @mention bots."}</p>}
           <div className="space-y-3">{members.map(member => <div key={member.id} className="flex items-center gap-3">
             {member.avatar ? <PersonPhoto src={member.avatar} size={34} /> : <GroupMark members={[member]} size={34} />}
             <div className="min-w-0 flex-1"><div className="truncate text-sm font-medium text-ink">{member.name}{member.id === selfId && member.name !== "You" ? " (you)" : ""}</div><div className="text-xs text-ink-secondary" title={member.id === ownerId ? "Can rename the group, add and remove people" : "Can chat, share files and @mention bots"}>{member.id === ownerId ? "Owner" : "Member"}{member.title ? ` · ${member.title}` : ""}</div></div>
-            {!direct && canManage && member.id !== selfId && member.id !== ownerId && <button type="button" disabled={pending} onClick={() => setConfirm(member.id)} className="rounded-md px-2 py-1 text-xs text-danger hover:bg-danger/10">Remove</button>}
+            {!direct && removable(member.id) && member.id !== selfId && member.id !== ownerId && <button type="button" disabled={pending} onClick={() => setConfirm(member.id)} className="rounded-md px-2 py-1 text-xs text-danger hover:bg-danger/10">Remove</button>}
           </div>)}</div>
           {!direct && canManage && available.length > 0 && <div className="mt-4 rounded-xl border border-hairline/40 bg-control/40 p-2">
             <input aria-label="Find people to add" placeholder="Find people…" value={peopleQuery} onChange={event => setPeopleQuery(event.target.value)} className="mb-2 w-full rounded-lg bg-inset px-3 py-2 text-sm text-ink outline-none focus:ring-1 focus:ring-accent" />
@@ -86,6 +93,19 @@ export function SharedConversationDetails({ room, selfId, contacts, title, pendi
           </div>}
 
         </section>
+        {!direct && myBots.length > 0 && <section aria-label="Your bots in this group">
+          <h3 className="mb-1 text-[13px] font-semibold text-ink">Your bots</h3>
+          <p className="mb-3 text-xs text-ink-secondary">Added bots can be @mentioned by everyone here. They run on your computer and ask you before acting.</p>
+          <div className="space-y-1">{myBots.map(bot => {
+            const inRoom = room.memberIds.includes(bot.id);
+            return <div key={bot.id} className="flex items-center gap-2 rounded-lg px-2 py-1.5">
+              <span className="min-w-0 flex-1 truncate text-sm text-ink">{bot.name}</span>
+              <button type="button" disabled={pending} aria-label={`${inRoom ? "Remove" : "Add"} ${bot.name}`}
+                onClick={() => void onChange("PATCH", "", { memberIds: inRoom ? room.memberIds.filter(id => id !== bot.id) : [...room.memberIds, bot.id] })}
+                className={inRoom ? "rounded-md px-2 py-1 text-xs text-danger hover:bg-danger/10" : "rounded-md px-2 py-1 text-xs font-medium text-accent hover:bg-accent/10"}>{inRoom ? "Remove" : "Add"}</button>
+            </div>;
+          })}</div>
+        </section>}
         <p className="rounded-xl bg-accent/10 px-3 py-3 text-[13px] leading-relaxed text-ink-secondary">@mention your bots here — no need to add them</p>
         {!direct && onRepliesChange && <section aria-label="Bot replies">
           <label htmlFor="shared-replies" className="mb-2 block text-[13px] font-semibold text-ink">Who replies to you</label>

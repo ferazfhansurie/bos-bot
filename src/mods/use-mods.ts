@@ -8,7 +8,7 @@ const listeners = new Set<() => void>();
 let timer: ReturnType<typeof setInterval> | undefined;
 let loading = false;
 let initialized = false;
-export function modsDesktop() { return typeof window !== "undefined" && !/iPhone|iPad|Android/i.test(navigator.userAgent) && matchMedia("(min-width: 768px)").matches; }
+export function modsDesktop() { return typeof window !== "undefined" && !/iPhone|iPad|Android/i.test(navigator.userAgent) && typeof matchMedia === "function" && matchMedia("(min-width: 768px)").matches; }
 export async function refreshMods() {
   if (loading || !modsDesktop()) return;
   loading = true;
@@ -27,5 +27,5 @@ export function useMods() {
     void refreshMods(); if (!timer) timer = setInterval(() => void refreshMods(), 1500);
     return () => { if (listeners.size === 0 && timer) { clearInterval(timer); timer = undefined; } };
   }, []);
-  return useSyncExternalStore(subscribe, () => mods);
+  return useSyncExternalStore(subscribe, () => mods, () => mods);
 }

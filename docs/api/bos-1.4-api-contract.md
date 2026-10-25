@@ -12,7 +12,7 @@ Queued response: `{ok: true, queued: true, queueId, threadId}`. Pending chips us
 
 ## Fallback
 
-Normal `POST /api/bots` and `PATCH /api/bots/:botId` accept `fallbackModel?: string | null`, an exact discovered model ID, optional/clearable. Native profile proposals and paired cosmetic profile edits do not configure this field. Only compatible current approvals can transfer. No automatic grant escalation or substitution of an unknown model.
+Normal `POST /api/bots` and `PATCH /api/bots/:botId` accept `fallbackModel?: string | null`, an exact discovered model ID, optional/clearable. Add `fallbackInstanceId?: string | null` to name the instance that serves it; that explicit choice is the only way a fallback may use a sibling subscription of the same engine (a second Claude account). Native profile proposals and paired cosmetic profile edits do not configure this field. Only compatible current approvals can transfer. No automatic grant escalation or substitution of an unknown model.
 
 SSE envelope: `{kind: "runtime", event: {type: "model.switched", botId, threadId, from, to, reason, ...}}`; `from` and `to` are model ID strings, reasons `provider_limit` and `provider_reset`. The server also records one compact thread line. Provider authentication failures are distinct from exhausted usage. Switching is scoped to the task or room; reset recovery waits for a known reset and available primary. An unknown reset stays on the configured backup. Only clean direct quota failures before tools/output may retry once; room fallback uses usage preflight and does not replay failed turns.
 

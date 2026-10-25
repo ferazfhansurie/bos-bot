@@ -12,7 +12,12 @@ describe("blank tab", () => {
     expect(picked("make slide 2 a chart")).toContain("blank-tab");
     expect(picked("start a new tab makeit my bosbot dashboard", [])).not.toContain("blank-tab");
     expect(picked("what time is it")).not.toContain("blank-tab");
-    for (const s of CANVAS_STARTERS.filter(s => s.id !== "video")) expect(picked(s.prompt + "x")).toContain("blank-tab");
+    const appStarters = new Set(["crm", "app"]);
+    for (const s of CANVAS_STARTERS.filter(s => s.id !== "video")) expect(picked(s.prompt + "x")).toContain(appStarters.has(s.id) ? "apps" : "blank-tab");
+    expect(picked("add ali from seri bridal to my crm as hot")).toContain("apps");
+    expect(picked("i need hr management with leave and payroll")).toContain("apps");
+    expect(picked("a 5-slide deck about bos bot")).not.toContain("apps");
+    expect(picked("reply to them on whatsapp for business and leave it, three hr ago")).not.toContain("apps");
     const skill = readFileSync("skills/blank-tab/SKILL.md", "utf8");
     expect(skill).toContain("open_tab");
     expect(skill).toContain("top-level <section>");

@@ -37,7 +37,7 @@ export function learnSource(request: string): string {
   return `${LEARN_SOURCE_PREFIX}${body.slice(0, 180)}`;
 }
 
-const AUTHORING_STANDARDS = `Follow these skill-authoring rules:
+export const AUTHORING_STANDARDS = `Follow these skill-authoring rules:
 
 Frontmatter:
 - name: lowercase-hyphenated, 1-64 chars, no spaces or underscores.

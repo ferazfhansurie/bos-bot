@@ -19,6 +19,7 @@ export interface ReplyTransport {
 const individual = /^\d{6,20}@c\.us$/;
 // WhatsApp now addresses many one-to-one chats by a privacy id (<digits>@lid) instead of the phone number
 const person = /^(\d{6,20}@c\.us|\d{6,25}@lid)$/;
+const HELD = "the owner has taken over WhatsApp. nothing was sent. wait until they hand it back, then try once more";
 const chat = /^(\d{6,20}@c\.us|\d{6,25}@lid|[\d-]{6,40}@g\.us)$/;
 
 export class WhatsAppReplies {
@@ -47,6 +48,10 @@ export class WhatsAppReplies {
     try { fsyncSync(dir); } finally { closeSync(dir); }
   }
   policies(): Record<string, ReplyPolicy> { return this.read("reply-policies.json", {}); }
+  /** The owner took over WhatsApp from a desk: every bot reply, send and
+   * automatic dispatch waits until they hand it back. */
+  held(): boolean { return this.read<{ heldAt?: number }>("hold.json", {}).heldAt !== undefined; }
+  hold(on: boolean): void { this.write("hold.json", on ? { heldAt: this.now() } : {}); }
   policy(botId: string): ReplyPolicy | undefined { return this.policies()[botId]; }
   configure(botId: string, value: unknown): void {
     const policies = this.policies();
@@ -80,7 +85,7 @@ export class WhatsAppReplies {
     return !!p && p.readOnly !== true && message.accountId === p.accountId && this.account(botId) === p.accountId && (p.chatIds === null || p.chatIds.includes(message.chatId)) && !message.fromMe && message.type === "chat" && (!p.autoDispatch || message.timestamp * 1000 >= p.enabledAt - 1000) && message.timestamp <= this.now() / 1000 + 60 && message.timestamp >= this.now() / 1000 - 86400;
   }
   claimInbound(botId: string, message: WhatsAppStoredMessage): boolean {
-    if (!this.policy(botId)?.autoDispatch || !this.eligible(botId, message)) return false;
+    if (this.held() || !this.policy(botId)?.autoDispatch || !this.eligible(botId, message)) return false;
     const key = createHash("sha256").update(JSON.stringify([botId, this.account(botId), message.id])).digest("hex");
     const claims = this.read<Record<string, number>>("reply-dispatches.json", {});
     if (claims[key]) return false;
@@ -90,6 +95,7 @@ export class WhatsAppReplies {
   }
   async reply(botId: string, input: ReplyInput, authorized: () => boolean = () => true): Promise<ReplyReceipt> {
     if (!input || typeof input.account_id !== "string" || typeof input.chat_id !== "string" || typeof input.message_id !== "string" || typeof input.text !== "string" || !input.text.trim() || input.text.length > 4000) throw new Error("account_id, chat_id, message_id and text (1–4000 characters) required");
+    if (this.held()) throw new Error(HELD);
     const p = this.policy(botId);
     const transport = this.transport();
     if (!p || p.readOnly === true || !transport || transport.accountId() !== p.accountId || input.account_id !== p.accountId || !chat.test(input.chat_id) || input.chat_id === p.accountId || (p.chatIds !== null && !p.chatIds.includes(input.chat_id))) throw new Error("reply account or client recipient is not authorized");
@@ -110,7 +116,7 @@ export class WhatsAppReplies {
     let receipt: ReplyReceipt;
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
-      const messageId = await Promise.race([transport.reply(input, () => authorized() && this.policy(botId)?.accountId === input.account_id && this.eligible(botId, source)), new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error("reply timed out")), 30_000); })]);
+      const messageId = await Promise.race([transport.reply(input, () => authorized() && !this.held() && this.policy(botId)?.accountId === input.account_id && this.eligible(botId, source)), new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error("reply timed out")), 30_000); })]);
       receipt = messageId ? { state: "submitted", messageId, fingerprint } : { state: "outcome_unknown", fingerprint };
     } catch { receipt = { state: "outcome_unknown", fingerprint }; }
     finally { clearTimeout(timer); }
@@ -128,6 +134,7 @@ export class WhatsAppReplies {
       const p = this.policy(botId);
       return !!p && p.readOnly !== true && p.outreach === true && Array.isArray(p.chatIds) && p.chatIds.includes(input.chat_id) && p.accountId === input.account_id;
     };
+    if (this.held()) throw new Error(HELD);
     const transport = this.transport();
     if (!granted() || !transport || transport.accountId() !== input.account_id || !person.test(input.chat_id) || input.chat_id === input.account_id)
       throw new Error("outreach is not granted for this account and chat");
@@ -143,7 +150,7 @@ export class WhatsAppReplies {
     let receipt: ReplyReceipt;
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
-      const messageId = await Promise.race([transport.reply({ account_id: input.account_id, chat_id: input.chat_id, message_id: "", text: input.text }, () => authorized() && granted()), new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error("send timed out")), 30_000); })]);
+      const messageId = await Promise.race([transport.reply({ account_id: input.account_id, chat_id: input.chat_id, message_id: "", text: input.text }, () => authorized() && !this.held() && granted()), new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error("send timed out")), 30_000); })]);
       receipt = messageId ? { state: "submitted", messageId, fingerprint } : { state: "outcome_unknown", fingerprint };
     } catch {
       receipt = { state: "outcome_unknown", fingerprint };

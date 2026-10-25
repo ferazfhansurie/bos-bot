@@ -13,9 +13,11 @@ enum NotificationAvatarCache {
             .appendingPathComponent("\(digest).png")
     }
 
-    static func store(_ data: Data, for senderID: String) {
-        guard let url = url(for: senderID) else { return }
-        write(data, to: url)
+    /// True once a face with ink is on disk for this sender.
+    @discardableResult
+    static func store(_ data: Data, for senderID: String) -> Bool {
+        guard let url = url(for: senderID) else { return false }
+        return write(data, to: url)
     }
 
     /// ImageRenderer hands back a fully transparent picture when the app

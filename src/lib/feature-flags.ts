@@ -1,7 +1,7 @@
 import { t } from "./i18n";
 
 export interface FeatureFlagConfig {
-  features?: { skillAuthoring?: boolean; showToolCalls?: boolean; browser?: boolean; sharedComputers?: boolean; claudeUserMcp?: boolean };
+  features?: { skillAuthoring?: boolean; autoSkills?: boolean; showToolCalls?: boolean; browser?: boolean; sharedComputers?: boolean; claudeUserMcp?: boolean };
   browserEngine?: { kind: "engine" | "unavailable"; reason?: string; installable?: boolean; installing?: boolean; installError?: string };
 }
 
@@ -24,6 +24,13 @@ export function browserUnavailableReason(config: FeatureFlagConfig | null | unde
  * off — the same rule as the server's skillAuthoringEnabled. */
 export function skillAuthoringEnabled(config: FeatureFlagConfig | null | undefined): boolean {
   return config?.features?.skillAuthoring !== false;
+}
+
+/** After a substantial run the bot may draft a skill on its own, reviewed like
+ * any other. On whenever skill authoring is, unless switched off — the same
+ * rule as the server's autoSkillsEnabled. */
+export function autoSkillsEnabled(config: FeatureFlagConfig | null | undefined): boolean {
+  return skillAuthoringEnabled(config) && config?.features?.autoSkills !== false;
 }
 
 /** The built-in browser is on for the workspace unless a saved config

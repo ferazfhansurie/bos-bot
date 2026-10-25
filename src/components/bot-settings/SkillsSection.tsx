@@ -9,8 +9,8 @@ import { BookOpen, Trash2 } from "lucide-react";
 import { t } from "@/lib/i18n";
 import { useEffect, useRef, useState } from "react";
 
-import { api, useStore, type Bot } from "@/state/store";
-import { skillAuthoringEnabled } from "@/lib/feature-flags";
+import { api, useStore, type Bot, type ConfigStatus } from "@/state/store";
+import { autoSkillsEnabled, skillAuthoringEnabled } from "@/lib/feature-flags";
 import { Switch } from "../SettingsPrimitives";
 import { inputCls } from "./field";
 
@@ -232,6 +232,7 @@ export function SkillsSection({ bot }: { bot: Bot }) {
           </button>
         </form>
         {importMessage && <div className="mt-1 text-[12px] text-ink-secondary">{importMessage}</div>}
+        {featureEnabled && <AutoSkillsSwitch />}
 
         {loading ? (
           <div className="mt-3 text-[12px] text-ink-secondary">Loading…</div>
@@ -368,3 +369,47 @@ export function SkillsSection({ bot }: { bot: Bot }) {
   );
 }
 import { TeachingRecorder } from './TeachingRecorder';
+
+/** The workspace-wide "learn skills automatically" switch: whether bots draft
+ * a skill on their own after a long run the person started. Drafts still go
+ * through the same review (or full-access receipt) as any other skill. */
+function AutoSkillsSwitch() {
+  const { state, dispatch } = useStore();
+  const enabled = autoSkillsEnabled(state.config);
+  const [saving, setSaving] = useState(false);
+  const [failed, setFailed] = useState(false);
+
+  const toggle = async () => {
+    if (saving) return;
+    setSaving(true);
+    setFailed(false);
+    try {
+      const config: ConfigStatus = await api("/api/config", {
+        method: "PATCH",
+        body: JSON.stringify({ features: { autoSkills: !enabled } }),
+      });
+      dispatch({ type: "configStatus", config });
+    } catch {
+      setFailed(true);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="mt-3 flex items-start justify-between gap-4 rounded-lg bg-inset px-3 py-2.5">
+      <div className="min-w-0">
+        <div className="text-[13px] text-ink">{t("skills.auto.title")}</div>
+        <div className="mt-0.5 text-[11.5px] leading-relaxed text-ink-secondary">{t("skills.auto.desc")}</div>
+        {failed && <div role="alert" className="mt-1 text-[11.5px] text-danger">{t("skills.auto.error")}</div>}
+      </div>
+      <Switch
+        checked={enabled}
+        aria-label={t("skills.auto.title")}
+        disabled={saving}
+        onClick={() => void toggle()}
+        className="mt-0.5 shrink-0 disabled:cursor-wait disabled:opacity-50"
+      />
+    </div>
+  );
+}

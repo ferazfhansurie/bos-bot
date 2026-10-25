@@ -1,0 +1,430 @@
+<!doctype html>
+<html lang="en">
+<head>
+<title>Invoices</title>
+<meta name="bos-app" content="Invoices">
+<meta name="bos-app-icon" content="receipt">
+<meta name="bos-app-schema" content="invoices: number (INV-0001 style, take settings next_number then add 1 to it), client_name, client_email, client_address, issue_date (YYYY-MM-DD), due_date (YYYY-MM-DD), items (array of {desc, qty (number), price (number, per unit)}), tax_rate (number, percent e.g. 8), notes, status (draft|sent|paid; overdue is worked out from due_date), paid_on (YYYY-MM-DD, set when paid); settings: one record id business with name, address, email, phone, currency (default RM), bank_details, next_number (number)">
+<style>
+  [hidden]{display:none!important}
+  :root{--accent:#4f46e5}
+  .app-icon{display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;border-radius:8px;background:var(--accent);color:#fff;flex:none}
+  .app-icon svg,.btn svg,.icon-btn svg{width:16px;height:16px}
+  .stat .sub{font-size:12px;color:var(--muted);margin-top:2px}
+  .stat .sub b{color:var(--bad);font-weight:600}
+  .bar{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+  .num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
+  .who{min-width:0}
+  .sm-only{display:none}
+  .inv-no{white-space:nowrap}
+  .who .small{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:260px}
+  .ed-head{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+  .ed-head h2{font-size:20px;letter-spacing:-.01em}
+  .card{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);padding:18px;box-shadow:var(--shadow)}
+  .card h3{font-size:13px;font-weight:600;color:var(--muted);margin:0 0 12px;text-transform:uppercase;letter-spacing:.04em}
+  .ed-grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:16px}
+  .full{grid-column:1/-1}
+  .items-head,.item{display:grid;grid-template-columns:minmax(0,1fr) 80px 120px 120px 32px;gap:8px;align-items:center}
+  .items-head{font-size:12px;font-weight:600;color:var(--muted);padding:0 0 6px}
+  .item{padding:4px 0}
+  .item .amt{text-align:right;font-variant-numeric:tabular-nums;padding-right:4px}
+  .item input.n{text-align:right}
+  .totals{margin-left:auto;width:min(320px,100%);display:grid;grid-template-columns:1fr auto;gap:8px 0;align-items:center;font-variant-numeric:tabular-nums;margin-top:14px}
+  .totals .num{padding-left:16px}
+  .totals .grand{font-size:18px;font-weight:700;border-top:1px solid var(--line);padding-top:10px}
+  .tax-in{display:inline-flex;align-items:center;gap:6px}
+  .tax-in input{width:70px;min-height:28px;padding:3px 8px;text-align:right}
+  .save-state{font-size:12px;color:var(--muted)}
+  /* printable invoice */
+  .paper{background:#fff;color:#14171c;border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow);padding:48px;max-width:820px;width:100%;margin:0 auto;font-size:14px;line-height:1.5}
+  .paper .top{display:flex;justify-content:space-between;gap:24px;flex-wrap:wrap}
+  .paper .biz b{font-size:18px;display:block;margin-bottom:4px}
+  .paper .doc{text-align:right}
+  .paper .doc .big{font-size:28px;font-weight:700;letter-spacing:.06em;color:var(--accent)}
+  .paper .muted-p{color:#667085;white-space:pre-line}
+  .paper .bill{margin:32px 0 20px;display:flex;justify-content:space-between;gap:24px;flex-wrap:wrap}
+  .paper .label{font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:#667085;margin-bottom:4px}
+  .paper table{width:100%;border-collapse:collapse}
+  .paper th{text-align:left;font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:#667085;border-bottom:2px solid #14171c;padding:8px 6px}
+  .paper td{padding:10px 6px;border-bottom:1px solid #e4e7ec;vertical-align:top}
+  .paper .num{text-align:right}
+  .paper .ptot{margin:16px 0 0 auto;width:min(300px,100%);display:grid;grid-template-columns:1fr auto;gap:6px 0}
+  .paper .ptot .num{padding-left:16px}
+  .paper .ptot .grand{font-weight:700;font-size:16px;border-top:2px solid #14171c;padding-top:8px}
+  .paper .foot{margin-top:36px;display:grid;grid-template-columns:1fr 1fr;gap:24px}
+  .paper .stamp{display:inline-block;margin-top:6px;padding:2px 10px;border:2px solid #12a150;color:#12a150;border-radius:6px;font-weight:700;letter-spacing:.08em;font-size:12px}
+  .btn.solid-danger{background:var(--bad);border-color:var(--bad);color:#fff}
+  @media (max-width:640px){
+    .ed-grid{grid-template-columns:minmax(0,1fr)}
+    .items-head{display:none}
+    .item{grid-template-columns:minmax(0,1fr) minmax(0,1fr) 32px;padding:10px 0;border-bottom:1px solid var(--line)}
+    .item .desc{grid-column:1/-1}
+    .item .amt{grid-column:1/3;text-align:left;font-size:13px;color:var(--muted)}
+    .item .qty,.item .price{min-width:0}
+    .paper{padding:22px 16px;font-size:13px}
+    .paper .doc{text-align:left}
+    .paper .foot{grid-template-columns:1fr}
+    .stat .stat-value{font-size:19px}
+    .grid.stats{grid-template-columns:1fr 1fr}
+    .bar .tabs{width:100%;overflow-x:auto}
+    .bar .search{flex:1;min-width:0}
+    .sm-only{display:block}
+  }
+  @media print{
+    @page{margin:14mm}
+    html,body{background:#fff!important}
+    .app-bar,.no-print,.toast{display:none!important}
+    .app-main{padding:0!important;max-width:none!important}
+    .paper{border:0;box-shadow:none;padding:0;max-width:none;border-radius:0}
+  }
+</style>
+</head>
+<body>
+<div class="app">
+  <header class="app-bar">
+    <h1><span class="app-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 2v20l2-1 2 1 2-1 2 1 2-1 2 1 2-1 2 1V2l-2 1-2-1-2 1-2-1-2 1-2-1-2 1z"/><path d="M16 8h-6a2 2 0 1 0 0 4h4a2 2 0 1 1 0 4H8M12 17.5v-11"/></svg></span><span id="app-name">Invoices</span></h1>
+    <span class="spacer"></span>
+    <button class="icon-btn" id="open-settings" title="Business details" aria-label="Business details"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.830l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></button>
+    <button class="btn primary" id="new-invoice" aria-label="New invoice"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg><span class="hide-sm">New invoice</span></button>
+  </header>
+  <main class="app-main" id="main"></main>
+</div>
+
+<dialog class="sheet" id="settings-sheet">
+  <div id="settings-form">
+    <h2>Business details</h2>
+    <p class="small muted">Shown on every invoice.</p>
+    <div class="form">
+      <label class="field full"><span>Business name</span><input name="name" placeholder="Your company"></label>
+      <label class="field full"><span>Address</span><textarea name="address" rows="3" placeholder="Street, city, postcode"></textarea></label>
+      <label class="field"><span>Email</span><input name="email" type="email" placeholder="billing@company.com"></label>
+      <label class="field"><span>Phone</span><input name="phone" type="tel" placeholder="+60 3 1234 5678"></label>
+      <label class="field"><span>Currency</span><input name="currency" placeholder="RM"></label>
+      <label class="field"><span>Next invoice number</span><input name="next_number" type="number" min="1" step="1"></label>
+      <label class="field full"><span>Bank details</span><textarea name="bank_details" rows="3" placeholder="Bank, account name, account number"></textarea></label>
+    </div>
+    <div class="sheet-actions"><button type="button" class="btn" data-close>Cancel</button><button type="button" class="btn primary" id="settings-save">Save</button></div>
+  </div>
+</dialog>
+
+<dialog class="sheet" id="confirm-sheet">
+  <div>
+    <h2 id="confirm-text">Are you sure?</h2>
+    <p class="muted" id="confirm-sub"></p>
+    <div class="sheet-actions"><button type="button" class="btn" data-close>Cancel</button><button type="button" class="btn solid-danger" id="confirm-ok">Delete</button></div>
+  </div>
+</dialog>
+
+<script>
+const $ = s => document.querySelector(s);
+const esc = bos.esc;
+const pad = n => String(n).padStart(2, "0");
+const ymd = d => d.getFullYear() + "-" + pad(d.getMonth() + 1) + "-" + pad(d.getDate());
+const today = () => ymd(new Date());
+const addDays = (s, n) => { const d = new Date((isDate(s) ? s : today()) + "T00:00"); d.setDate(d.getDate() + n); return ymd(d); };
+const isDate = s => typeof s === "string" && /^\d{4}-\d{2}-\d{2}$/.test(s);
+const fmtDate = s => isDate(s) ? new Date(s + "T00:00").toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" }) : "-";
+const num = (v, d = 0) => { const n = typeof v === "number" ? v : parseFloat(String(v ?? "").replace(/,/g, "")); return Number.isFinite(n) ? n : d; };
+const r2 = n => Math.round((n + Number.EPSILON) * 100) / 100;
+
+const state = { invoices: [], settings: null, view: "list", openId: null, filter: "all", q: "", timer: null, sent: [] };
+const biz = () => state.settings || {};
+const cur = () => (typeof biz().currency === "string" && biz().currency.trim()) || "RM";
+const money = n => cur() + " " + num(n).toLocaleString("en-MY", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+// ---------- invoice maths (tolerant of bot-written items) ----------
+const itemsOf = inv => (Array.isArray(inv.items) ? inv.items : []).filter(i => i && typeof i === "object").map(i => ({ desc: String(i.desc ?? i.description ?? ""), qty: num(i.qty ?? i.quantity, 1), price: num(i.price ?? i.unit_price ?? i.amount, 0) }));
+function totals(inv) {
+  const sub = r2(itemsOf(inv).reduce((s, i) => s + i.qty * i.price, 0));
+  const rate = num(inv.tax_rate);
+  const tax = r2(sub * rate / 100);
+  return { sub, rate, tax, total: r2(sub + tax) };
+}
+const statusOf = inv => {
+  const s = String(inv.status || "draft").toLowerCase();
+  if (s === "sent" && isDate(inv.due_date) && inv.due_date < today()) return "overdue";
+  return ["draft", "sent", "paid", "overdue"].includes(s) ? s : "other";
+};
+const BADGE = { draft: ["", "Draft"], sent: ["blue", "Sent"], overdue: ["red", "Overdue"], paid: ["green", "Paid"] };
+const badge = inv => { const s = statusOf(inv), b = BADGE[s]; return `<span class="badge" data-tone="${b ? b[0] : "purple"}">${esc(b ? b[1] : String(inv.status))}</span>`; };
+const numberOf = inv => (typeof inv.number === "string" && inv.number.trim()) || (inv.number != null && String(inv.number)) || "No number";
+
+// ---------- list ----------
+function renderList() {
+  const all = state.invoices, t = today(), month = t.slice(0, 7);
+  const out = all.filter(i => ["sent", "overdue"].includes(statusOf(i)));
+  const late = out.filter(i => statusOf(i) === "overdue");
+  const paidM = all.filter(i => statusOf(i) === "paid" && String(isDate(i.paid_on) ? i.paid_on : i.issue_date || "").slice(0, 7) === month);
+  const drafts = all.filter(i => statusOf(i) === "draft");
+  const sum = arr => arr.reduce((s, i) => s + totals(i).total, 0);
+  const stats = `<div class="grid stats">
+    <div class="stat"><div class="stat-label">Outstanding</div><div class="stat-value">${esc(money(sum(out)))}</div><div class="sub">${out.length} unpaid ${out.length === 1 ? "invoice" : "invoices"}</div></div>
+    <div class="stat"><div class="stat-label">Overdue</div><div class="stat-value">${esc(money(sum(late)))}</div><div class="sub">${late.length ? `<b>${late.length} past due</b>` : "nothing late"}</div></div>
+    <div class="stat"><div class="stat-label">Paid this month</div><div class="stat-value">${esc(money(sum(paidM)))}</div><div class="sub">${paidM.length} paid</div></div>
+    <div class="stat"><div class="stat-label">Drafts</div><div class="stat-value">${drafts.length}</div><div class="sub">${esc(money(sum(drafts)))} not sent</div></div>
+  </div>`;
+  if (!all.length) {
+    $("#main").innerHTML = stats + `<div class="empty"><p><b>No invoices yet</b></p><p class="small">Add your business details, then create your first invoice.</p><div style="display:flex;gap:8px;justify-content:center;margin-top:14px;flex-wrap:wrap"><button class="btn" data-act="settings">Business details</button><button class="btn primary" data-act="new">New invoice</button></div></div>`;
+    return;
+  }
+  const F = { all: () => true, draft: i => statusOf(i) === "draft", unpaid: i => ["sent", "overdue"].includes(statusOf(i)), overdue: i => statusOf(i) === "overdue", paid: i => statusOf(i) === "paid" };
+  const q = state.q.toLowerCase();
+  const rows = all.filter(F[state.filter] || F.all).filter(i => !q || (numberOf(i) + " " + (i.client_name || "") + " " + (i.client_email || "")).toLowerCase().includes(q))
+    .sort((a, b) => String(b.issue_date || "").localeCompare(String(a.issue_date || "")) || numberOf(b).localeCompare(numberOf(a)));
+  const tab = (k, l) => `<button role="tab" data-filter="${k}" aria-selected="${state.filter === k}">${l}</button>`;
+  const focused = document.activeElement && document.activeElement.id === "search";
+  $("#main").innerHTML = stats + `<div class="bar"><div class="tabs" role="tablist">${tab("all", "All")}${tab("draft", "Drafts")}${tab("unpaid", "Unpaid")}${tab("overdue", "Overdue")}${tab("paid", "Paid")}</div><span class="spacer"></span><input class="search" id="search" type="search" placeholder="Search number or client" value="${esc(state.q)}"></div>` +
+    (rows.length ? `<div class="table-wrap"><table class="table"><thead><tr><th>Invoice</th><th class="hide-sm">Client</th><th class="hide-sm">Issued</th><th class="hide-sm">Due</th><th>Status</th><th class="num">Total</th></tr></thead><tbody>` +
+      rows.map(i => `<tr data-click data-open="${esc(i.id)}"><td class="who"><b class="inv-no">${esc(numberOf(i))}</b><div class="small muted sm-only">${esc(i.client_name || "No client")}</div></td><td class="who hide-sm"><div>${esc(i.client_name || "No client")}</div><div class="small muted">${esc(i.client_email || "")}</div></td><td class="hide-sm">${esc(fmtDate(i.issue_date))}</td><td class="hide-sm">${esc(fmtDate(i.due_date))}</td><td>${badge(i)}</td><td class="num"><b>${esc(money(totals(i).total))}</b></td></tr>`).join("") +
+      `</tbody></table></div>` : `<div class="empty">No invoices match.</div>`);
+  if (focused) { const s = $("#search"); s.focus(); s.setSelectionRange(s.value.length, s.value.length); }
+}
+
+// ---------- editor ----------
+const openInv = () => state.invoices.find(i => i.id === state.openId);
+function renderEditor() {
+  const inv = openInv(); if (!inv) { state.view = "list"; return render(); }
+  const s = statusOf(inv);
+  const action = s === "draft" ? `<button class="btn primary" data-act="mark-sent">Mark as sent</button>` : s === "paid" ? `<button class="btn" data-act="mark-unpaid">Mark unpaid</button>` : `<button class="btn primary" data-act="mark-paid">Mark as paid</button>`;
+  $("#main").innerHTML = `
+  <div class="ed-head">
+    <button class="icon-btn" data-act="back" aria-label="Back to invoices" title="Back"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg></button>
+    <h2>${esc(numberOf(inv))}</h2><span id="ed-badge">${badge(inv)}</span><span class="save-state" id="save-state"></span>
+    <span class="spacer"></span>
+    <button class="icon-btn" data-act="delete" aria-label="Delete invoice" title="Delete"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m3 0-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/></svg></button>
+    <button class="btn" data-act="preview">Preview</button>
+    <span id="ed-action">${action}</span>
+  </div>
+  <div class="ed-grid" id="ed">
+    <div class="card"><h3>Bill to</h3><div class="stack">
+      <label class="field"><span>Client name</span><input name="client_name" placeholder="Company or person"></label>
+      <label class="field"><span>Email</span><input name="client_email" type="email" placeholder="accounts@client.com"></label>
+      <label class="field"><span>Address</span><textarea name="client_address" rows="3" placeholder="Street, city, postcode"></textarea></label>
+    </div></div>
+    <div class="card"><h3>Details</h3><div class="stack">
+      <label class="field"><span>Invoice number</span><input name="number"></label>
+      <div class="ed-grid" style="gap:12px"><label class="field"><span>Issue date</span><input name="issue_date" type="date"></label><label class="field"><span>Due date</span><input name="due_date" type="date"></label></div>
+      <label class="field"><span>Notes</span><textarea name="notes" rows="2" placeholder="Payment terms, thank you note"></textarea></label>
+    </div></div>
+    <div class="card full"><h3>Items</h3>
+      <div class="items-head"><span>Description</span><span class="num">Qty</span><span class="num">Price</span><span class="num">Amount</span><span></span></div>
+      <div id="items"></div>
+      <button class="btn sm" data-act="add-item" style="margin-top:8px"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>Add line</button>
+      <div class="totals" id="totals"></div>
+    </div>
+  </div>`;
+  fillEditor(inv);
+}
+function itemRow(i, k) {
+  return `<div class="item" data-i="${k}"><input class="desc" data-f="desc" placeholder="Description" value="${esc(i.desc)}" aria-label="Description"><input class="qty n" data-f="qty" type="number" step="any" min="0" value="${esc(i.qty)}" aria-label="Quantity"><input class="price n" data-f="price" type="number" step="0.01" min="0" value="${esc(i.price)}" aria-label="Unit price"><span class="amt" data-amt>${esc(money(i.qty * i.price))}</span><button class="icon-btn" data-act="del-item" aria-label="Remove line"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg></button></div>`;
+}
+function fillEditor(inv) {
+  const ed = $("#ed"); if (!ed) return;
+  for (const k of ["client_name", "client_email", "client_address", "number", "issue_date", "due_date", "notes"]) {
+    const el = ed.querySelector(`[name=${k}]`); el.value = k.endsWith("_date") ? (isDate(inv[k]) ? inv[k] : "") : (inv[k] == null ? "" : String(inv[k]));
+  }
+  const items = itemsOf(inv);
+  $("#items").innerHTML = items.map(itemRow).join("") || `<div class="small muted" style="padding:8px 0">No lines yet.</div>`;
+  paintTotals(inv);
+}
+function paintTotals(inv) {
+  const t = totals(inv);
+  $("#totals").innerHTML = `<span>Subtotal</span><span class="num">${esc(money(t.sub))}</span>
+    <span class="tax-in">Tax <input name="tax_rate" type="number" step="any" min="0" value="${esc(t.rate)}" aria-label="Tax rate percent">%</span><span class="num">${esc(money(t.tax))}</span>
+    <span class="grand">Total</span><span class="grand num">${esc(money(t.total))}</span>`;
+}
+// read the form back into a fields object
+function readForm() {
+  const ed = $("#ed"), f = {};
+  for (const k of ["client_name", "client_email", "client_address", "number", "issue_date", "due_date", "notes"]) f[k] = ed.querySelector(`[name=${k}]`).value.trim();
+  const tr = document.querySelector("[name=tax_rate]"); f.tax_rate = num(tr && tr.value);
+  f.items = [...document.querySelectorAll("#items .item")].map(r => ({ desc: r.querySelector("[data-f=desc]").value.trim(), qty: num(r.querySelector("[data-f=qty]").value), price: num(r.querySelector("[data-f=price]").value) }));
+  return f;
+}
+// live totals without rebuilding inputs (keeps the caret)
+function liveTotals() {
+  const f = readForm();
+  document.querySelectorAll("#items .item").forEach((r, k) => { r.querySelector("[data-amt]").textContent = money(f.items[k].qty * f.items[k].price); });
+  const t = totals(f);
+  const spans = $("#totals").querySelectorAll(".num");
+  spans[0].textContent = money(t.sub); spans[1].textContent = money(t.tax); spans[2].textContent = money(t.total);
+}
+function schedule() { clearTimeout(state.timer); state.timer = setTimeout(save, 500); $("#save-state").textContent = "Saving..."; }
+async function save() {
+  clearTimeout(state.timer); state.timer = null;
+  const inv = openInv(); if (!inv || !$("#ed")) return;
+  const f = readForm(), changed = {};
+  for (const k in f) {
+    const before = k === "items" ? JSON.stringify(itemsOf(inv)) : k === "tax_rate" ? num(inv.tax_rate) : (inv[k] == null ? "" : String(inv[k]));
+    const after = k === "items" ? JSON.stringify(f.items) : f[k];
+    if (before !== after) changed[k] = f[k];
+  }
+  if (!Object.keys(changed).length) { const s = $("#save-state"); if (s) s.textContent = "Saved"; return; }
+  try {
+    await bos.patch("invoices", inv.id, changed);
+    const s = $("#save-state"); if (s) s.textContent = "Saved";
+  } catch (e) { bos.toast("Could not save: " + e.message); }
+}
+const editing = () => state.timer || (document.activeElement && document.activeElement.closest && document.activeElement.closest("#ed"));
+
+// ---------- preview ----------
+function renderPreview() {
+  const inv = openInv(); if (!inv) { state.view = "list"; return render(); }
+  const b = biz(), t = totals(inv), items = itemsOf(inv);
+  $("#main").innerHTML = `
+  <div class="ed-head no-print">
+    <button class="icon-btn" data-act="edit" aria-label="Back to editor" title="Back"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg></button>
+    <h2>Preview</h2><span class="spacer"></span>
+    ${b.name ? "" : `<button class="btn" data-act="settings">Add business details</button>`}
+    <button class="btn primary" data-act="print"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9V2h12v7M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>Print or save PDF</button>
+  </div>
+  <article class="paper">
+    <div class="top">
+      <div class="biz"><b>${esc(b.name || "Your business")}</b><div class="muted-p">${esc([b.address, b.email, b.phone].filter(Boolean).join("\n"))}</div></div>
+      <div class="doc"><div class="big">INVOICE</div><div><b>${esc(numberOf(inv))}</b></div><div class="muted-p">Issued ${esc(fmtDate(inv.issue_date))}\nDue ${esc(fmtDate(inv.due_date))}</div>${statusOf(inv) === "paid" ? `<div class="stamp">PAID</div>` : ""}</div>
+    </div>
+    <div class="bill"><div><div class="label">Bill to</div><b>${esc(inv.client_name || "-")}</b><div class="muted-p">${esc([inv.client_address, inv.client_email].filter(Boolean).join("\n"))}</div></div>
+      <div style="text-align:right"><div class="label">Amount due</div><div style="font-size:22px;font-weight:700">${esc(money(statusOf(inv) === "paid" ? 0 : t.total))}</div></div></div>
+    <table><thead><tr><th>Description</th><th class="num">Qty</th><th class="num">Price</th><th class="num">Amount</th></tr></thead><tbody>
+      ${items.map(i => `<tr><td>${esc(i.desc || "-")}</td><td class="num">${esc(i.qty)}</td><td class="num">${esc(money(i.price))}</td><td class="num">${esc(money(i.qty * i.price))}</td></tr>`).join("") || `<tr><td colspan="4" class="muted-p">No items</td></tr>`}
+    </tbody></table>
+    <div class="ptot"><span>Subtotal</span><span class="num">${esc(money(t.sub))}</span>${t.rate ? `<span>Tax ${esc(t.rate)}%</span><span class="num">${esc(money(t.tax))}</span>` : ""}<span class="grand">Total</span><span class="grand num">${esc(money(t.total))}</span></div>
+    <div class="foot">
+      <div>${b.bank_details ? `<div class="label">Payment details</div><div class="muted-p">${esc(b.bank_details)}</div>` : ""}</div>
+      <div>${inv.notes ? `<div class="label">Notes</div><div class="muted-p">${esc(inv.notes)}</div>` : ""}</div>
+    </div>
+  </article>`;
+}
+// window.print() is ignored when the frame lacks allow-modals; tell the user instead of failing silently
+let printed = false;
+addEventListener("beforeprint", () => { printed = true; });
+function doPrint() {
+  printed = false;
+  try { window.print(); } catch (e) {}
+  setTimeout(() => { if (!printed) bos.toast("Printing is blocked here. Open the app in its own window to print."); }, 400);
+}
+
+// ---------- actions ----------
+function render() {
+  if (state.view === "edit") renderEditor();
+  else if (state.view === "preview") renderPreview();
+  else renderList();
+}
+function nextNumber() {
+  const used = new Set(state.invoices.map(numberOf));
+  const fromNums = Math.max(0, ...state.invoices.map(i => { const m = /(\d+)\s*$/.exec(numberOf(i)); return m ? +m[1] : 0; })) + 1;
+  let n = Math.max(1, Math.round(num(biz().next_number, fromNums)));
+  while (used.has("INV-" + String(n).padStart(4, "0"))) n++;
+  return n;
+}
+async function newInvoice() {
+  const n = nextNumber(), t = today();
+  try {
+    const rec = await bos.put("invoices", { number: "INV-" + String(n).padStart(4, "0"), client_name: "", client_email: "", client_address: "", issue_date: t, due_date: addDays(t, 14), items: [{ desc: "", qty: 1, price: 0 }], tax_rate: 0, notes: "", status: "draft" });
+    await bos.put("settings", { ...biz(), id: "business", next_number: n + 1 });
+    state.invoices.push(rec); state.openId = rec.id; state.view = "edit"; render();
+    const c = document.querySelector("[name=client_name]"); if (c) c.focus();
+  } catch (e) { bos.toast("Could not create: " + e.message); }
+}
+async function setStatus(status) {
+  await save();
+  const inv = openInv(); if (!inv) return;
+  const f = { status };
+  if (status === "paid") f.paid_on = today();
+  try { await bos.patch("invoices", inv.id, f); bos.toast(status === "paid" ? "Marked as paid" : status === "sent" ? "Marked as sent" : "Marked unpaid"); } catch (e) { bos.toast("Could not update: " + e.message); }
+}
+function confirmBox(text, sub) {
+  const d = $("#confirm-sheet");
+  $("#confirm-text").textContent = text; $("#confirm-sub").textContent = sub || "";
+  d.returnValue = ""; d.showModal(); $("#confirm-ok").focus();
+  return new Promise(ok => d.addEventListener("close", () => ok(d.returnValue === "yes"), { once: true }));
+}
+$("#confirm-ok").addEventListener("click", () => $("#confirm-sheet").close("yes"));
+async function leaveEditor() {
+  await save();
+  const inv = openInv();
+  // throw away an untouched draft so abandoned clicks do not pile up
+  if (inv && statusOf(inv) === "draft" && !String(inv.client_name || "").trim() && itemsOf(inv).every(i => !i.desc && !i.price)) {
+    try { await bos.remove("invoices", inv.id); bos.toast("Empty draft discarded"); } catch (e) {}
+  }
+  state.view = "list"; state.openId = null; render();
+}
+
+// settings
+const SF = n => $("#settings-form").querySelector(`[name=${n}]`);
+function openSettings() {
+  const b = biz();
+  for (const k of ["name", "address", "email", "phone", "bank_details"]) SF(k).value = b[k] || "";
+  SF("currency").value = cur(); SF("next_number").value = nextNumber();
+  $("#settings-sheet").showModal(); SF("name").focus();
+}
+async function saveSettings() {
+  const f = { id: "business" };
+  for (const k of ["name", "address", "email", "phone", "bank_details"]) f[k] = SF(k).value.trim();
+  f.currency = SF("currency").value.trim() || "RM";
+  f.next_number = Math.max(1, Math.round(num(SF("next_number").value, 1)));
+  try { await bos.put("settings", { ...biz(), ...f }); $("#settings-sheet").close(); bos.toast("Business details saved"); } catch (e) { bos.toast("Could not save: " + e.message); }
+}
+$("#settings-save").addEventListener("click", saveSettings);
+$("#settings-form").addEventListener("keydown", e => { if (e.key === "Enter" && e.target.tagName === "INPUT") { e.preventDefault(); saveSettings(); } });
+$("#open-settings").addEventListener("click", openSettings);
+$("#new-invoice").addEventListener("click", async () => { if (state.view === "edit") await leaveEditor(); newInvoice(); });
+
+document.addEventListener("click", async e => {
+  const t = e.target;
+  if (t.closest("[data-close]")) { t.closest("dialog").close(); return; }
+  const f = t.closest("[data-filter]"); if (f) { state.filter = f.dataset.filter; render(); return; }
+  const row = t.closest("[data-open]"); if (row) { state.openId = row.dataset.open; state.view = "edit"; render(); window.scrollTo(0, 0); return; }
+  const a = t.closest("[data-act]"); if (!a) return;
+  const act = a.dataset.act;
+  if (act === "new") newInvoice();
+  else if (act === "settings") openSettings();
+  else if (act === "back") leaveEditor();
+  else if (act === "preview") { await save(); state.view = "preview"; render(); window.scrollTo(0, 0); }
+  else if (act === "edit") { state.view = "edit"; render(); }
+  else if (act === "print") doPrint();
+  else if (act === "mark-sent") setStatus("sent");
+  else if (act === "mark-paid") setStatus("paid");
+  else if (act === "mark-unpaid") setStatus("sent");
+  else if (act === "add-item") {
+    const box = $("#items"); if (!box.querySelector(".item")) box.innerHTML = "";
+    box.insertAdjacentHTML("beforeend", itemRow({ desc: "", qty: 1, price: 0 }, box.children.length));
+    box.lastElementChild.querySelector(".desc").focus(); liveTotals(); schedule();
+  } else if (act === "del-item") { a.closest(".item").remove(); liveTotals(); schedule(); }
+  else if (act === "delete") {
+    const inv = openInv(); if (!inv) return;
+    if (!(await confirmBox(`Delete ${numberOf(inv)}?`, "This cannot be undone."))) return;
+    clearTimeout(state.timer); state.timer = null;
+    try { await bos.remove("invoices", inv.id); state.view = "list"; state.openId = null; render(); bos.toast("Invoice deleted"); } catch (err) { bos.toast("Could not delete: " + err.message); }
+  }
+});
+document.addEventListener("input", e => {
+  if (e.target.id === "search") { state.q = e.target.value; renderList(); return; }
+  if (e.target.closest("#ed")) { liveTotals(); schedule(); }
+});
+document.addEventListener("keydown", e => {
+  // Enter in the last line's price field adds a new line
+  if (e.key === "Enter" && e.target.matches && e.target.matches("#items .item:last-child input")) { e.preventDefault(); document.querySelector('[data-act="add-item"]').click(); }
+  else if (e.key === "Escape" && state.view === "preview" && !document.querySelector("dialog[open]")) { state.view = "edit"; render(); }
+});
+document.addEventListener("focusout", () => setTimeout(() => { if (state.view === "edit" && state.timer) save(); }, 0));
+
+// ---------- live data ----------
+bos.subscribe("invoices", rows => {
+  state.invoices = rows;
+  if (state.view === "edit" && $("#ed")) {
+    const inv = openInv();
+    if (!inv) { state.view = "list"; state.openId = null; bos.toast("This invoice was deleted"); return render(); }
+    // refresh header bits always; refill fields only when the user is not typing
+    $("#ed-badge").innerHTML = badge(inv);
+    if (!editing()) renderEditor();
+    return;
+  }
+  render();
+});
+bos.subscribe("settings", rows => { state.settings = rows.find(r => r.id === "business") || null; if (state.view !== "edit" || !editing()) render(); });
+bos.app().then(a => { if (a && a.name) { $("#app-name").textContent = a.name; document.title = a.name; } });
+render();
+</script>
+</body>
+</html>

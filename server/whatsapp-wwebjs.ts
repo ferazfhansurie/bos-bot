@@ -283,6 +283,11 @@ export function createReadOnlyClient(
     goInvisible: async () => {
       await client.sendPresenceUnavailable();
     },
+    screenshot: async () => {
+      const page = client.pupPage;
+      if (!page) return null;
+      return await page.screenshot({ type: "jpeg", quality: 60 }) as Uint8Array;
+    },
     browserPid: () => {
       try {
         return client.pupBrowser?.process()?.pid ?? null;

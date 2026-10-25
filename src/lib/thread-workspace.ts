@@ -7,8 +7,9 @@
  * browser. sidechat: a second thread of the same bot shown in a tab. page: a
  * document tab, rendered by whatever registered the "page" kind (see
  * src/components/workbench/registry.ts). video: a video editing timeline,
- * registered by src/components/videos. */
-export type WorkspaceTabKind = "browser" | "terminal" | "files" | "changes" | "bot-browser" | "newtab" | "sidechat" | "page" | "video" | "canvas";
+ * registered by src/components/videos. desk: one app the bot works in (live
+ * view plus cards), registered by src/components/desks; its ref is the desk id. */
+export type WorkspaceTabKind = "browser" | "terminal" | "files" | "changes" | "bot-browser" | "newtab" | "sidechat" | "page" | "video" | "canvas" | "desk";
 export type WorkspacePane = "right" | "bottom";
 /** hidden: chat only. split: chat beside the right panel. full: the right panel covers the chat. */
 export type WorkspaceLayout = "hidden" | "split" | "full";
@@ -36,7 +37,7 @@ export interface ThreadWorkspace {
 }
 
 const KEY_PREFIX = "bos.thread-workspace.v2:";
-const KINDS: readonly WorkspaceTabKind[] = ["browser", "terminal", "files", "changes", "bot-browser", "newtab", "sidechat", "page", "video", "canvas"];
+const KINDS: readonly WorkspaceTabKind[] = ["browser", "terminal", "files", "changes", "bot-browser", "newtab", "sidechat", "page", "video", "canvas", "desk"];
 /** Kinds that exist at most once per thread; opening one again focuses it. */
 const SINGLE: ReadonlySet<WorkspaceTabKind> = new Set(["browser", "files", "changes", "bot-browser"]);
 const MAX_TABS = 16;
@@ -45,7 +46,7 @@ export const LAYOUT_CYCLE: readonly WorkspaceLayout[] = ["split", "full", "hidde
 
 export const TAB_LABEL: Record<WorkspaceTabKind, string> = {
   browser: "browser", terminal: "terminal", files: "files", changes: "changes", "bot-browser": "browser",
-  newtab: "New tab", sidechat: "Side chat", page: "Untitled page", video: "Video", canvas: "Blank tab",
+  newtab: "New tab", sidechat: "Side chat", page: "Untitled page", video: "Video", canvas: "Blank tab", desk: "Desk",
 };
 
 /** Tab kinds that can move into a window of their own. The browser is a
@@ -70,6 +71,7 @@ function safePath(value: unknown): string | undefined {
   return value.split("/").includes("..") ? undefined : value;
 }
 
+const deskRef = (value: unknown) => (typeof value === "string" && /^d-[a-f0-9]{8}$/.test(value) ? value : undefined);
 const threadRef = (value: unknown) => (typeof value === "string" && /^[\w:.-]{1,128}$/.test(value) ? value : undefined);
 
 /** Whatever came out of storage, make it a valid workspace or an empty one. */
@@ -88,10 +90,10 @@ export function sanitizeWorkspace(value: unknown): ThreadWorkspace {
     const pane: WorkspacePane = tab.pane === "bottom" ? "bottom" : "right";
     const path = kind === "files" ? safePath(tab.path) : undefined;
     // a blank tab's ref is the page's path in the working folder
-    const ref = kind === "canvas" ? safePath(tab.ref) : typeof tab.ref === "string" && /^[\w:.-]{1,128}$/.test(tab.ref) ? tab.ref : undefined;
+    const ref = kind === "canvas" ? safePath(tab.ref) : kind === "desk" ? deskRef(tab.ref) : typeof tab.ref === "string" && /^[\w:.-]{1,128}$/.test(tab.ref) ? tab.ref : undefined;
     const from = kind === "canvas" && ref ? threadRef(tab.from) : undefined;
     const title = typeof tab.title === "string" && tab.title.trim() ? tab.title.trim().slice(0, 120) : undefined;
-    if (kind === "sidechat" && !ref) continue;
+    if ((kind === "sidechat" || kind === "desk") && !ref) continue;
     tabs.push({ id: tab.id, kind, pane, ...(path ? { path } : {}), ...(ref ? { ref } : {}), ...(title ? { title } : {}), ...(from ? { from } : {}) });
     if (tabs.length >= MAX_TABS) break;
   }
@@ -245,6 +247,23 @@ export function showPage(state: ThreadWorkspace, ref: string, title?: string): {
   }
   if (blank) return replaceTab(state, blank.id, "canvas", { ref, title });
   return openTab(state, "canvas", { pane: "right", ref, title });
+}
+
+/** A desk the bot opened (desk_open): the tab already showing it, else the
+ * new tab on screen, else a fresh desk tab on the right. */
+export function showDesk(state: ThreadWorkspace, ref: string, title?: string): { state: ThreadWorkspace; id: string } {
+  if (!deskRef(ref)) return { state, id: "" };
+  const same = state.tabs.find((tab) => tab.kind === "desk" && tab.ref === ref);
+  if (same) {
+    const tabs = title ? state.tabs.map((tab) => (tab.id === same.id ? { ...tab, title: title.slice(0, 120) } : tab)) : state.tabs;
+    return { state: focusTab({ ...state, tabs }, same.id), id: same.id };
+  }
+  const shown = (["right", "bottom"] as const)
+    .filter((pane) => (pane === "right" ? state.layout !== "hidden" : state.bottomOpen))
+    .map((pane) => state.tabs.find((tab) => tab.id === state.active[pane]))
+    .find((tab) => tab?.kind === "newtab");
+  if (shown) return replaceTab(state, shown.id, "desk", { ref, title });
+  return openTab(state, "desk", { pane: "right", ref, title });
 }
 
 export function setLayout(state: ThreadWorkspace, layout: WorkspaceLayout): ThreadWorkspace {

@@ -206,7 +206,10 @@ export function createGateInterceptor(options: {
         JSON.stringify({
           jsonrpc: "2.0",
           id: frame.id ?? null,
-          result: { content: [{ type: "text", text: options.getRefusalReason?.() ?? refusalText }], isError: true },
+          // resultType: clients on MCP protocol 2026-07-28 reject a result
+          // without it as malformed, so the model saw a schema error instead
+          // of the refusal and never learned the screen was busy.
+          result: { resultType: "complete", content: [{ type: "text", text: options.getRefusalReason?.() ?? refusalText }], isError: true },
         }),
       );
     });
@@ -252,7 +255,7 @@ export function createMcpBridgeInterceptor(
     if (frame && frame.method === "ping") {
       // Notifications have no `id` and require no response.
       if (frame.id !== undefined) {
-        options.answer(JSON.stringify({ jsonrpc: "2.0", id: frame.id, result: {} }));
+        options.answer(JSON.stringify({ jsonrpc: "2.0", id: frame.id, result: { resultType: "complete" } }));
       }
       return;
     }

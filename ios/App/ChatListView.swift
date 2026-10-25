@@ -625,13 +625,22 @@ struct ChatListView: View {
             return
         }
         do {
-            let (me, contacts, rooms) = try await session.sharedRoster()
+#if DEBUG
+            PerfProbe.mark("shared.begin")
+            defer { PerfProbe.mark("shared.done") }
+#endif
+            // Removed linked bots are independent of the roster, so they no
+            // longer wait behind it: a pull was three round trips in a row.
+            async let removed = try? session.removedRemoteBotIDs()
+            let (me, contacts, rooms) = try await session.sharedRoster(expectingActor: sharedMe?.actorId != nil)
             guard session.connection?.id == connectionID else { return }
             sharedMe = me
             sharedContacts = contacts
             sharedRooms = rooms
-            if let removed = try? await session.removedRemoteBotIDs(), session.connection?.id == connectionID { removedOnMain = removed }
-            await cacheNotificationAvatars(contacts)
+            if let removed = await removed, session.connection?.id == connectionID { removedOnMain = removed }
+            // Faces for push banners are drawn on the main actor; nothing on
+            // screen waits for them, and the pull no longer does either.
+            NotificationAvatarSync.run(contacts: contacts) { await cacheNotificationAvatars($0) }
             if let roomID = UserDefaults.standard.string(forKey: "bos.pendingSharedRoomPush"),
                let room = rooms.first(where: { $0.id == roomID }) {
                 UserDefaults.standard.removeObject(forKey: "bos.pendingSharedRoomPush")
@@ -647,27 +656,45 @@ struct ChatListView: View {
     /// face is cached where the notification extension can read it: the
     /// bot's own photo when its profile shows one, else its mascot.
     @MainActor private func cacheNotificationAvatars(_ contacts: [SharedContact]) async {
+        // This ran every three seconds and redrew every face — about 30
+        // ImageRenderer PNGs on the main actor, a few hundred milliseconds
+        // each time. A face is redrawn only when what it is drawn from
+        // changes; a blank (drawn from the background) is never recorded,
+        // so it is retried next time.
         for contact in contacts {
             if contact.kind == "bot" {
+                let key = contact.id, source = "\(contact.color ?? "green")|\(contact.mascotBody ?? "")|\(contact.avatarUrl ?? "")|\(String(describing: contact.avatarCrop))"
+                guard NotificationAvatarSync.needs(key, source) else { continue }
                 if let data = await notificationAvatar(color: contact.color ?? "green", body: contact.mascotBody,
-                                                       avatarUrl: contact.avatarUrl, crop: contact.avatarCrop) {
-                    NotificationAvatarCache.store(data, for: contact.id)
+                                                       avatarUrl: contact.avatarUrl, crop: contact.avatarCrop),
+                   NotificationAvatarCache.store(data, for: key) {
+                    NotificationAvatarSync.drew(key, source)
                 }
-            } else if let avatar = contact.avatar, avatar.hasPrefix("/api/"),
-                      let data = await session.avatarData(path: avatar),
-                      let photo = (PersonCutout.image(data: data, key: avatar) ?? UIImage(data: data))?.pngData() {
-                NotificationAvatarCache.store(photo, for: contact.id)
+            } else if let avatar = contact.avatar, avatar.hasPrefix("/api/") {
+                guard NotificationAvatarSync.needs(contact.id, avatar) else { continue }
+                if let data = await session.avatarData(path: avatar),
+                   let photo = (PersonCutout.image(data: data, key: avatar) ?? UIImage(data: data))?.pngData(),
+                   NotificationAvatarCache.store(photo, for: contact.id) {
+                    NotificationAvatarSync.drew(contact.id, avatar)
+                }
             } else if let avatar = contact.avatar,
-                      let encoded = avatar.split(separator: ",", maxSplits: 1).last,
-                      let data = Data(base64Encoded: String(encoded)),
-                      let photo = (PersonCutout.image(dataURL: avatar) ?? UIImage(data: data))?.pngData() {
-                NotificationAvatarCache.store(photo, for: contact.id)
+                      let encoded = avatar.split(separator: ",", maxSplits: 1).last {
+                let source = "data:\(avatar.count):\(avatar.hashValue)"
+                guard NotificationAvatarSync.needs(contact.id, source) else { continue }
+                if let data = Data(base64Encoded: String(encoded)),
+                   let photo = (PersonCutout.image(dataURL: avatar) ?? UIImage(data: data))?.pngData(),
+                   NotificationAvatarCache.store(photo, for: contact.id) {
+                    NotificationAvatarSync.drew(contact.id, source)
+                }
             }
         }
         for bot in session.state.bots {
+            let key = "bot:\(bot.id)", source = "\(bot.color)|\(bot.mascotBody ?? "")|\(bot.avatarUrl ?? "")|\(String(describing: bot.avatarCrop))"
+            guard NotificationAvatarSync.needs(key, source) else { continue }
             if let data = await notificationAvatar(color: bot.color, body: bot.mascotBody,
-                                                   avatarUrl: bot.avatarUrl, crop: bot.avatarCrop) {
-                NotificationAvatarCache.store(data, for: "bot:\(bot.id)")
+                                                   avatarUrl: bot.avatarUrl, crop: bot.avatarCrop),
+               NotificationAvatarCache.store(data, for: key) {
+                NotificationAvatarSync.drew(key, source)
             }
         }
     }
@@ -2116,5 +2143,25 @@ private struct TouchWatcher: UIGestureRecognizerRepresentable {
 
     func updateUIGestureRecognizer(_ recognizer: Recognizer, context: Context) {
         recognizer.onTouch = onTouch
+    }
+}
+
+/// What each push-banner face on disk was drawn from, for this launch, and
+/// whether a drawing pass is already running. A new launch draws each face
+/// once, so a changed mascot in a new build still reaches the cache.
+@MainActor enum NotificationAvatarSync {
+    private static var drawn: [String: String] = [:]
+    private static var running = false
+
+    static func needs(_ id: String, _ source: String) -> Bool { drawn[id] != source }
+    static func drew(_ id: String, _ source: String) { drawn[id] = source }
+
+    static func run(contacts: [SharedContact], _ draw: @escaping @MainActor ([SharedContact]) async -> Void) {
+        guard !running else { return }
+        running = true
+        Task { @MainActor in
+            await draw(contacts)
+            running = false
+        }
     }
 }

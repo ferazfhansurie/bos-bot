@@ -307,11 +307,13 @@ const DEFAULT_AUTOCOMPACT_TOKENS = 200_000;
  * Verified against the published binaries, not the changelog (which never
  * records `--autocompact`): `--strict-mcp-config` is present in 1.0.60 and
  * absent from 1.0.0; `--setting-sources` first appears in 1.0.122 (1.0.120
- * lacks it); `--autocompact` first appears in 2.1.122 (2.1.121 lacks it). */
+ * lacks it); `--autocompact` first appears in 2.1.221 (2.1.220 lacks it; an
+ * earlier note said 2.1.122, which sent the flag to 2.1.122-2.1.220 and failed
+ * every turn there with "unknown option '--autocompact'"). */
 export const CLAUDE_FLAG_FLOORS = {
   "--strict-mcp-config": [1, 0, 60],
   "--setting-sources": [1, 0, 122],
-  "--autocompact": [2, 1, 122],
+  "--autocompact": [2, 1, 221],
   // 2.1.267 is the first CLI that accepts it; below that the recorded prompt
   // simply is not refreshed, which is the pre-existing behaviour.
   "--system-prompt-snapshot": [2, 1, 267],

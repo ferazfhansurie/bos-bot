@@ -22,6 +22,8 @@ function measureTwin(input: HTMLTextAreaElement, style: CSSStyleDeclaration): HT
   return twin;
 }
 
+const MIRRORED = ["font", "fontFeatureSettings", "fontVariationSettings", "letterSpacing", "wordSpacing", "lineHeight", "textIndent", "textTransform", "tabSize", "paddingTop", "paddingRight", "paddingBottom", "paddingLeft"] as const;
+
 /** A native textarea retains selection, undo, IME and accessibility. Its
  * aria-hidden mirror paints mentions without changing wrapping or caret offsets. */
 export function MentionTextarea({ inputRef, peers, everyone = false, ...props }: TextareaHTMLAttributes<HTMLTextAreaElement> & {
@@ -34,6 +36,11 @@ export function MentionTextarea({ inputRef, peers, everyone = false, ...props }:
     const input = inputRef.current;
     const mirror = mirrorRef.current;
     if (!input || !mirror) return;
+    // The mirror paints the text the caret moves through, so it copies the
+    // textarea's live metrics instead of hardcoding them: a padding drift of
+    // a few px puts the caret between the wrong letters.
+    const style = getComputedStyle(input);
+    for (const key of MIRRORED) mirror.style[key] = style[key];
     mirror.style.width = `${input.clientWidth}px`;
     mirror.scrollTop = input.scrollTop;
     mirror.scrollLeft = input.scrollLeft;

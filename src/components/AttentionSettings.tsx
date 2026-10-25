@@ -1,4 +1,6 @@
+import { useEffect, useState } from "react";
 import { t } from "@/lib/i18n";
+import { disableWebPush, enableWebPush, webPushState, webPushSupported, type WebPushState } from "@/lib/web-push";
 import {
   NOTIFY_SOUNDS,
   setAttentionPreferences,
@@ -40,6 +42,32 @@ function soundLabel(sound: NotifySound): string {
   return sound.toLowerCase();
 }
 
+/** This browser's push subscription (plain browser tabs only). */
+function BrowserNotifications() {
+  const [state, setState] = useState<WebPushState | "busy" | "failed">("busy");
+  useEffect(() => { void webPushState().then(setState, () => setState("off")); }, []);
+  const on = state === "on";
+  return (
+    <SettingRow
+      title={t("attention.browser")}
+      subtitle={t("attention.browser.subtitle")}
+      message={state === "denied" ? <span className="text-ink-secondary">{t("attention.browser.denied")}</span>
+        : state === "failed" ? <span className="text-danger">{t("attention.browser.failed")}</span> : undefined}
+    >
+      <Switch
+        checked={on}
+        disabled={state === "busy" || state === "denied"}
+        aria-label={t("attention.browser")}
+        onClick={() => {
+          setState("busy");
+          // asked inside the click: browsers refuse a later, unprompted ask
+          void (on ? disableWebPush() : enableWebPush()).then(setState, () => setState("failed"));
+        }}
+      />
+    </SettingRow>
+  );
+}
+
 /** Per-kind notification switches, when "done" may interrupt, the sound,
  * and what a send does while a turn is running. Stored on this device. */
 export function AttentionSettings() {
@@ -54,6 +82,7 @@ export function AttentionSettings() {
   return (
     <Card title={t("attention.title")} subtitle={t("attention.subtitle")}>
       <div>
+        {webPushSupported() && <BrowserNotifications />}
         {kinds.map((kind) => (
           <SettingRow key={kind.key} title={kind.title} subtitle={kind.subtitle}>
             <Switch

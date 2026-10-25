@@ -2163,25 +2163,47 @@ class Session(
             try {
                 _state.value.roomOwningTask(target.threadId)?.let { room ->
                     return@withLock openRoomNotification(activeClient, room, target.threadId)
+                        .also { focusNotificationMessage(activeClient, target) }
                 }
 
                 if (_state.value.bot(target.botId)?.forTask(target.threadId) == null) {
                     if (!refreshNavigationState(activeClient)) return@withLock null
                     _state.value.roomOwningTask(target.threadId)?.let { room ->
                         return@withLock openRoomNotification(activeClient, room, target.threadId)
+                            .also { focusNotificationMessage(activeClient, target) }
                     }
                 }
 
                 val selected = _state.value.bot(target.botId)
                     ?: throw APIError.Status(404, "That agent no longer exists.")
-                Chat.BotChat(selected.forTask(target.threadId)
+                val chat = Chat.BotChat(selected.forTask(target.threadId)
                     ?: throw APIError.Status(404, THREAD_GONE_MESSAGE))
+                focusNotificationMessage(activeClient, target)
+                chat
             } catch (error: Throwable) {
                 if (error is kotlinx.coroutines.CancellationException) throw error
                 if (client !== activeClient) return@withLock null
                 _actionError.value = error.message
                 null
             }
+        }
+    }
+
+    /**
+     * Land on the message the notification names, as iOS does: load the page
+     * around it and hand it to the chat's focus scroll. Best effort — a
+     * message that is gone still leaves the thread open at its newest message.
+     */
+    private suspend fun focusNotificationMessage(activeClient: CompanionClient, target: NotificationTarget) {
+        val messageId = target.messageId ?: return
+        try {
+            val page = activeClient.messagesAround(target.threadId, messageId)
+            currentCoroutineContext().ensureActive()
+            if (client !== activeClient || page.messages.none { it.id == messageId }) return
+            _state.update { it.merge(page, target.threadId) }
+            _focusedMessageId.value = messageId
+        } catch (error: Throwable) {
+            if (error is kotlinx.coroutines.CancellationException) throw error
         }
     }
 

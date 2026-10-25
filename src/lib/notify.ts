@@ -1,7 +1,7 @@
 // Desktop notifications, driven by the harness's {kind:"notify"} frames.
 // The server decides *whether* something is worth an interruption (it owns
 // the per-bot toggle); this only decides how to show it here.
-import type { Notification } from "../../shared/notification";
+import { attentionId, type Notification } from "../../shared/notification";
 import { botAvatarProfile, type BotAvatarCrop } from "../../shared/bot-avatar";
 import { flatMascotBody } from "../../shared/flat-mascot-bodies";
 import type { MascotBodyId } from "../../shared/mascot-bodies";
@@ -14,7 +14,14 @@ import { notchActive } from "@/notch/active";
 
 export type NotifyFrame = Notification;
 
-export type NotificationTarget = Pick<NotifyFrame, "botId" | "threadId">;
+/** Where a banner leads: the thread, and the exact message to land on when
+ * the event has one. `roomId` is set for multiplayer rooms and DMs, which
+ * live outside the bot/room lists. */
+export type NotificationTarget = Pick<NotifyFrame, "botId" | "threadId"> & { messageId?: string; roomId?: string };
+
+export function notificationTarget(frame: NotifyFrame): NotificationTarget {
+  return { botId: frame.botId, threadId: frame.threadId, ...(frame.messageId ? { messageId: frame.messageId } : {}) };
+}
 
 /** Ask while handling the settings click. Browsers may reject permission
  * requests that are triggered later by an incoming SSE frame. */
@@ -131,13 +138,7 @@ export function attentionKind(kind: NotifyFrame["kind"]): AttentionKind {
   }
 }
 
-/** One identity per thing to look at, so a re-sent frame never re-banners
- * and an answered card can take its banner down. */
-export function attentionId(frame: Pick<NotifyFrame, "kind" | "threadId" | "requestId" | "messageId" | "body">): string {
-  if (frame.requestId) return `req:${frame.requestId}`;
-  if (frame.messageId) return `msg:${frame.messageId}`;
-  return `${frame.kind}:${frame.threadId}:${frame.body.slice(0, 120)}`;
-}
+export { attentionId } from "../../shared/notification";
 
 /** Sent to the desktop shell (electron/attention-notifications.mjs). */
 export interface AttentionPayload {
@@ -197,7 +198,7 @@ function listenForBannerEvents() {
   unsubscribe = window.ogb.attention.onEvent((event) => {
     const entry = shown.get(event?.id);
     if (!entry) return;
-    const target = { botId: entry.frame.botId, threadId: entry.frame.threadId };
+    const target = notificationTarget(entry.frame);
     if (event.type === "open") {
       focusApp();
       entry.handlers.open(target);
@@ -251,17 +252,26 @@ export function showNotification(
     if (kind === "done" && prefs.done === "unfocused" && focused) return;
     const options: NotificationOptions = {
       body: frame.body,
+      // same tags a web push for this event carries (server/web-push.ts), so
+      // the page's banner and the push replace each other, never stack
       ...buildNotificationOptions({ id: frame.botId, avatarUrl }),
       ...(sticky ? { tag: id, requireInteraction: true } : {}),
       // no system sounds to pick from here: anything but none is the default
       silent: prefs.sound === "none",
     };
-    const notification = new Notification(frame.title, options);
-    notification.onclick = () => {
-      focusApp();
-      on.open({ botId: frame.botId, threadId: frame.threadId });
-    };
-    entry.web = notification;
+    try {
+      const notification = new Notification(frame.title, options);
+      notification.onclick = () => {
+        focusApp();
+        on.open(notificationTarget(frame));
+      };
+      entry.web = notification;
+    } catch {
+      // Android Chrome has no page notifications, only the service worker's;
+      // its click comes back through the worker to the same router
+      void navigator.serviceWorker?.getRegistration().then((registration) =>
+        registration?.showNotification(frame.title, { ...options, data: { kind: frame.kind, ...notificationTarget(frame), ...(frame.requestId ? { requestId: frame.requestId } : {}) } }));
+    }
   };
 
   const bridge = typeof window !== "undefined" ? window.ogb?.attention : undefined;

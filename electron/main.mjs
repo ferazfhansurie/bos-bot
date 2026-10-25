@@ -1,5 +1,5 @@
 import { isMarketerLink, marketerIntentStore } from "./marketer-link.mjs";
-import { claimPreset, presetTokenFromLink, withPresetBroker } from "./preset-link.mjs";
+import { claimPreset, inviteTokenFromLink, presetTokenFromLink, withPresetBroker } from "./preset-link.mjs";
 import { configureAboutPanel } from "./about-panel.mjs";
 import { createComputerPreviewHandler } from "./computer-preview.mjs";
 import { createContentBlocker } from './content-blocker.mjs';
@@ -365,9 +365,52 @@ async function runPendingPreset() {
 // at launch only remember it: the server state below is not declared yet
 for (const arg of process.argv.slice(1)) pendingPresetToken = presetTokenFromLink(arg) ?? pendingPresetToken;
 
+// A friend invite (bosbot://invite?token=…) joins through the local server,
+// which talks to the people service, then opens the chat with the friend.
+let pendingInviteToken = null;
+let inviteRunning = false;
+function queueInviteLink(raw) {
+  const token = inviteTokenFromLink(raw);
+  if (!token) return false;
+  pendingInviteToken = token;
+  activateExistingWindow(BrowserWindow.getAllWindows());
+  void runPendingInvite();
+  return true;
+}
+async function runPendingInvite() {
+  if (!pendingInviteToken || inviteRunning || !app.isReady() || !serverReady || !serverProc || desktopRemoteAccess) return;
+  inviteRunning = true;
+  const token = pendingInviteToken;
+  pendingInviteToken = null;
+  try {
+    const response = await fetch(`http://127.0.0.1:${SERVER_PORT}/api/people-hub/accept`, {
+      method: "POST",
+      headers: desktopServerHeaders({ "content-type": "application/json" }, { packaged: app.isPackaged, token: desktopMutationToken }),
+      body: JSON.stringify({ link: token }),
+      redirect: "error",
+      credentials: "omit",
+      signal: AbortSignal.timeout(30_000),
+    });
+    const body = await response.json().catch(() => null);
+    if (!response.ok) throw new Error(body?.error || `HTTP ${response.status}`);
+    slog("friend invite joined");
+    const roomId = typeof body?.room?.id === "string" ? body.room.id : "";
+    if (roomId && mainWindowShowsLocalUi()) {
+      await mainWindow.webContents.executeJavaScript(`window.dispatchEvent(new CustomEvent("people-hub:joined", { detail: ${JSON.stringify(roomId)} }))`).catch(() => {});
+    }
+    activateExistingWindow(BrowserWindow.getAllWindows());
+  } catch (error) {
+    slog(`friend invite failed: ${error?.message ?? error}`);
+  } finally {
+    inviteRunning = false;
+  }
+}
+for (const arg of process.argv.slice(1)) pendingInviteToken = inviteTokenFromLink(arg) ?? pendingInviteToken;
+
 app.on("open-url", (event, url) => {
   if (queueMarketerLink(url)) { event.preventDefault(); return; }
   if (queuePresetLink(url)) { event.preventDefault(); return; }
+  if (queueInviteLink(url)) { event.preventDefault(); return; }
   if (queueBrowserLink(url)) { event.preventDefault(); activateExistingWindow(BrowserWindow.getAllWindows()); return; }
   if (!queuePackageInstall(url)) return;
   event.preventDefault();
@@ -376,7 +419,7 @@ app.on("open-url", (event, url) => {
 for (const arg of process.argv.slice(1)) queueBrowserLink(arg);
 
 app.on("second-instance", (_event, commandLine) => {
-  for (const arg of commandLine) { queueMarketerLink(arg); queuePresetLink(arg); queueBrowserLink(arg); }
+  for (const arg of commandLine) { queueMarketerLink(arg); queuePresetLink(arg); queueInviteLink(arg); queueBrowserLink(arg); }
   const packageUrl = packageUrlFromCommandLine(commandLine);
   if (packageUrl) pendingPackageInstallUrl = packageUrl;
   activateExistingWindow(BrowserWindow.getAllWindows());
@@ -429,6 +472,7 @@ const serverSupervisor = createServerSupervisor({
     serverReady = true;
     serverStartConflictOnly = false;
     void runPendingPreset();
+    void runPendingInvite();
     try { desktopHostLifecycle?.ready(proc.pid); }
     catch (error) { slog(`host recovery readiness held: ${error?.message ?? error}`); }
     slog(`server ready pid=${proc.pid} port=${SERVER_PORT}`);

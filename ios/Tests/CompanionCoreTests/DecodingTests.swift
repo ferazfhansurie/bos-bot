@@ -60,6 +60,22 @@ final class DecodingTests: XCTestCase {
         XCTAssertEqual(room.hasMore, true)
     }
 
+    func testFleetCursorSaysWhetherASnapshotCoversAHello() throws {
+        let fleet = try JSONDecoder().decode(Fleet.self, from: Data(#"{"cursor":"abcd1234:41","bots":[],"groups":[]}"#.utf8))
+        XCTAssertEqual(fleet.cursor, "abcd1234:41")
+        XCTAssertTrue(fleet.covers(hello: "abcd1234:41"))
+        XCTAssertTrue(fleet.covers(hello: "abcd1234:7"))
+        XCTAssertFalse(fleet.covers(hello: "abcd1234:42"), "older than the hello: frames in between are missing")
+        XCTAssertFalse(fleet.covers(hello: "ffff0000:3"), "another stream (a restarted server) is never covered")
+        XCTAssertFalse(fleet.covers(hello: "garbage"))
+        // older servers send no cursor, and a malformed one is not fatal
+        let legacy = try JSONDecoder().decode(Fleet.self, from: Data(#"{"bots":[],"groups":[]}"#.utf8))
+        XCTAssertNil(legacy.cursor)
+        XCTAssertFalse(legacy.covers(hello: "abcd1234:0"))
+        let odd = try JSONDecoder().decode(Fleet.self, from: Data(#"{"cursor":7,"bots":[],"groups":[]}"#.utf8))
+        XCTAssertNil(odd.cursor)
+    }
+
     func testDecodesTheFullFleetToo() throws {
         // omitting ?messages must stay decodable by the same types — it is
         // what the desktop gets, and what a phone falls back to

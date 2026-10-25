@@ -17,16 +17,26 @@ function actionFixture(t, dialog = {}) {
  const guest = Object.assign(new EventEmitter(), { id: 1, isDestroyed: () => false, debugger: debug, capturePage: async () => { calls.push(['capture']); return { toPNG: () => Buffer.from('fixture-png') }; }, enableDeviceEmulation: options => calls.push(['emulate', options]), disableDeviceEmulation: () => calls.push(['reset']), inspectElement: (x, y) => calls.push(['inspect', x, y]) });
  const controller = createPrimaryBrowserController({ root, encryption: encryption(), registry, sessionFromPartition: () => ({}), contentsFromId: id => id === 1 ? guest : null, owner: () => null, shell: {}, dialog });
  registry.attach(guest, controller.partition('personal'));
- return { controller, calls, root, debug };
+ return { controller, calls, root, debug, guest };
 }
 test('native browser actions reject missing guests and cross-profile targets before native effects', async t => {
  const { controller, calls } = actionFixture(t);
  const other = controller.store.create('Other');
- for (const action of ['screenshot', 'inspect-element', 'device-toolbar']) {
+ for (const action of ['screenshot', 'thumbnail', 'inspect-element', 'device-toolbar']) {
   await assert.rejects(controller.action(action, { profileId: other.id, guestId: 1, device: 'mobile' }), /no longer available/);
   await assert.rejects(controller.action(action, { profileId: 'personal', guestId: 999, device: 'mobile' }), /no longer available/);
  }
  assert.deepEqual(calls, []);
+});
+test('thumbnail returns a small jpeg without a dialog, or null for a blank page', async t => {
+ const fixture = actionFixture(t, { async showSaveDialog() { throw new Error('no dialog for a thumbnail'); } });
+ let empty = false, options;
+ const image = { isEmpty: () => empty, getSize: () => ({ width: 1920, height: 1080 }), resize: ({ width }) => ({ width, toJPEG: () => Buffer.from('small') }), toJPEG: () => Buffer.from('big') };
+ fixture.guest.capturePage = async (_rect, opts) => { options = opts; return image; };
+ assert.equal(await fixture.controller.action('thumbnail', { profileId: 'personal', guestId: 1 }), `data:image/jpeg;base64,${Buffer.from('small').toString('base64')}`);
+ assert.deepEqual(options, { stayHidden: true });
+ empty = true;
+ assert.equal(await fixture.controller.action('thumbnail', { profileId: 'personal', guestId: 1 }), null);
 });
 test('screenshot writes only the native selected path and cancellation does not write', async t => {
  let selected, canceled = false;

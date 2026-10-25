@@ -481,6 +481,78 @@ const TOOLS = [
     }, required: ["path"] },
   },
   {
+    name: "apps_list",
+    description: "List the apps you can reach: blank-tab pages that keep their own data (a crm, hr, sheet, docs, tasks, invoices or a custom app), with app_id, name, collections and record counts, and the rooms each is shared into. In a room you see only apps shared into that room.",
+    inputSchema: { type: "object", additionalProperties: false, properties: {} },
+  },
+  {
+    name: "app_create",
+    description: "Make a working app from a starter and open it in a tab beside this chat: crm (contacts + pipeline), hr (staff, leave with approve, payroll), sheet (grid with =SUM/AVG/MIN/MAX/COUNT and cell maths), docs (pages with headings and lists), tasks (kanban board), invoices (line items, totals, paid/unpaid) or blank (an empty app shell to build on). Use it when the person asks for a crm, tracker, spreadsheet, hr, leave, payroll, invoices, a board or similar software. Its data lives on the server and the tab updates live. Customise the page afterwards by editing its html file with your file tools (the apps skill says how). Not in rooms.",
+    inputSchema: { type: "object", additionalProperties: false, properties: {
+      template: { type: "string", enum: ["crm", "hr", "sheet", "docs", "tasks", "invoices", "blank"] },
+      name: { type: "string", maxLength: 60, description: "What the person calls it, e.g. \"Seri Bridal CRM\". Defaults to the starter's name." },
+      icon: { type: "string", maxLength: 32, description: "Optional lucide icon: users, briefcase, table, file-text, kanban, receipt, box, calendar, heart, star, shopping-cart, package, clipboard-list, wallet, graduation-cap, home." },
+    }, required: ["template"] },
+  },
+  {
+    name: "app_read",
+    description: "Read an app's records. Without collection you get the app's schema and the newest 20 records of each collection. With collection, query matches words across every field (\"ali seri bridal\"), newest first.",
+    inputSchema: { type: "object", additionalProperties: false, properties: {
+      app_id: { type: "string", description: "App id (a-…) from apps_list or open_tab." },
+      collection: { type: "string", description: "e.g. contacts, staff, leave, cells, docs, tasks, invoices." },
+      query: { type: "string", maxLength: 200 },
+      limit: { type: "integer", minimum: 1, maximum: 200 },
+    }, required: ["app_id"] },
+  },
+  {
+    name: "app_write",
+    description: "Change an app's records; the person's open tab updates live. Ops run all-or-nothing: put (collection, record, optional id: create or replace), patch (collection, id, fields: change only those fields) and delete (collection, id). Read first to find ids and the field names the page uses (see the schema from app_read); keep to them or the page won't show your change.",
+    inputSchema: { type: "object", additionalProperties: false, properties: {
+      app_id: { type: "string" },
+      ops: { type: "array", minItems: 1, maxItems: 100, items: { type: "object", additionalProperties: false, properties: {
+        op: { type: "string", enum: ["put", "patch", "delete"] },
+        collection: { type: "string" }, id: { type: "string" },
+        record: { type: "object", description: "For put: the whole record (no id/_at/_by)." },
+        fields: { type: "object", description: "For patch: only the fields to change." },
+      }, required: ["op", "collection"] } },
+    }, required: ["app_id", "ops"] },
+  },
+  {
+    name: "desk_open",
+    description: "Open a desk for an app you work in for the person (whatsapp, meta ads manager, gmail, a site admin): a tab beside this chat where they watch the app live, take over with one click, and work it through cards you write with desk_card. Calling it again for the same app reuses that desk. A new browser desk starts as needs_sign_in: the person signs in from the tab, then you work the app in their browser. For whatsapp use kind whatsapp and no url. The desks skill says how.",
+    inputSchema: { type: "object", additionalProperties: false, properties: {
+      name: { type: "string", minLength: 1, maxLength: 60, description: "Short app name shown on the tab, e.g. \"meta ads\"." },
+      url: { type: "string", maxLength: 2048, description: "Browser desks: the https address where the person signs in and you work, e.g. https://adsmanager.facebook.com/." },
+      kind: { type: "string", enum: ["browser", "whatsapp"], description: "browser (default) or whatsapp (bos's own linked WhatsApp)." },
+      id: { type: "string", maxLength: 40, description: "An existing desk id from desk_list, to rename it or change its url." },
+      status: { type: "string", enum: ["needs_sign_in", "ready"], description: "Set ready once you have checked the person is signed in." },
+    }, required: ["name"] },
+  },
+  {
+    name: "desk_card",
+    description: "Add, change or remove one card on a desk. code is an openui block (the smart-ui language, without the fence) that may read a data variable; data is plain json drawn in as data. To refresh numbers send only data, so the layout the person asked for stays. To customise (\"add a button that drafts replies\") send new code. Buttons use @ToAssistant to message you in this chat. A card that would not draw is refused with the reason and nothing is saved.",
+    inputSchema: { type: "object", additionalProperties: false, properties: {
+      desk_id: { type: "string", minLength: 1, maxLength: 40, description: "The desk id from desk_open or desk_list." },
+      card_id: { type: "string", minLength: 1, maxLength: 40, description: "Short lowercase slug, e.g. \"today\" or \"unread-chats\". Same id replaces that card." },
+      title: { type: "string", maxLength: 80, description: "Card title. Required for a new card." },
+      code: { type: "string", maxLength: 16000, description: "openui code starting with root = ... Required for a new card." },
+      data: { description: "Json the code reads as data (rows, totals, drafts). Up to 32KB." },
+      remove: { type: "boolean", description: "true removes the card." },
+    }, required: ["desk_id", "card_id"] },
+  },
+  {
+    name: "desk_list",
+    description: "List your desks with their cards' code and data, so you can edit a card in place instead of rewriting it.",
+    inputSchema: { type: "object", additionalProperties: false, properties: {} },
+  },
+  {
+    name: "desk_remove",
+    description: "Remove one of your desks and its cards, only when the person asks.",
+    inputSchema: { type: "object", additionalProperties: false, properties: {
+      desk_id: { type: "string", minLength: 1, maxLength: 40 },
+    }, required: ["desk_id"] },
+  },
+  {
     name: "ring_owner",
     description: "Call the owner in the BOS mobile app from your current conversation. Use when the user asks you to call, or their attention is needed for a result or decision. One ring per bot every ten minutes; never retry a rate limit. A sent ring does not mean they accepted or heard it.",
     inputSchema: { type: "object", additionalProperties: false, properties: {
@@ -1134,6 +1206,8 @@ const MOD_TOOL_NAMES = new Set(["mods_list", "mod_read", "mod_write", "mod_delet
 const PAGE_TOOL_NAMES = new Set(["pages_list", "page_read", "page_create", "page_write", "page_edit", "page_comment"]);
 // Videos are private the same way.
 const VIDEO_TOOL_NAMES = new Set(["videos_list", "video_read", "video_create", "video_add_media", "video_edit", "video_render", "video_snapshot"]);
+// Apps stay in room turns: the server scopes them to apps shared into the room.
+const APP_TOOL_NAMES = new Set(["apps_list", "app_create", "app_read", "app_write"]);
 const OWN_THREAD_CREATION = compatEnv.OMB_OWN_THREAD_CREATION === "1";
 const AVAILABLE_TOOLS_FOR_TURN = COORDINATING
   ? SHAREABLE_TOOLS.filter(tool => !PAGE_TOOL_NAMES.has(tool.name) && !VIDEO_TOOL_NAMES.has(tool.name) && !MOD_TOOL_NAMES.has(tool.name))
@@ -1146,7 +1220,10 @@ const AVAILABLE_TOOLS_FOR_TURN = COORDINATING
       } },
     } : tool)
   : SHAREABLE_TOOLS.filter(tool => !ROOM_ONLY_TOOLS.has(tool.name));
-const TURN_TOOLS = AVAILABLE_TOOLS_FOR_TURN.filter(tool => tool.name !== "open_tab" || PAGE_TABS);
+// Desks live in the owner's own chats where cards draw (OMB_DESKS).
+const DESKS = compatEnv.OMB_DESKS === "1";
+const DESK_TOOL_NAMES = new Set(["desk_open", "desk_card", "desk_list", "desk_remove"]);
+const TURN_TOOLS = AVAILABLE_TOOLS_FOR_TURN.filter(tool => ((tool.name !== "open_tab" && tool.name !== "app_create") || PAGE_TABS) && (!DESK_TOOL_NAMES.has(tool.name) || DESKS));
 // A mod's bots:ask / apps:call turn reads only; the harness refuses the rest too.
 const MOD_TURN = compatEnv.OMB_MOD_TURN === "1";
 const AVAILABLE_TOOLS = (MOD_TURN
@@ -1362,6 +1439,25 @@ function resolvePath(path: string): string {
   return isAbsolute(path) ? path : resolveFrom(process.cwd(), path);
 }
 
+async function appTool(name: string, args: Json): Promise<{ text: string; isError?: boolean }> {
+  const appId = typeof args.app_id === "string" ? args.app_id.trim() : "";
+  if ((name === "app_read" || name === "app_write") && !/^a-[a-z0-9]{12}$/.test(appId)) return { text: "app_id must be an app id like a-… from apps_list.", isError: true };
+  const query = new URLSearchParams();
+  for (const key of ["collection", "query", "limit"] as const) if (args[key] !== undefined && args[key] !== "") query.set(key, String(args[key]));
+  const r = name === "apps_list" ? await apiResponse("/api/internal/apps")
+    : name === "app_create" ? await apiResponse("/api/internal/apps", { method: "POST", body: JSON.stringify({ template: args.template, name: args.name, icon: args.icon }) })
+    : name === "app_read" ? await apiResponse(`/api/internal/apps/${appId}/read${query.size ? `?${query}` : ""}`)
+    : await apiResponse(`/api/internal/apps/${appId}/write`, { method: "POST", body: JSON.stringify({ ops: args.ops }) });
+  if (!r.ok) return { text: String(r.body.error ?? `HTTP ${r.status}`), isError: true };
+  if (name === "apps_list") {
+    const apps = (r.body.apps as Json[] | undefined) ?? [];
+    return { text: apps.length ? JSON.stringify(apps) : "No apps yet. app_create makes one." };
+  }
+  if (name === "app_create") return { text: `Made ${String(r.body.name)} (${String(r.body.app_id)}) and opened it in a tab beside this chat. The page is ${String(r.body.page)}; edit that file to customise it, and use app_read / app_write for its data.\n${JSON.stringify(r.body)}` };
+  if (name === "app_write") return { text: `Saved (rev ${String(r.body.rev)}). Any open tab updates now.\n${JSON.stringify(r.body.records)}` };
+  return { text: JSON.stringify(r.body) };
+}
+
 async function callTool(name: string, args: Json): Promise<{ text: string; isError?: boolean }> {
   if (MOD_TOOL_NAMES.has(name)) {
     const bundle = args.bundle as Json | undefined;
@@ -1394,6 +1490,7 @@ async function callTool(name: string, args: Json): Promise<{ text: string; isErr
     const head = `${page.id} · ${page.title || "Untitled"} · revision ${page.revision}`;
     return { text: name === "page_read" ? `${head}\n\n${page.text}` : `${name === "page_create" ? "Created" : "Saved"} ${head}. The owner sees it in the page panel.\n\n${page.text}` };
   }
+  if (APP_TOOL_NAMES.has(name)) return appTool(name, args);
   if (name === "set_next_wake") {
     const parsed = z.object({
       why: z.string().trim().min(1).max(300),
@@ -1418,7 +1515,50 @@ async function callTool(name: string, args: Json): Promise<{ text: string; isErr
     if (!parsed.success) return { text: "open_tab needs path (an .html file in your working folder) and an optional short title.", isError: true };
     const response = await apiResponse("/api/internal/tabs", { method: "POST", body: JSON.stringify(parsed.data) });
     if (!response.ok) return { text: String(response.body.error ?? `HTTP ${response.status}`), isError: true };
-    return { text: `Opened ${String(response.body.path)} in a tab beside this chat. It reloads on its own when you edit the file; don't call open_tab again for this page.` };
+    return { text: `Opened ${String(response.body.path)} in a tab beside this chat. It reloads on its own when you edit the file; don't call open_tab again for this page.${response.body.app_id ? ` It is app ${String(response.body.app_id)}: use app_read / app_write for its data.` : ""}` };
+  }
+  if (name === "desk_open") {
+    const parsed = z.object({
+      name: z.string().trim().min(1).max(60),
+      url: z.string().trim().max(2048).optional(),
+      kind: z.enum(["browser", "whatsapp"]).optional(),
+      id: z.string().trim().max(40).optional(),
+      status: z.enum(["needs_sign_in", "ready"]).optional(),
+    }).strict().safeParse(args);
+    if (!parsed.success) return { text: "desk_open needs name, plus url for a new browser desk (or kind whatsapp).", isError: true };
+    const response = await apiResponse("/api/internal/desks/open", { method: "POST", body: JSON.stringify(parsed.data) });
+    if (!response.ok) return { text: String(response.body.error ?? `HTTP ${response.status}`), isError: true };
+    const desk = response.body.desk as { id: string; status: string; kind: string; cards: string[] };
+    const next = desk.kind === "browser" && desk.status === "needs_sign_in"
+      ? " It needs the person to sign in: they press Sign in on the tab and tell you when they're done. Until then don't work the app."
+      : "";
+    return { text: `${response.body.created ? "Opened" : "Showed"} desk ${desk.id} (${desk.kind}, ${desk.status}) beside this chat. Cards: ${desk.cards.length ? desk.cards.join(", ") : "none yet, add them with desk_card"}.${next}` };
+  }
+  if (name === "desk_card") {
+    const parsed = z.object({
+      desk_id: z.string().trim().min(1).max(40),
+      card_id: z.string().trim().min(1).max(40),
+      title: z.string().trim().max(80).optional(),
+      code: z.string().max(16_000).optional(),
+      data: z.unknown().optional(),
+      remove: z.boolean().optional(),
+    }).strict().safeParse(args);
+    if (!parsed.success) return { text: "desk_card needs desk_id and card_id, plus title and code for a new card, data to refresh, or remove: true.", isError: true };
+    const response = await apiResponse("/api/internal/desks/card", { method: "POST", body: JSON.stringify(parsed.data) });
+    if (!response.ok) return { text: String(response.body.error ?? `HTTP ${response.status}`), isError: true };
+    return { text: response.body.removed ? `Removed card ${parsed.data.card_id}.` : `Saved card ${parsed.data.card_id}; it shows on the desk now. Cards: ${(response.body.cards as string[]).join(", ")}.` };
+  }
+  if (name === "desk_list") {
+    const response = await apiResponse("/api/internal/desks");
+    if (!response.ok) return { text: String(response.body.error ?? `HTTP ${response.status}`), isError: true };
+    return { text: JSON.stringify(response.body.desks) };
+  }
+  if (name === "desk_remove") {
+    const parsed = z.object({ desk_id: z.string().trim().min(1).max(40) }).strict().safeParse(args);
+    if (!parsed.success) return { text: "desk_remove needs desk_id.", isError: true };
+    const response = await apiResponse("/api/internal/desks/remove", { method: "POST", body: JSON.stringify(parsed.data) });
+    if (!response.ok) return { text: String(response.body.error ?? `HTTP ${response.status}`), isError: true };
+    return { text: `Removed desk ${parsed.data.desk_id}.` };
   }
   if (name === "ring_owner") {
     const parsed = z.object({ reason: z.string().trim().min(1).max(500) }).strict().safeParse(args);

@@ -53,6 +53,9 @@ struct CompanionApp: App {
     @AppStorage(PrefKey.themeApplied) private var themeApplied = AppTheme.midnight.rawValue
 
     init() {
+#if DEBUG
+        PerfProbe.markLaunch()
+#endif
         ThemeSurfaces.install()
     }
 
@@ -140,11 +143,17 @@ struct CompanionApp: App {
                 .onChange(of: scenePhase) { _, phase in
                     switch phase {
                     case .active:
+#if DEBUG
+                        PerfProbe.mark("scene.active")
+#endif
                         PhoneUsageTelemetry.shared.foreground()
                         BosSharedInbox.removeDirectories(olderThan: 60 * 60)
                         session.connectHomes()
                         Task { await session.refreshNotificationAuthorization() }
                     case .background:
+#if DEBUG
+                        PerfProbe.mark("scene.background")
+#endif
                         PhoneUsageTelemetry.shared.background()
                         session.lingerHomes()
                     case .inactive: break

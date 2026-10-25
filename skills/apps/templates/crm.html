@@ -1,0 +1,394 @@
+<!doctype html>
+<html lang="en">
+<head>
+<title>CRM</title>
+<meta name="bos-app" content="CRM">
+<meta name="bos-app-icon" content="users">
+<meta name="bos-app-schema" content="contacts: name, company, phone, email, stage (lead|contacted|hot|won|lost), value (number, deal size in settings currency), follow_up (YYYY-MM-DD), source (where they came from), notes (text); activities: contact_id (a contacts id), kind (note|call|whatsapp|email|meeting), text, at (ms epoch); settings: one record id app with currency (default RM)">
+<style>
+  [hidden]{display:none!important}
+  :root{--accent:#2f6df6}
+  .app-icon{display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;border-radius:8px;background:var(--accent);color:#fff}
+  .app-icon svg,.btn svg,.icon-btn svg{width:16px;height:16px}
+  .stat .sub{font-size:12px;color:var(--muted);margin-top:2px}
+  .stat .sub b{color:var(--bad);font-weight:600}
+  .board{grid-auto-columns:minmax(190px,1fr)}
+  .col-head .dot{width:8px;height:8px;border-radius:50%;background:var(--muted)}
+  .col-head .sum{margin-left:auto;font-weight:500;color:var(--muted);font-size:12px;font-variant-numeric:tabular-nums}
+  .col-head .count{color:var(--muted);font-weight:500}
+  .tile{display:flex;flex-direction:column;gap:2px;outline:none}
+  .tile:focus-visible{border-color:var(--accent);box-shadow:0 0 0 3px color-mix(in srgb,var(--accent) 22%,transparent)}
+  .tile-name{font-weight:600}
+  .tile-foot{margin-top:8px;gap:6px}
+  .tile-value{font-weight:500;font-variant-numeric:tabular-nums}
+  .col-add{justify-content:flex-start;color:var(--muted)}
+  .col-empty{font-size:12px;color:var(--muted);text-align:center;padding:14px 0;border:1px dashed var(--line);border-radius:10px}
+  .who{display:flex;align-items:center;gap:10px;min-width:0}
+  .who div{min-width:0}
+  .who .small{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .num{text-align:right;font-variant-numeric:tabular-nums}
+  th button{all:unset;cursor:pointer;display:inline-flex;gap:4px;align-items:center}
+  th button:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:4px}
+  th .arrow{font-size:10px;opacity:.7}
+  .sheet-head{display:flex;align-items:center;gap:10px}
+  .sheet-head h2{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .full{grid-column:1/-1}
+  .acts{display:flex;flex-direction:column;gap:10px;border-top:1px solid var(--line);padding-top:14px}
+  .act-add{display:grid;grid-template-columns:130px 1fr auto;gap:8px}
+  .act{display:flex;gap:10px;align-items:flex-start;font-size:13px}
+  .act .badge{flex:none;min-width:76px;justify-content:center}
+  .act p{white-space:pre-wrap;word-break:break-word}
+  .act .small{margin-top:2px}
+  .btn.solid-danger{background:var(--bad);border-color:var(--bad);color:#fff}
+  @media (max-width:640px){ .app-bar .tabs{order:5;width:100%;display:flex} .app-bar .tabs button{flex:1} .act-add{grid-template-columns:1fr auto} .act-add select{grid-column:1/-1} .stat .stat-value{font-size:20px} .grid.stats{grid-template-columns:1fr 1fr} }
+</style>
+</head>
+<body>
+<div class="app">
+  <header class="app-bar">
+    <h1><span class="app-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg></span><span id="app-name">CRM</span></h1>
+    <div class="tabs" role="tablist">
+      <button role="tab" data-view="pipeline" aria-selected="true">Pipeline</button>
+      <button role="tab" data-view="list" aria-selected="false">List</button>
+    </div>
+    <button class="icon-btn" id="open-settings" title="Settings" aria-label="Settings"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></button>
+    <button class="btn primary" id="new-contact" aria-label="New contact"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg><span class="hide-sm">New contact</span></button>
+  </header>
+
+  <main class="app-main">
+    <div class="grid stats" id="stats"></div>
+    <div id="view"></div>
+  </main>
+</div>
+
+<!-- contact sheet -->
+<dialog class="sheet" id="contact-sheet">
+  <div id="contact-form">
+    <div class="sheet-head">
+      <span class="avatar" id="cs-avatar"></span>
+      <h2 id="cs-title">New contact</h2>
+      <button type="button" class="icon-btn" data-close aria-label="Close"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg></button>
+    </div>
+    <div class="form">
+      <label class="field"><span>Name</span><input name="name" required placeholder="Full name"></label>
+      <label class="field"><span>Company</span><input name="company" placeholder="Company"></label>
+      <label class="field"><span>Phone</span><input name="phone" type="tel" placeholder="+60 12 345 6789"></label>
+      <label class="field"><span>Email</span><input name="email" type="email" placeholder="name@company.com"></label>
+      <label class="field"><span>Stage</span><select name="stage"></select></label>
+      <label class="field"><span id="value-label">Value</span><input name="value" type="number" min="0" step="any" inputmode="decimal" placeholder="0"></label>
+      <label class="field"><span>Follow up</span><input name="follow_up" type="date"></label>
+      <label class="field"><span>Source</span><input name="source" placeholder="Referral, Instagram, event"></label>
+      <label class="field full"><span>Notes</span><textarea name="notes" rows="3" placeholder="Anything worth remembering"></textarea></label>
+    </div>
+    <div class="acts" id="acts">
+      <h3>Activity</h3>
+      <div class="act-add">
+        <select id="act-kind" aria-label="Activity type">
+          <option value="note">Note</option><option value="call">Call</option><option value="whatsapp">WhatsApp</option><option value="email">Email</option><option value="meeting">Meeting</option>
+        </select>
+        <input id="act-text" placeholder="What happened?" aria-label="Activity">
+        <button type="button" class="btn" id="act-add">Log</button>
+      </div>
+      <div class="stack" id="act-list"></div>
+    </div>
+    <div class="sheet-actions">
+      <button type="button" class="btn danger" id="cs-delete">Delete</button>
+      <span class="spacer"></span>
+      <button type="button" class="btn" data-close>Cancel</button>
+      <button type="button" class="btn primary" id="cs-save">Save</button>
+    </div>
+  </div>
+</dialog>
+
+<!-- settings sheet -->
+<dialog class="sheet" id="settings-sheet">
+  <div id="settings-form">
+    <div class="sheet-head"><h2>Settings</h2><button type="button" class="icon-btn" data-close aria-label="Close"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg></button></div>
+    <label class="field"><span>Currency</span><input name="currency" maxlength="6" placeholder="RM"></label>
+    <div class="sheet-actions"><button type="button" class="btn" data-close>Cancel</button><button type="button" class="btn primary" id="settings-save">Save</button></div>
+  </div>
+</dialog>
+
+<!-- confirm. The sandbox blocks window.confirm/prompt and form submission,
+     so sheets are plain divs with click + Enter handlers, never <form> submit. -->
+<dialog class="sheet" id="confirm-sheet">
+  <div>
+    <h2 id="confirm-text">Are you sure?</h2>
+    <p class="muted" id="confirm-sub"></p>
+    <div class="sheet-actions"><button type="button" class="btn" data-close>Cancel</button><button type="button" class="btn solid-danger" id="confirm-ok">Delete</button></div>
+  </div>
+</dialog>
+
+<script>
+// ---------- config ----------
+const STAGES = [
+  { key: "lead", label: "Lead", tone: "", color: "#98a2b3" },
+  { key: "contacted", label: "Contacted", tone: "blue", color: "#2f6df6" },
+  { key: "hot", label: "Hot", tone: "amber", color: "#d98a04" },
+  { key: "won", label: "Won", tone: "green", color: "#12a150" },
+  { key: "lost", label: "Lost", tone: "red", color: "#d92d20" },
+];
+const STAGE = Object.fromEntries(STAGES.map(s => [s.key, s]));
+const CLOSED = new Set(["won", "lost"]);
+const KINDS = { note: ["Note", ""], call: ["Call", "blue"], whatsapp: ["WhatsApp", "green"], email: ["Email", "purple"], meeting: ["Meeting", "amber"] };
+
+// ---------- state (always rebuilt from bos.subscribe) ----------
+const state = { contacts: [], activities: [], settings: {}, view: "pipeline", q: "", sort: { key: "name", dir: 1 }, openId: null, dirty: false };
+const $ = (s, el = document) => el.querySelector(s);
+const esc = bos.esc;
+const currency = () => (state.settings.currency || "RM").trim() || "RM";
+const num = v => { const n = Number(v); return Number.isFinite(n) ? n : 0; };
+const money = v => currency() + " " + num(v).toLocaleString("en-MY", { maximumFractionDigits: 2 });
+const pad = n => String(n).padStart(2, "0");
+const ymd = d => d.getFullYear() + "-" + pad(d.getMonth() + 1) + "-" + pad(d.getDate());
+const today = () => ymd(new Date());
+const isDate = s => typeof s === "string" && /^\d{4}-\d{2}-\d{2}$/.test(s);
+const fmtDate = s => isDate(s) ? new Date(s + "T00:00").toLocaleDateString("en-GB", { day: "numeric", month: "short" }) : "";
+const initials = s => (String(s || "?").trim().split(/\s+/).slice(0, 2).map(w => w[0]).join("") || "?").toUpperCase();
+const ago = ms => { if (!ms) return ""; const m = Math.round((Date.now() - ms) / 60000); if (m < 1) return "just now"; if (m < 60) return m + "m ago"; const h = Math.round(m / 60); if (h < 24) return h + "h ago"; const d = Math.round(h / 24); return d < 30 ? d + "d ago" : new Date(ms).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" }); };
+const stageOf = c => STAGE[c.stage] ? c.stage : (c.stage ? "other" : "lead");
+
+function followBadge(c) {
+  if (!isDate(c.follow_up) || CLOSED.has(c.stage)) return "";
+  const t = today();
+  if (c.follow_up < t) return `<span class="badge" data-tone="red">Overdue ${esc(fmtDate(c.follow_up))}</span>`;
+  if (c.follow_up === t) return `<span class="badge" data-tone="amber">Today</span>`;
+  return `<span class="badge">${esc(fmtDate(c.follow_up))}</span>`;
+}
+function stageBadge(c) {
+  const s = STAGE[c.stage];
+  return s ? `<span class="badge" data-tone="${s.tone}">${s.label}</span>` : `<span class="badge">${esc(c.stage || "Lead")}</span>`;
+}
+
+// ---------- render ----------
+function render() {
+  renderStats();
+  document.querySelectorAll(".tabs button").forEach(b => b.setAttribute("aria-selected", String(b.dataset.view === state.view)));
+  const view = $("#view");
+  if (!state.contacts.length) {
+    view.innerHTML = `<div class="empty"><h2>No contacts yet</h2><p style="margin:6px 0 16px">Add your first lead here, or tell bos in chat: <i>add Ali from Seri Bridal to my CRM as hot</i>.</p><button class="btn primary" data-new="lead">New contact</button></div>`;
+    return;
+  }
+  if (state.view === "pipeline") renderBoard(view); else renderList(view);
+}
+
+function renderStats() {
+  const cs = state.contacts, t = today();
+  const open = cs.filter(c => !CLOSED.has(c.stage));
+  const due = open.filter(c => isDate(c.follow_up) && c.follow_up <= t);
+  const overdue = due.filter(c => c.follow_up < t).length;
+  const won = cs.filter(c => c.stage === "won");
+  $("#stats").innerHTML = [
+    ["Contacts", cs.length, `${open.length} open`],
+    ["Open pipeline", money(open.reduce((a, c) => a + num(c.value), 0)), `${money(won.reduce((a, c) => a + num(c.value), 0))} won`],
+    ["Hot", cs.filter(c => c.stage === "hot").length, "ready to close"],
+    ["Follow-ups due", due.length, overdue ? `<b>${overdue} overdue</b>` : "none overdue"],
+  ].map(([l, v, s]) => `<div class="card stat"><div class="stat-label">${l}</div><div class="stat-value">${typeof v === "number" ? v : esc(v)}</div><div class="sub">${s}</div></div>`).join("");
+}
+
+function renderBoard(view) {
+  const cols = STAGES.slice();
+  const others = state.contacts.filter(c => stageOf(c) === "other");
+  if (others.length) cols.push({ key: "other", label: "Other", color: "#7a5af8" });
+  const sorted = state.contacts.slice().sort((a, b) => (a.follow_up || "9999").localeCompare(b.follow_up || "9999") || num(b.value) - num(a.value));
+  view.innerHTML = `<div class="board">${cols.map(s => {
+    const items = sorted.filter(c => stageOf(c) === s.key);
+    return `<div class="col" data-stage="${s.key}">
+      <div class="col-head"><span class="dot" style="background:${s.color}"></span>${s.label} <span class="count">${items.length}</span><span class="sum">${items.length ? esc(money(items.reduce((a, c) => a + num(c.value), 0))) : ""}</span></div>
+      ${items.map(tile).join("") || `<div class="col-empty">Drop a contact here</div>`}
+      ${s.key !== "other" ? `<button class="btn ghost sm col-add" data-new="${s.key}">+ Add</button>` : ""}
+    </div>`;
+  }).join("")}</div>`;
+}
+
+function tile(c) {
+  return `<div class="tile" draggable="true" tabindex="0" data-id="${esc(c.id)}" title="Open: Enter. Move stage: Shift + arrow keys">
+    <div class="tile-name">${esc(c.name || "Unnamed")}</div>
+    ${c.company ? `<div class="muted small">${esc(c.company)}</div>` : ""}
+    <div class="row tile-foot"><span class="tile-value">${c.value ? esc(money(c.value)) : `<span class="muted small">No value</span>`}</span><span class="spacer"></span>${followBadge(c)}${stageOf(c) === "other" ? `<span class="badge">${esc(c.stage)}</span>` : ""}</div>
+  </div>`;
+}
+
+function renderList(view) {
+  const q = state.q.toLowerCase();
+  const { key, dir } = state.sort;
+  const rows = state.contacts.filter(c => !q || ["name", "company", "phone", "email", "source", "notes", "stage"].some(k => String(c[k] || "").toLowerCase().includes(q)));
+  const val = c => key === "value" ? num(c.value) : key === "follow_up" ? (c.follow_up || "9999") : key === "stage" ? String(STAGES.findIndex(s => s.key === c.stage) + 10) : String(c[key] || "").toLowerCase();
+  rows.sort((a, b) => { const x = val(a), y = val(b); return (x < y ? -1 : x > y ? 1 : 0) * dir; });
+  const th = (k, label, cls = "") => `<th class="${cls}"><button data-sort="${k}">${label}${key === k ? `<span class="arrow">${dir > 0 ? "&#9650;" : "&#9660;"}</span>` : ""}</button></th>`;
+  const keepFocus = document.activeElement && document.activeElement.id === "search";
+  view.innerHTML = `<div class="stack" style="gap:12px">
+    <div class="row"><input class="search" id="search" type="search" placeholder="Search contacts" value="${esc(state.q)}"><span class="spacer"></span><span class="muted small">${rows.length} of ${state.contacts.length}</span></div>
+    <div class="table-wrap"><table class="table">
+      <thead><tr>${th("name", "Name")}${th("stage", "Stage")}${th("value", "Value", "num")}${th("follow_up", "Follow up")}<th class="hide-sm">Phone</th><th class="hide-sm">Email</th><th class="hide-sm">Source</th><th class="hide-sm">Updated</th></tr></thead>
+      <tbody>${rows.map(c => `<tr data-click data-id="${esc(c.id)}" tabindex="0">
+        <td><div class="who"><span class="avatar">${esc(initials(c.name))}</span><div><div>${esc(c.name || "Unnamed")}</div><div class="muted small">${esc(c.company || "")}</div></div></div></td>
+        <td>${stageBadge(c)}</td>
+        <td class="num">${c.value ? esc(money(c.value)) : `<span class="muted">-</span>`}</td>
+        <td>${followBadge(c) || (isDate(c.follow_up) ? `<span class="muted">${esc(fmtDate(c.follow_up))}</span>` : `<span class="muted">-</span>`)}</td>
+        <td class="hide-sm">${esc(c.phone || "")}</td>
+        <td class="hide-sm">${esc(c.email || "")}</td>
+        <td class="hide-sm">${esc(c.source || "")}</td>
+        <td class="hide-sm muted small">${esc(ago(c._at))}${c._by && c._by !== "owner" ? " by " + esc(c._by) : ""}</td>
+      </tr>`).join("") || `<tr><td colspan="8" class="muted" style="text-align:center;padding:28px">No contacts match "${esc(state.q)}"</td></tr>`}</tbody>
+    </table></div></div>`;
+  if (keepFocus) { const s = $("#search"); s.focus(); s.setSelectionRange(s.value.length, s.value.length); }
+}
+
+// ---------- contact sheet ----------
+const sheet = $("#contact-sheet"), form = $("#contact-form");
+const F = name => form.querySelector(`[name="${name}"]`);
+function fillStageSelect(current) {
+  const opts = STAGES.map(s => `<option value="${s.key}">${s.label}</option>`);
+  if (current && !STAGE[current]) opts.push(`<option value="${esc(current)}">${esc(current)}</option>`);
+  F("stage").innerHTML = opts.join("");
+}
+function fillForm(c) {
+  fillStageSelect(c.stage);
+  for (const k of ["name", "company", "phone", "email", "follow_up", "source", "notes"]) F(k).value = c[k] == null ? "" : String(c[k]);
+  F("value").value = c.value == null || c.value === "" ? "" : num(c.value);
+  F("stage").value = c.stage || "lead";
+  $("#cs-title").textContent = c.id ? (c.name || "Unnamed") : "New contact";
+  $("#cs-avatar").textContent = initials(c.name);
+  $("#cs-avatar").hidden = !c.id;
+  state.dirty = false;
+}
+function openContact(id, stage) {
+  const c = id ? state.contacts.find(x => x.id === id) : { stage: stage || "lead" };
+  if (!c) return;
+  state.openId = id || null;
+  $("#value-label").textContent = "Value (" + currency() + ")";
+  fillForm(c);
+  $("#acts").hidden = !id;
+  $("#cs-delete").hidden = !id;
+  renderActivities();
+  sheet.showModal();
+  if (!id) F("name").focus();
+}
+function renderActivities() {
+  if (!state.openId) return;
+  const list = state.activities.filter(a => a.contact_id === state.openId).sort((a, b) => num(b.at || b._at) - num(a.at || a._at));
+  $("#act-list").innerHTML = list.map(a => {
+    const [label, tone] = KINDS[a.kind] || [a.kind || "Note", ""];
+    const when = new Date(num(a.at || a._at)).toLocaleString("en-GB", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
+    return `<div class="act"><span class="badge" data-tone="${tone}">${esc(label)}</span><div><p>${esc(a.text || "")}</p><div class="muted small">${esc(when)}${a._by ? " by " + esc(a._by) : ""}</div></div></div>`;
+  }).join("") || `<p class="muted small">No activity yet. Log a call, a WhatsApp or a note.</p>`;
+}
+function readForm() {
+  const f = {};
+  for (const k of ["name", "company", "phone", "email", "stage", "follow_up", "source", "notes"]) f[k] = F(k).value.trim();
+  f.value = F("value").value === "" ? 0 : num(F("value").value);
+  return f;
+}
+form.addEventListener("input", e => { if (e.target.name) state.dirty = true; });
+form.addEventListener("change", e => { if (e.target.name) state.dirty = true; });
+// Enter in any single-line field saves (except the activity box, which logs)
+form.addEventListener("keydown", e => { if (e.key === "Enter" && e.target.matches("input:not(#act-text)")) { e.preventDefault(); saveContact(); } });
+$("#cs-save").addEventListener("click", saveContact);
+async function saveContact() {
+  const f = readForm();
+  if (!f.name) { F("name").focus(); bos.toast("Add a name first"); return; }
+  const id = state.openId;
+  try {
+    state.dirty = false;
+    if (id) await bos.patch("contacts", id, f);
+    else await bos.put("contacts", f);
+    sheet.close();
+    bos.toast(id ? "Contact saved" : "Contact added");
+  } catch (err) { bos.toast("Could not save: " + err.message); }
+}
+async function logActivity() {
+  const text = $("#act-text").value.trim();
+  if (!text || !state.openId) return;
+  $("#act-text").value = "";
+  try { await bos.put("activities", { contact_id: state.openId, kind: $("#act-kind").value, text, at: Date.now() }); }
+  catch (err) { bos.toast("Could not log: " + err.message); }
+}
+$("#act-add").addEventListener("click", logActivity);
+$("#act-text").addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); logActivity(); } });
+$("#cs-delete").addEventListener("click", async () => {
+  const c = state.contacts.find(x => x.id === state.openId);
+  if (!c || !(await confirmBox(`Delete ${c.name || "this contact"}?`, "Their activity log goes too. This cannot be undone."))) return;
+  sheet.close();
+  await bos.remove("contacts", c.id);
+  for (const a of state.activities.filter(a => a.contact_id === c.id)) await bos.remove("activities", a.id);
+  bos.toast("Contact deleted");
+});
+sheet.addEventListener("close", () => { state.openId = null; });
+
+function confirmBox(text, sub) {
+  const d = $("#confirm-sheet");
+  $("#confirm-text").textContent = text; $("#confirm-sub").textContent = sub || "";
+  d.returnValue = ""; d.showModal(); $("#confirm-ok").focus();
+  return new Promise(ok => d.addEventListener("close", () => ok(d.returnValue === "yes"), { once: true }));
+}
+$("#confirm-ok").addEventListener("click", () => $("#confirm-sheet").close("yes"));
+
+// ---------- settings ----------
+const curInput = $("#settings-form [name=currency]");
+$("#open-settings").addEventListener("click", () => { curInput.value = currency(); $("#settings-sheet").showModal(); });
+async function saveSettings() {
+  await bos.put("settings", { ...state.settings, id: "app", currency: curInput.value.trim() || "RM" });
+  $("#settings-sheet").close();
+}
+$("#settings-save").addEventListener("click", saveSettings);
+curInput.addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); saveSettings(); } });
+
+// ---------- events ----------
+document.addEventListener("click", e => {
+  const t = e.target;
+  if (t.closest("[data-close]")) { t.closest("dialog").close(); return; }
+  const nw = t.closest("[data-new]"); if (nw) { openContact(null, nw.dataset.new); return; }
+  const tab = t.closest(".tabs button"); if (tab) { state.view = tab.dataset.view; render(); return; }
+  const sb = t.closest("[data-sort]"); if (sb) { const k = sb.dataset.sort; state.sort = { key: k, dir: state.sort.key === k ? -state.sort.dir : (k === "value" ? -1 : 1) }; render(); return; }
+  const item = t.closest(".tile, tr[data-id]"); if (item) openContact(item.dataset.id);
+});
+$("#new-contact").addEventListener("click", () => openContact(null, "lead"));
+document.addEventListener("input", e => { if (e.target.id === "search") { state.q = e.target.value; render(); } });
+document.addEventListener("keydown", e => {
+  const item = e.target.closest && e.target.closest(".tile, tr[data-id]");
+  if (!item) return;
+  if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openContact(item.dataset.id); return; }
+  if (item.classList.contains("tile") && e.shiftKey && (e.key === "ArrowRight" || e.key === "ArrowLeft")) {
+    e.preventDefault();
+    const c = state.contacts.find(x => x.id === item.dataset.id);
+    const i = Math.max(0, STAGES.findIndex(s => s.key === c.stage));
+    const next = STAGES[Math.min(STAGES.length - 1, Math.max(0, i + (e.key === "ArrowRight" ? 1 : -1)))];
+    if (next && next.key !== c.stage) { state.refocus = c.id; bos.patch("contacts", c.id, { stage: next.key }); }
+  }
+});
+
+// drag a tile to another column -> patch stage
+let dragId = null;
+document.addEventListener("dragstart", e => { const t = e.target.closest && e.target.closest(".tile"); if (!t) return; dragId = t.dataset.id; t.classList.add("dragging"); e.dataTransfer.effectAllowed = "move"; e.dataTransfer.setData("text/plain", dragId); });
+document.addEventListener("dragend", () => { dragId = null; document.querySelectorAll(".dragging, .col.drop").forEach(el => el.classList.remove("dragging", "drop")); });
+document.addEventListener("dragover", e => { const col = e.target.closest && e.target.closest(".col"); if (!col || !dragId || col.dataset.stage === "other") return; e.preventDefault(); document.querySelectorAll(".col.drop").forEach(c => c !== col && c.classList.remove("drop")); col.classList.add("drop"); });
+document.addEventListener("drop", e => {
+  const col = e.target.closest && e.target.closest(".col"); if (!col || !dragId) return;
+  e.preventDefault();
+  const c = state.contacts.find(x => x.id === dragId), stage = col.dataset.stage;
+  dragId = null; // re-render detaches the tile, so dragend may not bubble
+  if (c && stage !== "other" && c.stage !== stage) {
+    c.stage = stage; render(); // optimistic; subscribe confirms
+    bos.patch("contacts", c.id, { stage }).catch(err => bos.toast("Could not move: " + err.message));
+  }
+});
+
+// ---------- live data ----------
+bos.subscribe("contacts", rows => {
+  state.contacts = rows;
+  render();
+  if (state.refocus) { const t = document.querySelector(`.tile[data-id="${CSS.escape(state.refocus)}"]`); if (t) t.focus(); state.refocus = null; }
+  if (state.openId) {
+    const c = rows.find(x => x.id === state.openId);
+    if (!c) { sheet.close(); bos.toast("This contact was deleted"); }
+    else if (!state.dirty) fillForm(c);
+  }
+});
+bos.subscribe("activities", rows => { state.activities = rows; renderActivities(); });
+bos.subscribe("settings", rows => { state.settings = rows.find(r => r.id === "app") || {}; render(); });
+bos.app().then(a => { if (a && a.name) { $("#app-name").textContent = a.name; document.title = a.name; } });
+render();
+</script>
+</body>
+</html>

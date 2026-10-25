@@ -10,7 +10,7 @@ import { remoteBotHint } from "@/lib/remote-bot";
 import { terminalAvailable, sameTerminalTarget, type TerminalTarget } from "@/lib/terminal";
 import {
   DETACHABLE, bottomVisible, closeTab as closeTabState, focusTab as focusTabState, loadWorkspace, moveTab as moveTabState,
-  openTab as openTabState, replaceTab as replaceTabState, rightVisible, saveWorkspace, setBottomOpen, setFilePath, setLayout, setTabTitle as setTabTitleState, showPage, workspaceKey,
+  openTab as openTabState, replaceTab as replaceTabState, rightVisible, saveWorkspace, setBottomOpen, setFilePath, setLayout, setTabTitle as setTabTitleState, showDesk, showPage, workspaceKey,
   type ThreadWorkspace, type WorkspaceLayout, type WorkspacePane, type WorkspaceTab, type WorkspaceTabKind,
 } from "@/lib/thread-workspace";
 import { sendBrowserCommand } from "@/components/workbench/browser-tabs";
@@ -297,12 +297,13 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (!available) return;
     const onOpen = (event: Event) => {
-      const detail = (event as CustomEvent<{ botId?: unknown; threadId?: unknown; ref?: unknown; title?: unknown }>).detail;
+      const detail = (event as CustomEvent<{ botId?: unknown; threadId?: unknown; ref?: unknown; title?: unknown; tab?: unknown }>).detail;
       if (typeof detail?.botId !== "string" || typeof detail.threadId !== "string" || typeof detail.ref !== "string" || !detail.ref) return;
       const id = workspaceKey(detail.botId, detail.threadId);
       const ref = detail.ref, title = typeof detail.title === "string" ? detail.title : undefined;
       setWorkspaces((all) => {
-        const next = showPage(all[id] ?? loadWorkspace(id), ref, title).state;
+        const current = all[id] ?? loadWorkspace(id);
+        const next = (detail.tab === "desk" ? showDesk(current, ref, title) : showPage(current, ref, title)).state;
         saveWorkspace(id, next);
         return { ...all, [id]: next };
       });

@@ -16,9 +16,7 @@
 .mention-editor-mirror {
   /* Match the native textarea's direction independently for each paragraph. */
   unicode-bidi: plaintext;
-  padding: 4px;
-  font-size: 15px;
-  line-height: 24px;
+  /* padding and font metrics are copied from the textarea in MentionTextarea */
   white-space: pre-wrap;
   overflow-wrap: break-word;
   color: var(--color-ink);

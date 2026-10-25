@@ -1,12 +1,15 @@
 /** The tab kinds bos ships with, registered like any other kind. The browser
  * is the exception: it is one native view the dock keeps mounted, and its
  * page tabs come from browser-tabs.ts. */
+import { useEffect, useState } from "react";
 import { Folders, GitCompare, Globe, MessageCircle, NotebookText, Plus, SquareTerminal } from "lucide-react";
 
 import { BrowserPanel } from "@/components/BrowserPanel";
+import { APP_REF_PREFIX, appApi } from "@/components/canvas/app-api";
 import { CANVAS_DIR, canvasFileTitle } from "@/components/canvas/canvas";
 import { isPinned, pinPage, unpinPage, usePins, type PinnedPage } from "@/components/canvas/pins";
-import { NewTabPage, type NewTabPins, type NewTabTool } from "@/components/workbench/NewTabPage";
+import { deskApi, useDesks } from "@/components/desks/desks-client";
+import { NewTabPage, type NewTabApps, type NewTabPins, type NewTabTool } from "@/components/workbench/NewTabPage";
 import { SideChatTab } from "@/components/workbench/SideChatTab";
 import { registerTabKind, tabKind, useTabKinds, type TabRenderProps } from "@/components/workbench/registry";
 import { ChangesTab } from "@/components/workspace/ChangesTab";
@@ -77,36 +80,76 @@ export function useNewTabExtras() {
   const { git, browserAvailable, target } = useWorkspace();
   const { state } = useStore();
   const botBrowser = !browserAvailable && serverBrowserAvailable(state.config) && state.config?.features?.browser !== false;
-  // the blank tab, like pages and videos, belongs to direct conversations
+  // in a room the blank tab lists the apps shared there; pages stay direct
   const direct = !target || !state.groups.some((group) => group.id === target.botId);
-  return { blank: blankReady() && direct, changes: git === true, botBrowser };
+  return { blank: blankReady(), direct, changes: git === true, botBrowser };
+}
+
+/** This conversation's apps (or, in a room, the ones shared into it) for the
+ * new tab's Tools list. open turns an app into a tab. */
+export function useNewTabApps(open: (kind: "canvas", options: { ref: string; title: string }) => void): NewTabApps | undefined {
+  const { target } = useWorkspace();
+  const { state } = useStore();
+  const room = Boolean(target && state.groups.some(group => group.id === target.botId));
+  const [apps, setApps] = useState<NewTabApps["apps"]>([]);
+  const [reload, setReload] = useState(0);
+  const botId = target?.botId;
+  useEffect(() => {
+    if (!botId || !blankReady()) return;
+    let live = true;
+    (room ? appApi.listForRoom(botId) : appApi.listForBot(botId))
+      .then(list => { if (live) setApps(list.sort((a, b) => b.updatedAt - a.updatedAt).map(a => ({ id: a.id, name: a.name, icon: a.icon }))); }, () => undefined);
+    return () => { live = false; };
+  }, [botId, room, reload]);
+  useEffect(() => {
+    const onChanged = (event: Event) => { const d = (event as CustomEvent<{ meta?: boolean; deleted?: boolean }>).detail; if (d?.meta || d?.deleted) setReload(n => n + 1); };
+    window.addEventListener("bos-app-changed", onChanged);
+    return () => window.removeEventListener("bos-app-changed", onChanged);
+  }, []);
+  if (!target || !apps.length) return undefined;
+  return { apps, open: id => { const app = apps.find(a => a.id === id); if (app) open("canvas", { ref: APP_REF_PREFIX + app.id, title: app.name }); } };
 }
 
 const pinKey = (pin: Pick<PinnedPage, "threadId" | "path">) => `${pin.threadId}:${pin.path}`;
 
 /** Pages pinned to the Tools list, and the chooser that adds this chat's
  * pages to it. open turns a page into a tab (the caller says where). */
-export function useNewTabPins(open: (kind: "canvas", options: { ref: string; title: string; from?: string }) => void): NewTabPins | undefined {
+const DESK_KEY = "desk:";
+
+export function useNewTabPins(open: (kind: "canvas" | "desk", options: { ref: string; title: string; from?: string }) => void): NewTabPins | undefined {
   const { target } = useWorkspace();
   const pins = usePins(target?.botId);
+  // desks pin on the server (they belong to the bot, on every device); pages pin on this device
+  const desks = useDesks(target?.botId);
   if (!target) return undefined;
   const find = (key: string) => pins.find(pin => pinKey(pin) === key);
+  const desk = (key: string) => key.startsWith(DESK_KEY) ? desks.find(d => d.id === key.slice(DESK_KEY.length)) : undefined;
+  const deskItem = (d: { id: string; name: string }) => ({ key: DESK_KEY + d.id, title: d.name });
   return {
-    pinned: pins.map(pin => ({ key: pinKey(pin), title: pin.title })),
+    pinned: [...desks.filter(d => d.pinned).map(deskItem), ...pins.map(pin => ({ key: pinKey(pin), title: pin.title }))],
     open: (key) => {
+      const d = desk(key);
+      if (d) return open("desk", { ref: d.id, title: d.name });
       const pin = find(key);
       if (pin) open("canvas", { ref: pin.path, title: pin.title, ...(pin.threadId !== target.threadId ? { from: pin.threadId } : {}) });
     },
-    unpin: (key) => { const pin = find(key); if (pin) unpinPage(pin); },
-    // this chat's pages, newest first, minus the ones already pinned
+    unpin: (key) => {
+      const d = desk(key);
+      if (d) { void deskApi.patch(target.botId, d.id, { pinned: false }).catch(() => {}); return; }
+      const pin = find(key); if (pin) unpinPage(pin);
+    },
+    // this bot's unpinned desks, then this chat's pages, newest first, minus the ones already pinned
     choices: async () => {
       const listing = await listFolder(target, CANVAS_DIR).catch(() => null);
-      return (listing?.entries ?? [])
+      const pages = (listing?.entries ?? [])
         .filter(entry => entry.kind === "file" && /\.html?$/i.test(entry.name) && !isPinned(pins, { botId: target.botId, threadId: target.threadId, path: entry.path }))
         .sort((a, b) => (b.mtime ?? 0) - (a.mtime ?? 0))
         .map(entry => ({ key: pinKey({ threadId: target.threadId, path: entry.path }), title: canvasFileTitle(entry.name) }));
+      return [...desks.filter(d => !d.pinned).map(deskItem), ...pages];
     },
     pin: (choice) => {
+      const d = desk(choice.key);
+      if (d) { void deskApi.patch(target.botId, d.id, { pinned: true }).catch(() => {}); return; }
       const path = choice.key.slice(target.threadId.length + 1);
       pinPage({ botId: target.botId, threadId: target.threadId, path, title: choice.title });
     },
@@ -116,10 +159,11 @@ export function useNewTabPins(open: (kind: "canvas", options: { ref: string; tit
 function NewTabKind({ tab }: TabRenderProps) {
   useTabKinds();
   const pick = usePickTool();
-  const extras = useNewTabExtras();
+  const { direct, ...extras } = useNewTabExtras();
   const { replaceTab } = useWorkspace();
   const pins = useNewTabPins((kind, options) => replaceTab(tab.id, kind, options));
-  return <NewTabPage {...extras} pins={extras.blank ? pins : undefined} onPick={(tool) => pick(tool, tab.id)} />;
+  const apps = useNewTabApps((kind, options) => replaceTab(tab.id, kind, options));
+  return <NewTabPage {...extras} pins={extras.blank && direct ? pins : undefined} apps={apps} onPick={(tool) => pick(tool, tab.id)} />;
 }
 
 function SideChatKind({ tab, target }: TabRenderProps) {

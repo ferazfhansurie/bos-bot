@@ -139,3 +139,23 @@ it("names unnamed chats once, per account, without overwriting a real name", () 
   expect(store.listChats(30, undefined, account).find(c => c.chatId === client)?.chatName).toBe("fixture");
   expect(store.listChats(30, undefined, "60999999999@c.us").find(c => c.chatId === "219920001234567@lid")?.chatName).toBeNull();
 });
+it("an owner takeover pauses replies, outreach and auto-dispatch until hand back", async () => {
+  replies.configure("money", { accountId: account, chatIds: [client], autoDispatch: true, outreach: true });
+  replies.hold(true);
+  expect(replies.held()).toBe(true);
+  await expect(replies.reply("money", input)).rejects.toThrow("taken over");
+  await expect(replies.send("money", { account_id: account, chat_id: client, send_key: "k1", text: "hi" })).rejects.toThrow("taken over");
+  expect(replies.claimInbound("money", store.message("incoming")!)).toBe(false);
+  expect(send).not.toHaveBeenCalled();
+  replies.hold(false);
+  // a refused reply used no attempt, so it can go once the owner hands back
+  expect(await replies.reply("money", input)).toMatchObject({ state: "submitted" });
+  expect(send).toHaveBeenCalledTimes(1);
+});
+it("a takeover mid-send revokes the transport's authorization", async () => {
+  replies.configure("money", { accountId: account, chatIds: [client] });
+  let checked: boolean | undefined;
+  send.mockImplementation(async (...args: unknown[]) => { replies.hold(true); checked = (args[1] as () => boolean)(); return checked ? "outbound-id" : ""; });
+  expect(await replies.reply("money", input)).toMatchObject({ state: "outcome_unknown" });
+  expect(checked).toBe(false);
+});

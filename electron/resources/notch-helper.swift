@@ -5,7 +5,10 @@
 // through is blind to both, and polling the cursor would cost cpu all day.
 //
 // stdout, one JSON object per line:
-//   {"type":"screens","screens":[…]}   at start and whenever screens change
+//   {"type":"screens","screens":[…]}   at start, whenever screens change, and
+//                                      when a space or the front app changes
+//                                      (each screen says if an app is full
+//                                      screen on it)
 //   {"type":"hover","phase":"enter"|"exit"}
 //   {"type":"drag","phase":"enter"|"exit"}
 // stdin, one JSON object per line:
@@ -25,7 +28,33 @@ func screenId(_ screen: NSScreen) -> UInt32 {
   (screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value ?? 0
 }
 
-func describe(_ screen: NSScreen) -> [String: Any] {
+// The frames of the front app's ordinary windows on screen, in Quartz
+// coordinates (top left of the main display). Only the front app: a
+// full-screen app is in front in its space, and other apps leave clear
+// screen-sized overlays about. Bounds and layer need no screen-recording grant.
+func onScreenWindowFrames() -> [CGRect] {
+  guard let front = NSWorkspace.shared.frontmostApplication?.processIdentifier,
+    let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]]
+  else { return [] }
+  return list.compactMap { info in
+    guard (info[kCGWindowLayer as String] as? NSNumber)?.intValue == 0,
+      (info[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value == front,
+      let bounds = info[kCGWindowBounds as String] as? NSDictionary,
+      let rect = CGRect(dictionaryRepresentation: bounds)
+    else { return nil }
+    return rect
+  }
+}
+
+// A full-screen app's window covers the whole display, menu bar strip and all.
+func fullscreen(_ screen: NSScreen, _ windows: [CGRect]) -> Bool {
+  guard let main = NSScreen.screens.first else { return false }
+  let frame = screen.frame
+  let quartz = CGRect(x: frame.minX, y: main.frame.maxY - frame.maxY, width: frame.width, height: frame.height)
+  return windows.contains { abs($0.minX - quartz.minX) < 1 && abs($0.minY - quartz.minY) < 1 && abs($0.width - quartz.width) < 1 && abs($0.height - quartz.height) < 1 }
+}
+
+func describe(_ screen: NSScreen, _ windows: [CGRect]) -> [String: Any] {
   let frame = screen.frame
   let visible = screen.visibleFrame
   let id = screenId(screen)
@@ -37,6 +66,7 @@ func describe(_ screen: NSScreen) -> [String: Any] {
     // the menu bar is the strip above the visible frame; 0 when it auto-hides
     "menuBar": max(0, frame.maxY - visible.maxY),
     "scale": screen.backingScaleFactor,
+    "fullscreen": fullscreen(screen, windows),
   ]
   // macOS 12+: the two strips either side of the camera housing. What lies
   // between them is the notch, as tall as the top safe-area inset.
@@ -49,8 +79,23 @@ func describe(_ screen: NSScreen) -> [String: Any] {
   return entry
 }
 
+var lastReport = ""
 func reportScreens() {
-  emit(["type": "screens", "screens": NSScreen.screens.map(describe)])
+  let windows = onScreenWindowFrames()
+  guard let data = try? JSONSerialization.data(withJSONObject: ["type": "screens", "screens": NSScreen.screens.map { describe($0, windows) }], options: [.sortedKeys]),
+    let line = String(data: data, encoding: .utf8), line != lastReport
+  else { return }
+  lastReport = line
+  FileHandle.standardOutput.write((line + "\n").data(using: .utf8)!)
+}
+
+// A space swipe animates for a moment; read the windows once it has landed.
+var pendingReport: DispatchWorkItem?
+func reportSoon() {
+  pendingReport?.cancel()
+  let work = DispatchWorkItem { reportScreens() }
+  pendingReport = work
+  DispatchQueue.main.asyncAfter(deadline: .now() + 0.6, execute: work)
 }
 
 final class SensorView: NSView {
@@ -118,6 +163,11 @@ app.setActivationPolicy(.accessory)
 NotificationCenter.default.addObserver(
   forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main
 ) { _ in reportScreens() }
+// entering or leaving full screen is a space change; so is a swipe between
+// spaces, and switching apps can bring a full-screen one forward
+for name in [NSWorkspace.activeSpaceDidChangeNotification, NSWorkspace.didActivateApplicationNotification] {
+  NSWorkspace.shared.notificationCenter.addObserver(forName: name, object: nil, queue: .main) { _ in reportSoon() }
+}
 
 // stdin on a background thread; every command is applied on the main thread
 Thread.detachNewThread {

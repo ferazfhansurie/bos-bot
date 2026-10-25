@@ -250,6 +250,11 @@ export class WhatsAppNative {
   replyTransport() {
     return this.state === "linked" ? this.client?.replies ?? null : null;
   }
+  /** The owner's desk live view: only while linked, never a QR page. */
+  async screenshot(): Promise<Uint8Array | null> {
+    if (this.state !== "linked" || !this.client?.screenshot) return null;
+    try { return await this.client.screenshot(); } catch { return null; }
+  }
   historyTransport() { return this.state === "linked" ? this.client?.history ?? null : null; }
 
   /** Server boot: resume a saved session without a QR; otherwise stay idle. */

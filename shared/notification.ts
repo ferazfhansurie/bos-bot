@@ -42,3 +42,12 @@ export interface Notification {
    * phone still on that call can stay quiet (the call already says it). */
   callId?: string;
 }
+
+/** One identity per thing to look at, so a re-sent frame never re-banners,
+ * an answered card can take its banner down, and a browser push and the open
+ * page's own banner for the same event replace each other instead of stacking. */
+export function attentionId(frame: { kind?: string; threadId?: string; requestId?: string; messageId?: string; body: string }): string {
+  if (frame.requestId) return `req:${frame.requestId}`;
+  if (frame.messageId) return `msg:${frame.messageId}`;
+  return `${frame.kind ?? "message"}:${frame.threadId ?? ""}:${frame.body.slice(0, 120)}`;
+}

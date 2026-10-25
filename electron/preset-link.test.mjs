@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { claimPreset, parsePresetClaim, presetTokenFromLink, withPresetBroker } from "./preset-link.mjs";
+import { claimPreset, inviteTokenFromLink, parsePresetClaim, presetTokenFromLink, withPresetBroker } from "./preset-link.mjs";
 
 const TOKEN = "AbCdEfGhIjKlMnOpQrStUv";
 const BROKER = "a".repeat(64);
@@ -40,5 +40,16 @@ describe("setup preset links", () => {
     expect(calls[0][1]).toMatchObject({ method: "POST", redirect: "error", body: JSON.stringify({ token: TOKEN }) });
     await expect(claimPreset(TOKEN, { fetchImpl: async () => new Response(JSON.stringify({ error: "This link was already used." }), { status: 410 }) }))
       .rejects.toThrow("already used");
+  });
+});
+
+describe("friend invite links", () => {
+  it("reads the token from an invite link only", () => {
+    expect(inviteTokenFromLink(`bosbot://invite?token=${TOKEN}`)).toBe(TOKEN);
+    expect(inviteTokenFromLink(`bosbot://invite/?token=${TOKEN}`)).toBe(TOKEN);
+    expect(inviteTokenFromLink(`https://invite?token=${TOKEN}`)).toBeNull();
+    expect(inviteTokenFromLink(`bosbot://setup?for=${TOKEN}`)).toBeNull();
+    expect(inviteTokenFromLink(`bosbot://invite?token=${TOKEN}&next=x`)).toBeNull();
+    expect(inviteTokenFromLink(`bosbot://invite?token=a/b`)).toBeNull();
   });
 });

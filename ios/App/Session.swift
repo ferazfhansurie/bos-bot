@@ -683,6 +683,11 @@ final class Session: ObservableObject {
         }
 #endif
         restore()
+#if DEBUG
+        if registry.connections.isEmpty, let (connection, code) = PerfProbe.pairing {
+            Task { try? await self.pair(with: connection, credential: code, deviceName: "perf", pairRequestId: UUID().uuidString) }
+        }
+#endif
         startWatchingNetworkPath()
         Task { await refreshNotificationAuthorization() }
     }
@@ -1199,12 +1204,22 @@ final class Session: ObservableObject {
         return try await client.removedRemoteBotIDs()
     }
 
-    func sharedRoster() async throws -> (SharedMe, [SharedContact], [SharedRoomSummary]) {
+    /// `expectingActor`: the last answer named this person, so ask for
+    /// their contacts and rooms beside `me` instead of after it — one round
+    /// trip, not two. A `me` without an actor still discards them unread.
+    func sharedRoster(expectingActor: Bool = false) async throws -> (SharedMe, [SharedContact], [SharedRoomSummary]) {
         guard let client else { throw APIError.transport("Computer is offline") }
-        let me = try await client.sharedMe()
-        guard me.actorId != nil else { return (me, [], []) }
+        guard expectingActor else {
+            let me = try await client.sharedMe()
+            guard me.actorId != nil else { return (me, [], []) }
+            async let contacts = client.sharedContacts()
+            async let rooms = client.sharedRooms()
+            return try await (me, contacts, rooms)
+        }
         async let contacts = client.sharedContacts()
         async let rooms = client.sharedRooms()
+        let me = try await client.sharedMe()
+        guard me.actorId != nil else { return (me, [], []) }
         return try await (me, contacts, rooms)
     }
 
@@ -1634,6 +1649,11 @@ final class Session: ObservableObject {
         let batch = pendingFrames
         pendingFrames.removeAll(keepingCapacity: true)
         var next = state
+#if DEBUG
+        if PerfProbe.enabled {
+            for frame in batch { if case let .message(_, message) = frame.frame { PerfProbe.scan(message.text, source: "frame") } }
+        }
+#endif
         for frame in batch {
             if case let .runtime(event) = frame.frame,
                let cutoff = mascotReplayCutoff, let seq = frame.seq, seq > cutoff {
@@ -1739,25 +1759,49 @@ final class Session: ObservableObject {
             // refused anyway, and a fresh install must not be shown the old
             // one. Unreachable is not "different": the stream attempt below
             // reports that the usual way.
-            do {
-                let live = try await client.environment()
-                if Task.isCancelled { return }
-                phoneUpdateRequired = nil
-                if let expected = client.connection.serverEnvironmentId, live.environmentId != expected {
-                    log.error("server identity changed: \(expected, privacy: .public) is now \(live.environmentId, privacy: .public)")
+            //
+            // The check and the stream dial race: waiting for one before
+            // opening the other cost every connect — launch, foreground,
+            // pull — a full extra round trip (two on a fresh socket). Nothing
+            // the stream sends is folded until the check has answered, so a
+            // different server still shows nothing. The bearer already goes
+            // out on the roster requests that run beside the stream.
+            let identity = Task { await Self.checkIdentity(client) }
+            defer { identity.cancel() }
+            var identityChecked = false
+            /// True when the check says this attempt must stop.
+            func stopForIdentity() async -> Bool {
+                guard !identityChecked else { return false }
+                identityChecked = true
+                let outcome = await identity.value
+                if Task.isCancelled { return true }
+                switch outcome {
+                case .same:
+                    phoneUpdateRequired = nil
+                    return false
+                case .unknown:
+                    return false
+                case let .changed(expected, live):
+                    log.error("server identity changed: \(expected, privacy: .public) is now \(live, privacy: .public)")
                     serverWasReset = true
                     status = .unauthorized
-                    return
+                    return true
+                case let .updateRequired(update):
+                    phoneUpdateRequired = update
+                    status = .offline("Update the app to connect to this server.")
+                    return true
                 }
-            } catch let update as PhoneUpdateRequired {
-                if Task.isCancelled { return }
-                phoneUpdateRequired = update
-                status = .offline("Update the app to connect to this server.")
-                return
-            } catch {
-                // Old companion sidecars have no descriptor. Network failures
-                // still go through normal stream recovery below.
             }
+            // A dial with no cursor is always answered resumed:false, which
+            // costs the full snapshot. Fetch it beside the dial; at hello it
+            // is used only if the server says it covers the hello cursor
+            // (older servers do not say, and it is fetched again as before).
+            let coldSnapshot = state.cursor == nil
+                ? Task { try await client.fleetForHydration(messages: Self.hydrationMessages) } : nil
+            defer { coldSnapshot?.cancel() }
+#if DEBUG
+            PerfProbe.mark("stream.open", state.cursor == nil ? "cold" : "cursor")
+#endif
             log.info("opening stream, cursor=\(self.state.cursor ?? "none", privacy: .public)")
             do {
                 // The query is fixed when the connection opens, so changing
@@ -1773,6 +1817,7 @@ final class Session: ObservableObject {
 #endif
                 for try await frame in events {
                     if Task.isCancelled { return }
+                    if await stopForIdentity() { return }
                     reconnectDelay = 0
                     if Date().timeIntervalSince(lastFrameTrace) > 5 {
                         lastFrameTrace = Date()
@@ -1792,6 +1837,9 @@ final class Session: ObservableObject {
                         mascotCompletionIDs.removeAll()
                         mascotReplayCutoff = cursor.split(separator: ":").last.flatMap { Int($0) }
                         traceConnection("hello resumed=\(resumed)")
+#if DEBUG
+                        PerfProbe.mark("hello", "resumed=\(resumed)")
+#endif
                         log.info("stream live, resumed=\(resumed, privacy: .public)")
                         // false means the server could not replay the gap —
                         // the one case that costs a full hydrate. Commit the
@@ -1799,11 +1847,14 @@ final class Session: ObservableObject {
                         // the request dies halfway through replay/hydration,
                         // reconnecting must still ask for the missing gap.
                         if !resumed {
-                            try await hydrate(using: client)
+                            try await hydrate(using: client, prefetched: coldSnapshot, hello: cursor)
                             try Task.checkCancellation()
                             state.resetCursor(cursor)
                         }
                         status = .live
+#if DEBUG
+                        PerfProbe.mark("status.live")
+#endif
                         // The next cold launch draws this roster at once,
                         // even if this computer is down by then.
                         if !resumed { saveRosterCache() }
@@ -1832,12 +1883,14 @@ final class Session: ObservableObject {
                 // Cancellation may end AsyncThrowingStream normally. The old
                 // stream must never mark its replacement offline during refresh.
                 if Task.isCancelled { return }
+                if await stopForIdentity() { return }
                 flushFrames()
                 // the stream ended without an error — the harness went away
                 log.notice("stream ended without an error")
                 status = .offline(failureMessage(for: URLError(.networkConnectionLost)))
             } catch let error as APIError where error.isUnauthorized {
                 if Task.isCancelled { return }
+                if await stopForIdentity() { return }
                 log.error("stream refused: unauthorized")
                 status = .unauthorized
                 return
@@ -1848,6 +1901,7 @@ final class Session: ObservableObject {
                     log.info("stream closed by us")
                     return
                 }
+                if await stopForIdentity() { return }
                 flushFrames()
                 traceConnection("stream error domain=\((error as NSError).domain) code=\((error as NSError).code)")
                 log.error("stream failed: \(error.localizedDescription, privacy: .public)")
@@ -1859,6 +1913,27 @@ final class Session: ObservableObject {
             // not the laptop's should not hammer it.
             reconnectDelay = reconnectDelay == 0 ? 1 : min(reconnectDelay * 2, 15)
             try? await Task.sleep(nanoseconds: reconnectDelay * 1_000_000_000)
+        }
+    }
+
+    private enum IdentityCheck: Sendable {
+        case same, unknown
+        case changed(expected: String, live: String)
+        case updateRequired(PhoneUpdateRequired)
+    }
+
+    /// The descriptor check behind `run()`, off the main actor.
+    private nonisolated static func checkIdentity(_ client: CompanionClient) async -> IdentityCheck {
+        do {
+            let live = try await client.environment()
+            guard let expected = client.connection.serverEnvironmentId else { return .same }
+            return live.environmentId == expected ? .same : .changed(expected: expected, live: live.environmentId)
+        } catch let update as PhoneUpdateRequired {
+            return .updateRequired(update)
+        } catch {
+            // Old companion sidecars have no descriptor. Network failures
+            // still go through normal stream recovery.
+            return .unknown
         }
     }
 
@@ -1964,17 +2039,35 @@ final class Session: ObservableObject {
         }
     }
 
-    private func hydrate(using client: CompanionClient) async throws {
+    private static let hydrationMessages = 50
+
+    private func hydrate(
+        using client: CompanionClient,
+        prefetched: Task<(fleet: Fleet, waitingThreads: [String: ThreadPage]), Error>? = nil,
+        hello: String? = nil
+    ) async throws {
         let generation = streamGeneration
         // Notification navigation can refresh while run() continues folding
         // live events. Retry once if that makes the fetched snapshot stale.
-        for _ in 0..<2 {
+        for attempt in 0..<2 {
             // Buffered frames must count as folded here, or one received
             // during the fetch would not move the cursor and the
             // stale-snapshot check below could not see it.
             flushFrames()
             let expectedCursor = state.cursor
-            let snapshot = try await client.fleetForHydration(messages: 50)
+            // A snapshot fetched while the stream dialed is good only if it
+            // already holds everything up to the hello cursor; the frames
+            // after it fold on top, exactly as after a fetch made now.
+            var early: (fleet: Fleet, waitingThreads: [String: ThreadPage])?
+            if attempt == 0, let prefetched, let hello, let fetched = try? await prefetched.value,
+               fetched.fleet.covers(hello: hello) {
+                early = fetched
+            }
+#if DEBUG
+            PerfProbe.mark("hydrate.snapshot", early == nil ? "fetched" : "prefetched")
+#endif
+            let snapshot: (fleet: Fleet, waitingThreads: [String: ThreadPage])
+            if let early { snapshot = early } else { snapshot = try await client.fleetForHydration(messages: Self.hydrationMessages) }
             try Task.checkCancellation()
             guard streamGeneration == generation, self.client?.connection.id == client.connection.id else {
                 throw CancellationError()
@@ -1982,6 +2075,10 @@ final class Session: ObservableObject {
             flushFrames()
             guard state.hydrate(snapshot.fleet, waitingThreads: snapshot.waitingThreads,
                                 ifCursorMatches: expectedCursor) else { continue }
+#if DEBUG
+            PerfProbe.mark("hydrate.done")
+            PerfProbe.scan(snapshot.fleet, source: "hydrate")
+#endif
             log.info("hydrated \(snapshot.fleet.bots.count, privacy: .public) bots, \(snapshot.fleet.groups.count, privacy: .public) rooms")
             applyBadge(state.unreadCount)
             if roomActorId == nil { Task { await loadRoomSelf(using: client) } }

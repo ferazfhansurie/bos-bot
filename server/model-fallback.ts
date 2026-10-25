@@ -34,7 +34,13 @@ export function replacementModel(instance: ProviderInstance, refused: ReadonlySe
   return official[0]?.id ?? null;
 }
 
-export function fallbackSelection(model: string, instances: readonly ProviderInstance[], preferred?: string): ModelSelection | null {
+export function fallbackSelection(model: string, instances: readonly ProviderInstance[], preferred?: string, explicit?: string): ModelSelection | null {
+  // The owner named the backup subscription, so a sibling account is allowed.
+  if (explicit) {
+    const named = instances.find(instance => instance.instanceId === explicit && instance.instanceId !== preferred &&
+      (instance.models.default === model || instance.models.options.some(option => option.id === model)));
+    return named ? { instanceId: named.instanceId, model } : null;
+  }
   const source = instances.find(instance => instance.instanceId === preferred);
   // A model-only fallback never authorizes borrowing a sibling subscription.
   const offered = instances.filter(instance =>
@@ -90,7 +96,7 @@ export class ModelFallbackService {
       return this.roomCompatible(botId, threadId, existing.from, existing.to, mode) ? this.roomSelection(botId, threadId) : bot.modelSelection;
     }
     const from = structuredClone(bot.modelSelection);
-    const targetSelection = fallbackSelection(bot.fallbackModel!, this.options.instances(), from.instanceId);
+    const targetSelection = fallbackSelection(bot.fallbackModel!, this.options.instances(), from.instanceId, bot.fallbackInstanceId);
     const exhausted = exhaustion(rows.find(row => row.instanceId === from.instanceId));
     if (!targetSelection || !exhausted.length || exhaustion(rows.find(row => row.instanceId === targetSelection.instanceId)).length ||
         !this.roomCompatible(botId, threadId, from, targetSelection, mode)) return from;
@@ -99,7 +105,7 @@ export class ModelFallbackService {
     const snapshot = await this.options.instances().find(instance => instance.instanceId === targetSelection.instanceId)!.snapshot();
     const fresh = this.options.store.bot(botId);
     if (!guard() || snapshot.state !== "available" || snapshot.authenticated === false || !fresh ||
-        fresh.fallbackModel !== bot.fallbackModel || !sameSelection(fresh.modelSelection, from) ||
+        fresh.fallbackModel !== bot.fallbackModel || fresh.fallbackInstanceId !== bot.fallbackInstanceId || !sameSelection(fresh.modelSelection, from) ||
         !this.roomCompatible(botId, threadId, from, targetSelection, mode)) return this.roomSelection(botId, threadId);
     const resetAt = exhausted.every(window => window.resetsAt !== null) ? Math.max(...exhausted.map(window => window.resetsAt! * 1000)) : null;
     this.options.store.patchBot(botId, { roomModelFallbacks: { ...fresh.roomModelFallbacks, [threadId]: {
@@ -136,7 +142,7 @@ export class ModelFallbackService {
     const bot = this.options.store.projectBotForTask(botId, threadId);
     const task = this.options.store.taskByThread(botId, threadId);
     if (!guard() || !bot?.fallbackModel || task?.modelFallback) return false;
-    const selection = fallbackSelection(bot.fallbackModel, this.options.instances(), bot.modelSelection.instanceId);
+    const selection = fallbackSelection(bot.fallbackModel, this.options.instances(), bot.modelSelection.instanceId, bot.fallbackInstanceId);
     if (!selection || sameSelection(selection, bot.modelSelection) || !this.compatible(botId, threadId, selection)) return false;
     if (exhaustion(rows.find(row => row.instanceId === selection.instanceId)).length) return false;
     const target = this.options.instances().find(instance => instance.instanceId === selection.instanceId)!;
@@ -145,7 +151,7 @@ export class ModelFallbackService {
     const snapshot = await target.snapshot();
     if (snapshot.state !== "available" || snapshot.authenticated === false || !this.compatible(botId, threadId, selection)) return false;
     const fresh = this.options.store.projectBotForTask(botId, threadId);
-    if (!guard() || !fresh || fresh.fallbackModel !== bot.fallbackModel || !sameSelection(fresh.modelSelection, bot.modelSelection) || this.options.store.taskByThread(botId, threadId)?.modelFallback) return false;
+    if (!guard() || !fresh || fresh.fallbackModel !== bot.fallbackModel || fresh.fallbackInstanceId !== bot.fallbackInstanceId || !sameSelection(fresh.modelSelection, bot.modelSelection) || this.options.store.taskByThread(botId, threadId)?.modelFallback) return false;
     const sourceUsage = rows.find(row => row.instanceId === bot.modelSelection.instanceId);
     const exhausted = exhaustion(sourceUsage);
     // Error classification can lead telemetry. Use known future window resets,

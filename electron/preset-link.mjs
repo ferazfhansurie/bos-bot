@@ -22,6 +22,19 @@ export function presetTokenFromLink(raw) {
   } catch { return null; }
 }
 
+/** The token in a friend invite link, bosbot://invite?token=<token> (the
+ * people service's invite page), or null for anything else. */
+export function inviteTokenFromLink(raw) {
+  try {
+    const url = new URL(String(raw));
+    if (!PACKAGE_SCHEMES.includes(url.protocol.slice(0, -1)) || url.hostname !== 'invite') return null;
+    if (!['', '/'].includes(url.pathname) || url.hash || url.username || url.password || url.port) return null;
+    if ([...url.searchParams.keys()].some((key) => key !== 'token') || url.searchParams.getAll('token').length !== 1) return null;
+    const token = url.searchParams.get('token') ?? '';
+    return /^[\w-]{10,64}$/.test(token) ? token : null;
+  } catch { return null; }
+}
+
 /** The claim answer, checked: a preset object, and broker access only when it
  * is a well-formed HTTPS broker and token. */
 export function parsePresetClaim(body) {

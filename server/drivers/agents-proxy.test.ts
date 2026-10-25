@@ -45,6 +45,8 @@ let postCalls = 0;
 let ringBody: unknown = null;
 let ringStatus = 202;
 let tabBody: unknown = null;
+const appRequests: { method: string; url: string; body: unknown }[] = [];
+const deskBodies: Array<{ path: string; body: unknown }> = [];
 let postResponse: unknown = { ok: true, messageId: "msg-1", roomName: "Launch" };
 const DEFAULT_AGENTS = { bots: [{ id: "bot-helper", name: "Helper", model: "fake-model", busy: false }] };
 let agentsResponse: unknown = DEFAULT_AGENTS;
@@ -188,6 +190,30 @@ beforeAll(async () => {
     if (req.method === "GET" && req.url === "/api/internal/doctor") {
       res.writeHead(200, { "content-type": "application/json" });
       return res.end(JSON.stringify({ checkedAt: 1, checks: [{ id: "push", status: "warning", detail: "Push is not set up on this BOS." }], notices: [], safeMode: { enabled: false, reason: null } }));
+    }
+    if (req.url?.startsWith("/api/internal/apps")) {
+      let raw = "";
+      req.on("data", chunk => { raw += chunk; });
+      req.on("end", () => {
+        appRequests.push({ method: req.method ?? "", url: req.url ?? "", body: raw ? JSON.parse(raw) : null });
+        const write = req.url!.endsWith("/write");
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify(write ? { ok: true, rev: 2, records: [{ id: "ali", name: "Ali", stage: "hot" }] } : { apps: [] }));
+      });
+      return;
+    }
+    if (req.method === "POST" && req.url?.startsWith("/api/internal/desks/")) {
+      let raw = "";
+      req.on("data", chunk => { raw += chunk; });
+      req.on("end", () => {
+        deskBodies.push({ path: req.url!, body: JSON.parse(raw) });
+        const bad = String((JSON.parse(raw) as { code?: string }).code ?? "").includes("Nope");
+        res.writeHead(bad ? 400 : 200, { "content-type": "application/json" });
+        res.end(JSON.stringify(bad ? { error: 'that card would not draw: Unknown component "Nope". nothing was saved.' }
+          : req.url === "/api/internal/desks/open" ? { desk: { id: "d-0000abcd", kind: "browser", status: "needs_sign_in", cards: [] }, created: true }
+          : { removed: false, card: { id: "today", title: "today" }, cards: ["today"] }));
+      });
+      return;
     }
     if (req.method === "POST" && req.url === "/api/internal/tabs") {
       let raw = "";
@@ -486,6 +512,7 @@ beforeAll(async () => {
       OMB_SHARED_COMPUTERS_ENABLED: "1",
       OMB_WORK_CONTINUITY: "1",
       OMB_PAGE_TABS: "1",
+      OMB_DESKS: "1",
     },
     stdio: ["pipe", "pipe", "inherit"],
   });
@@ -529,6 +556,18 @@ describe("agents-proxy MCP surface", () => {
     expect(refused.result.content[0].text).toContain("wait ten minutes");
     ringStatus = 202;
   });
+  it("opens a desk, saves a card and passes a card that won't draw back to the bot", async () => {
+    const opened = await callTool("desk_open", { name: "gmail", url: "https://mail.google.com/" });
+    expect(opened.result.isError).toBe(false);
+    expect(opened.result.content[0].text).toContain("needs the person to sign in");
+    const saved = await callTool("desk_card", { desk_id: "d-0000abcd", card_id: "today", title: "today", code: 'root = Col([Title("x")])', data: { unread: 2 } });
+    expect(saved.result.content[0].text).toContain("Saved card today");
+    expect(deskBodies.at(-1)).toEqual({ path: "/api/internal/desks/card", body: { desk_id: "d-0000abcd", card_id: "today", title: "today", code: 'root = Col([Title("x")])', data: { unread: 2 } } });
+    const bad = await callTool("desk_card", { desk_id: "d-0000abcd", card_id: "today", code: 'root = Col([Nope("x")])' });
+    expect(bad.result.isError).toBe(true);
+    expect(bad.result.content[0].text).toContain("would not draw");
+    expect((await callTool("desk_open", { name: "x", botId: "victim" })).result.isError).toBe(true);
+  });
   it("opens a page tab beside this conversation and passes the server's refusal through", async () => {
     const opened = await callTool("open_tab", { path: "bos-pages/deck.html", title: "bos deck" });
     expect(opened.result.isError).toBe(false);
@@ -538,6 +577,18 @@ describe("agents-proxy MCP surface", () => {
     const missing = await callTool("open_tab", { path: "bos-pages/missing.html" });
     expect(missing.result.isError).toBe(true);
     expect(missing.result.content[0].text).toContain("Write it first");
+  });
+  it("reads and writes app data only by app id, through the server", async () => {
+    expect((await callTool("app_write", { app_id: "../pages", ops: [] })).result.isError).toBe(true);
+    expect(appRequests).toHaveLength(0);
+    const read = await callTool("app_read", { app_id: "a-abcdefabcdef", collection: "contacts", query: "ali" });
+    expect(read.result.isError).toBe(false);
+    expect(appRequests.at(-1)).toMatchObject({ method: "GET", url: "/api/internal/apps/a-abcdefabcdef/read?collection=contacts&query=ali" });
+    const ops = [{ op: "patch", collection: "contacts", id: "ali", fields: { stage: "hot" } }];
+    const wrote = await callTool("app_write", { app_id: "a-abcdefabcdef", ops });
+    expect(wrote.result.content[0].text).toContain("rev 2");
+    expect(appRequests.at(-1)).toEqual({ method: "POST", url: "/api/internal/apps/a-abcdefabcdef/write", body: { ops } });
+    expect((await callTool("apps_list", {})).result.content[0].text).toContain("No apps yet");
   });
   it("describes all configuration tools as result-aware without changing credential requirements", async () => {
     const list = await rpc("tools/list");
@@ -678,6 +729,14 @@ describe("agents-proxy MCP surface", () => {
       "shared_computer",
       "set_next_wake",
       "open_tab",
+      "apps_list",
+      "app_create",
+      "app_read",
+      "app_write",
+      "desk_open",
+      "desk_card",
+      "desk_list",
+      "desk_remove",
       "ring_owner",
       "health_check",
       "list_bots",
@@ -2136,6 +2195,9 @@ describe("coordinate_bots arguments (room turn)", () => {
     expect(list.result.tools.map((tool: { name: string }) => tool.name)).not.toContain("page_read");
     expect(list.result.tools.map((tool: { name: string }) => tool.name)).not.toContain("video_read");
     expect(list.result.tools.map((tool: { name: string }) => tool.name)).not.toContain("open_tab");
+    expect(list.result.tools.map((tool: { name: string }) => tool.name)).not.toContain("app_create");
+    expect(list.result.tools.map((tool: { name: string }) => tool.name)).toContain("app_write");
+    expect(list.result.tools.map((tool: { name: string }) => tool.name)).not.toContain("desk_open");
   });
 
   it("maps camelCase aliases onto the canonical snake_case fields", async () => {

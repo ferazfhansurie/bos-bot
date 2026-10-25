@@ -12,11 +12,14 @@ const RANK: Record<ActivityState, number> = { waiting: 0, tool: 1, typing: 2, th
 const LIVE = new Set<ActivityState>(["waiting", "tool", "typing", "thinking"]);
 export const isLive = (state: ActivityState | undefined) => Boolean(state && LIVE.has(state));
 
+/** how long a finished or failed turn stays at the notch; both halves read it */
+export const MOMENT_MS = 6_000;
+
 const SHELF_RESTING = 4;
 const MAX_WORKING = 12;
 const PREVIEW = 280;
 
-type NotchBotRecord = Pick<Bot, "id" | "name" | "color" | "mascotBody" | "threadId" | "tasks" | "hidden" | "busy" | "activity">;
+type NotchBotRecord = Pick<Bot, "id" | "name" | "color" | "mascotBody" | "threadId" | "tasks" | "hidden" | "busy" | "activity"> & { messages?: Bot["messages"] };
 type NotchGroupRecord = Pick<Group, "id" | "name" | "threadId" | "tasks">;
 
 export interface NotchInputs {
@@ -139,8 +142,30 @@ export function buildNotchSnapshot(inputs: NotchInputs): NotchSnapshot {
     shelf: [...working, ...resting],
     bots,
     asks,
-    moments: inputs.moments.filter((moment) => moment.threadId !== inputs.hiddenThreadId && bots[moment.botId]),
+    moments: inputs.moments
+      .filter((moment) => moment.threadId !== inputs.hiddenThreadId && bots[moment.botId])
+      .map((moment) => {
+        const preview = momentPreview(moment, inputs.bots);
+        return preview ? { ...moment, preview } : moment;
+      }),
   };
+}
+
+const MOMENT_PREVIEW = 140;
+
+/** What the bot said last in a finished thread, when that thread is the one
+ * the app holds messages for. Its reply can land a beat after the turn
+ * ends, so this is read on every snapshot rather than kept on the moment. */
+export function momentPreview(moment: Pick<NotchMoment, "botId" | "threadId" | "kind">, bots: readonly NotchBotRecord[]): string {
+  if (moment.kind !== "done") return "";
+  const bot = bots.find((candidate) => candidate.id === moment.botId);
+  if (!bot || bot.threadId !== moment.threadId || !bot.messages?.length) return "";
+  for (let index = bot.messages.length - 1; index >= 0; index -= 1) {
+    const message = bot.messages[index]!;
+    if (message.role === "user") return "";
+    if (message.kind === "text" && message.text?.trim()) return clip(message.text.replace(/[*_`#>]+/g, ""), MOMENT_PREVIEW);
+  }
+  return "";
 }
 
 /** A finished or failed turn worth a moment at the notch: a live thread

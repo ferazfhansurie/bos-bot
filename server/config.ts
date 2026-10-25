@@ -278,6 +278,11 @@ const featureConfigSchema = z.object({
    * /learn) for your review. On unless explicitly switched off in Settings;
    * every draft still waits for review. */
   skillAuthoring: z.boolean().optional(),
+  /** After a person-started run with real tool work, the bot's cheap
+   * one-shot may draft a skill from it (Full access applies it, otherwise a
+   * review card). On whenever skillAuthoring is on, unless switched off —
+   * see autoSkillsEnabled. */
+  autoSkills: z.boolean().optional(),
   /** Show each tool run in the transcript. Off unless explicitly enabled. */
   showToolCalls: z.boolean().optional(),
   /** Experimental built-in browser. Off until explicitly enabled; each bot
@@ -550,7 +555,7 @@ export interface AppConfig {
    * separate container, durable workspace, viewer and lease. */
   localVm?: { mode?: "shared" | "per-bot"; maxInstances?: number };
   /** Opt-in product experiments. Every flag defaults to disabled. */
-  features?: { skillAuthoring?: boolean; showToolCalls?: boolean; browser?: boolean; sharedComputers?: boolean; claudeUserMcp?: boolean; llmThreadTitles?: boolean; marketplacePublisher?: boolean; managedCodex?: boolean; managedClaude?: boolean };
+  features?: { skillAuthoring?: boolean; autoSkills?: boolean; showToolCalls?: boolean; browser?: boolean; sharedComputers?: boolean; claudeUserMcp?: boolean; llmThreadTitles?: boolean; marketplacePublisher?: boolean; managedCodex?: boolean; managedClaude?: boolean };
   /** First-run progress; see onboardingConfigSchema. */
   onboarding?: { pendingOffer?: "generic" | "digital-marketer"; marketerAssignment?: import("../shared/bos-onboarding.ts").FirstAssignment; marketerBrief?: import("../shared/bos-onboarding.ts").BusinessBrief; firstAssignment?: import("../shared/bos-onboarding.ts").FirstAssignment; businessBrief?: import("../shared/bos-onboarding.ts").BusinessBrief; completedAt?: string; version?: number; reelSeen?: boolean; hintsSeen?: string[]; chat?: import("../shared/onboarding-chat.ts").OnboardingChatState };
   /** Named browser sessions any bot can be pointed at. */
@@ -742,6 +747,12 @@ export function localVmMaxInstances(cfg: AppConfig): number {
  * `skillRecorder: false` carried over at startup) switches it off. */
 export function skillAuthoringEnabled(cfg: AppConfig): boolean {
   return cfg.features?.skillAuthoring !== false;
+}
+
+/** Automatic skills ride on skill authoring: on with it, unless an explicit
+ * saved `false` switched just this off. */
+export function autoSkillsEnabled(cfg: AppConfig): boolean {
+  return skillAuthoringEnabled(cfg) && cfg.features?.autoSkills !== false;
 }
 
 /** Tool-run chips in transcripts: on unless a room header switched them off. */

@@ -10,10 +10,9 @@ import { appendDraftAttachments } from "@/lib/drafts";
 import { answerInboxItem, fetchInbox, type InboxItem } from "@/lib/inbox";
 import { openNotificationTarget, useStore, visibleNotificationThread } from "@/state/store";
 import { setNotchActive } from "./active";
-import { askKey, buildNotchSnapshot, momentFor, threadTitle } from "./feed";
+import { MOMENT_MS, askKey, buildNotchSnapshot, momentFor, threadTitle } from "./feed";
 import type { NotchAction, NotchDrop, NotchMoment } from "./types";
 
-const MOMENT_MS = 6_000;
 const SEND_EVERY_MS = 250;
 
 export function NotchFeed() {
@@ -157,6 +156,16 @@ function Feed({ bridge }: { bridge: NonNullable<NonNullable<Window["ogb"]>["notc
       dispatch({ type: "revealThread", threadId });
     };
     if (action.type === "open") return open(action.botId, action.threadId);
+    if (action.type === "ask") {
+      // the same path as a reply typed into a banner: into the thread the
+      // bot is on, and the app stays where the person left it
+      const group = current.groups.find((candidate) =>
+        candidate.threadId === action.threadId || (candidate.tasks ?? []).some((task) => task.threadId === action.threadId));
+      if (group) return dispatch({ type: "sendGroup", groupId: group.id, threadId: action.threadId, text: action.text });
+      if (!current.bots.some((bot) => bot.id === action.botId)) return;
+      dispatch({ type: "send", botId: action.botId, threadId: action.threadId, text: action.text });
+      return;
+    }
     if (action.type === "drop") {
       const draft = dropDraft(current, action.botId, action.threadId);
       open(action.botId, action.threadId);

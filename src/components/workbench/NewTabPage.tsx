@@ -7,6 +7,7 @@ import { Folders, GitCompare, Globe, LayoutTemplate, MessageCirclePlus, MoreHori
 import { Menu, anchorOf, type MenuAnchor } from "@/components/workbench/Menu";
 import type { TabIcon } from "@/components/workbench/registry";
 import { cn } from "@/lib/cn";
+import { appIcon } from "@/components/canvas/app-icons";
 
 /** "blank" is the blank tab: an empty page bos draws whatever you ask into
  * (decks, dashboards, docs; videos hand off to the video editor). It replaced
@@ -32,8 +33,13 @@ export interface NewTabPins {
   pin: (choice: NewTabPinned) => void;
 }
 
-export function NewTabPage({ onPick, blank = true, changes = false, botBrowser = false, pins, className }: {
+/** Apps (pages with their own data) the new tab lists under Blank tab. */
+export interface NewTabApps { apps: { id: string; name: string; icon?: string }[]; open: (id: string) => void }
+
+export function NewTabPage({ onPick, blank = true, changes = false, botBrowser = false, pins, apps, className }: {
   onPick: (tool: NewTabTool) => void;
+  /** This conversation's apps, or a room's shared ones. */
+  apps?: NewTabApps;
   /** Pinned pages; absent where blank tabs can't open. */
   pins?: NewTabPins;
   /** Whether a blank tab can open (direct conversations, kind registered). */
@@ -80,6 +86,18 @@ export function NewTabPage({ onPick, blank = true, changes = false, botBrowser =
                 </button>
               )}
             </div>
+            {tool === "blank" && apps?.apps.slice(0, 12).map(app => {
+              const AppIcon = appIcon(app.icon);
+              return (
+                <div key={app.id} role="listitem" data-testid="new-tab-app">
+                  <button type="button" onClick={() => apps.open(app.id)} title={app.name}
+                    className="flex h-10 w-full items-center gap-2 rounded-lg bg-ink/[.04] pe-2 ps-2.5 text-left text-[14px] text-ink transition-colors duration-150 ease-out hover:bg-ink/[.078] focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent">
+                    <AppIcon size={16} strokeWidth={1.75} className="shrink-0 text-ink/80" />
+                    <span className="min-w-0 flex-1 truncate">{app.name}</span>
+                  </button>
+                </div>
+              );
+            })}
             {tool === "blank" && pins?.pinned.map(page => (
               <div key={page.key} role="listitem" className="group/pin relative" data-testid="new-tab-pinned">
                 <button type="button" onClick={() => pins.open(page.key)} title={page.title}

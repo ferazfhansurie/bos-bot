@@ -30,7 +30,12 @@ final class NotificationCoordinator: NSObject, UNUserNotificationCenterDelegate 
     }
     var pushRegistrationFailureHandler: (@MainActor () -> Void)?
     var pushTokenHandler: ((String) -> Void)?
-    var sharedRoomHandler: ((String, String?) -> Void)?
+    /// A room tap that launches the app arrives before `Session` sets this;
+    /// it waits in `pendingSharedRoom` like a thread tap does.
+    var sharedRoomHandler: ((String, String?) -> Void)? {
+        didSet { if let room = pendingSharedRoom, let sharedRoomHandler { pendingSharedRoom = nil; sharedRoomHandler(room.id, room.connectionId) } }
+    }
+    private var pendingSharedRoom: (id: String, connectionId: String?)?
     var foregroundPresentation: (@MainActor (NotificationTarget) -> NotificationPresentation)?
     var foregroundSharedPresentation: (@MainActor (String, String?) -> NotificationPresentation)?
     var foregroundVoicePresentation: (@MainActor (VoicePush, String?) -> NotificationPresentation)?
@@ -222,7 +227,11 @@ final class NotificationCoordinator: NSObject, UNUserNotificationCenterDelegate 
             if let voiceHandler { Task { @MainActor in voiceHandler(action) } } else { pendingVoiceAction = action }
         } else if let hint = CloudPushHint(userInfo: response.notification.request.content.userInfo) {
             if let cloudHintHandler { Task { @MainActor in cloudHintHandler(hint) } } else { pendingCloudHint = hint }
-        } else if let roomID = strings["roomId"] { sharedRoomHandler?(roomID, strings["connectionId"]) }
+        } else if let roomID = strings["roomId"] {
+            guard response.actionIdentifier != UNNotificationDismissActionIdentifier else { completionHandler(); return }
+            if let sharedRoomHandler { sharedRoomHandler(roomID, strings["connectionId"]) }
+            else { pendingSharedRoom = (roomID, strings["connectionId"]) }
+        }
         else if let target = NotificationTarget(payload: strings),
                 response.actionIdentifier != UNNotificationDismissActionIdentifier {
             Task { @MainActor in self.openThread(target) }

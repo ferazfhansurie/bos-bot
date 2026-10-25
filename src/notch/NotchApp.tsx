@@ -7,12 +7,17 @@
 //   shelf   the pointer is on it (or a file is being dragged to it)
 //   card    a bot just started waiting on the person: it climbs out
 //   moment  a bot just finished, or failed
-//   peek    bots are working: their faces at the camera's edge
-//   rest    nothing: no shape at all
+//   peek    bots are working: their faces at the camera's edge, still
+//   rest    nothing: no shape at all; a click on the camera opens the shelf
+//
+// Nothing moves unless it needs the person: a working bot's face holds
+// still, an app full screen sees only asks, and in a menu bar without a
+// camera the pill stays inside the bar.
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type DragEvent, type ReactNode } from "react";
 import { resolveMausColor, type GlyphFaceState } from "../../shared/glyph-faces";
 import { FOLD_SPRING, SHAPE_SPRING, Spring, notchPath } from "./spring";
 import { NotchMascot, faceFor } from "./NotchMascot";
+import { MOMENT_MS } from "./feed";
 import type { NotchAction, NotchAnswer, NotchAsk, NotchBot, NotchGeometry, NotchMoment, NotchPointer, NotchSnapshot } from "./types";
 
 interface NotchBridge {
@@ -42,10 +47,8 @@ const MAX_HEADS = 3;
 const MAX_ROWS = 7;
 const MAX_SHELF_ASKS = 2;
 const DWELL_MS = 200;
-const REST_DWELL_MS = 380;
 const LEAVE_GRACE_MS = 220;
 const CARD_MS = 7_000;
-const MOMENT_MS = 3_800;
 const HAPPY_MS = 1_400;
 
 const EMPTY: NotchSnapshot = { working: [], shelf: [], bots: {}, asks: [], moments: [] };
@@ -102,6 +105,7 @@ export function NotchApp() {
   const [panelHeight, setPanelHeight] = useState(0);
   const [lookX, setLookX] = useState<number | null>(null);
   const [dropBot, setDropBot] = useState<string | null>(null);
+  const [heldMoment, setHeldMoment] = useState<NotchMoment | null>(null);
   const presented = useRef(new Set<string>());
   const typing = useRef(false);
 
@@ -148,10 +152,15 @@ export function NotchApp() {
     return () => window.clearTimeout(timer);
   }, [card, hover]);
 
-  const moment = useMemo<NotchMoment | null>(() => {
+  const fullscreen = geometry?.fullscreen === true;
+  const freshMoment = useMemo<NotchMoment | null>(() => {
     const fresh = snap.moments.filter((candidate) => candidate.at > now - MOMENT_MS);
     return fresh.length ? fresh.reduce((a, b) => (b.at > a.at ? b : a)) : null;
   }, [snap.moments, now]);
+  // a moment under the pointer stays until the pointer leaves, so reaching
+  // for it never ends with a click on whatever replaced it; the copy held
+  // takes the reply's text as it lands
+  const moment = heldMoment ? snap.moments.find((candidate) => candidate.id === heldMoment.id) ?? heldMoment : fullscreen ? null : freshMoment;
   // wake when a moment or a happy face should end
   useEffect(() => {
     const ends = [
@@ -164,7 +173,8 @@ export function NotchApp() {
   }, [snap.moments, happy, now]);
   useEffect(() => setNow(Date.now()), [snap.moments]);
 
-  const live = snap.working.length > 0 || asks.length > 0;
+  // full screen: only a bot waiting on the person may show
+  const live = (snap.working.length > 0 && !fullscreen) || asks.length > 0;
   const notchMode = geometry?.mode === "notch";
   const mode: Mode = drag || shelf
     ? "shelf"
@@ -195,35 +205,39 @@ export function NotchApp() {
     };
     if (mode === "moment" && moment) add(moment.botId, moment.kind === "done" ? "finished" : "failed", moment.threadId);
     if (card) add(card.botId, "waiting", card.threadId);
-    if (happyBot) add(happyBot, "happy", "");
+    // the happy face opens the thread its row opens
+    if (happyBot) add(happyBot, "happy", snap.shelf.find((bot) => bot.id === happyBot)?.threadId ?? "");
     for (const ask of asks) add(ask.botId, "waiting", ask.threadId);
-    for (const bot of snap.working) add(bot.id, faceFor(bot.state), bot.threadId);
+    if (!fullscreen) for (const bot of snap.working) add(bot.id, faceFor(bot.state), bot.threadId);
     return list;
-  }, [snap, asks, card, moment, mode, happyBot]);
+  }, [snap, asks, card, moment, mode, happyBot, fullscreen]);
 
   // ---- geometry -----------------------------------------------------------
   const win = geometry?.window ?? { width: 760, height: 520 };
   const cx = win.width / 2;
   const nw = notchMode ? geometry?.notch.width ?? 0 : 0;
-  // the pill is a touch taller than a short menu bar so a head never meets its edge
-  const band = notchMode ? Math.max(20, geometry?.notch.height || geometry?.menuBar || 32) : Math.max(geometry?.menuBar || 24, HEAD + 8);
+  // the pill stays inside the menu bar, its faces sized to fit it: hanging
+  // below the bar covered the top of whatever window sat under it
+  const band = notchMode ? Math.max(20, geometry?.notch.height || geometry?.menuBar || 32) : Math.max(18, geometry?.menuBar || 24);
+  const headSize = notchMode ? HEAD : Math.max(14, Math.min(HEAD, band - 6));
+  const step = Math.round(headSize * (STEP / HEAD));
   const gap = notchMode ? PAD : 6;
   const shown = heads.slice(0, MAX_HEADS);
   const overflow = heads.length - shown.length;
   const waitingDot = asks.length > 0 && mode !== "card";
-  const leftWing = shown.length ? gap + HEAD + (shown.length - 1) * STEP + PAD : 0;
+  const leftWing = shown.length ? gap + headSize + (shown.length - 1) * step + PAD : 0;
   const rightWing = overflow > 0 ? gap + 24 + PAD : waitingDot ? gap + 8 + PAD : 0;
   const wing = Math.max(leftWing, rightWing, shown.length ? 34 : 0);
   // with no notch to flank, the heads and their count sit as one centred row
-  const headsSpan = shown.length ? HEAD + (shown.length - 1) * STEP : 0;
+  const headsSpan = shown.length ? headSize + (shown.length - 1) * step : 0;
   const extraSpan = overflow > 0 ? 20 : waitingDot ? 8 : 0;
   const pillRow = headsSpan + (headsSpan && extraSpan ? 6 : 0) + extraSpan;
   const pillStart = cx - pillRow / 2;
-  const headX = (index: number) => notchMode ? cx - nw / 2 - gap - HEAD - index * STEP : pillStart + headsSpan - HEAD - index * STEP;
+  const headX = (index: number) => notchMode ? cx - nw / 2 - gap - headSize - index * step : pillStart + headsSpan - headSize - index * step;
   const extraLeft = notchMode ? cx + nw / 2 + gap : pillStart + headsSpan + (headsSpan ? 6 : 0);
-  const peekWidth = notchMode ? nw + wing * 2 : pillRow ? pillRow + 2 * 12 : 0;
+  const peekWidth = notchMode ? nw + wing * 2 : pillRow ? pillRow + 2 * 10 : 0;
   const openWidth = Math.min(Math.max(peekWidth, OPEN_WIDTH), win.width - 24);
-  const peekRadius = Math.min(band / 2 - 3, 11);
+  const peekRadius = notchMode ? Math.min(band / 2 - 3, 11) : Math.min(band / 2 - 2, 9);
 
   const target = useMemo(() => {
     switch (mode) {
@@ -318,6 +332,7 @@ export function NotchApp() {
     setDrag(false);
     setDropBot(null);
     setLookX(null);
+    setHeldMoment(null);
     typing.current = false;
     bridge?.setInteractive(false);
   }, [bridge]);
@@ -333,6 +348,7 @@ export function NotchApp() {
       setDrag(false);
       setDropBot(null);
       setLookX(null);
+      setHeldMoment(null);
     }, LEAVE_GRACE_MS);
   }, [bridge]);
 
@@ -345,9 +361,11 @@ export function NotchApp() {
     watchdog.current = window.setTimeout(() => {
       if (!sawMove.current) leave();
     }, 700);
-    if (mode === "card" || drag) return () => window.clearTimeout(watchdog.current);
+    // at rest a pass over the camera is not a request: a click opens the
+    // shelf. A card or a moment is read where it is, not swapped for it.
+    if (mode !== "peek" || drag) return () => window.clearTimeout(watchdog.current);
     window.clearTimeout(dwell.current);
-    dwell.current = window.setTimeout(() => setShelf(true), mode === "rest" ? REST_DWELL_MS : DWELL_MS);
+    dwell.current = window.setTimeout(() => setShelf(true), DWELL_MS);
     return () => {
       window.clearTimeout(dwell.current);
       window.clearTimeout(watchdog.current);
@@ -360,6 +378,22 @@ export function NotchApp() {
     const { width, height } = drawn.current;
     return Math.abs(x - cx) <= width / 2 + EAR + 6 && y <= height + 6;
   }, [cx]);
+
+  // the moment the pointer reached stays put until the pointer leaves
+  useEffect(() => {
+    if (hover && mode === "moment" && moment && heldMoment?.id !== moment.id) setHeldMoment(moment);
+  }, [hover, mode, moment, heldMoment]);
+
+  // at rest the root is hidden (the hardware notch is the shape), so the
+  // click is heard on the window, not the root
+  useEffect(() => {
+    if (mode !== "rest") return;
+    const onDown = (event: MouseEvent) => {
+      if (inside(event.clientX, event.clientY)) setShelf(true);
+    };
+    window.addEventListener("mousedown", onDown);
+    return () => window.removeEventListener("mousedown", onDown);
+  }, [mode, inside]);
 
   useEffect(() => {
     const onMove = (event: MouseEvent) => {
@@ -429,6 +463,12 @@ export function NotchApp() {
     typing.current = active;
     if (active) bridge?.setInteractive("keys");
   };
+  const ask = (botId: string, threadId: string, text: string) => {
+    if (!bridge || !threadId || !text.trim()) return;
+    bridge.act({ type: "ask", botId, threadId, text: text.trim() });
+    setHappy({ botId, until: Date.now() + HAPPY_MS });
+    fold();
+  };
 
   // ---- panel content, measured so the shape fits it -----------------------
   // a callback ref: the panel only mounts once geometry has arrived
@@ -459,6 +499,7 @@ export function NotchApp() {
         {!drag && asks.slice(0, MAX_SHELF_ASKS).map((ask) => (
           <AskCard key={ask.id} ask={ask} bot={look(ask.botId)} onAnswer={answer} onOpen={open} onTyping={onTyping} />
         ))}
+        {!drag && !asks.length && shelfRows.length > 0 && <QuickAsk rows={shelfRows} onSend={ask} onTyping={onTyping} />}
         {!drag && asks.length > MAX_SHELF_ASKS && (
           <button type="button" className="notch-more" onClick={() => open(asks[MAX_SHELF_ASKS]!.botId, asks[MAX_SHELF_ASKS]!.threadId)}>
             {asks.length - MAX_SHELF_ASKS} more waiting
@@ -475,7 +516,7 @@ export function NotchApp() {
   }
 
   // ---- heads in the band ---------------------------------------------------
-  const headTop = Math.round((band - HEAD) / 2) + (notchMode ? 1 : 0);
+  const headTop = Math.round((band - headSize) / 2) + (notchMode ? 1 : 0);
   const cardLeft = cx - openWidth / 2 + 16;
   const failedEdge = mode === "moment" && moment?.kind === "failed";
 
@@ -491,27 +532,31 @@ export function NotchApp() {
           const climbed = mode === "card" && card?.botId === head.id;
           const x = climbed ? cardLeft : headX(index);
           const y = climbed ? band + 12 : headTop;
-          const scale = climbed ? CLIMBED / HEAD : 1;
+          const scale = climbed ? CLIMBED / HEAD : headSize / HEAD;
           const style: CSSProperties = { transform: `translate(${x}px, ${y}px) scale(${scale})`, zIndex: 10 - index };
           const gesture = head.face === "finished" || head.face === "happy" ? "hop" : head.face === "failed" ? "shake" : climbed ? "climb" : "";
+          // a working face holds still; only one that needs the person blinks
+          const needs = head.face === "waiting";
           return (
             <button type="button" key={head.id} className="notch-head" style={style} title={head.name}
               onClick={() => open(head.id, head.threadId)} tabIndex={-1}>
               <span key={`${head.face}-${gesture}`} className={gesture && !reduced ? `notch-gesture-${gesture}` : undefined}>
                 <NotchMascot color={head.color} body={head.body} face={head.face} size={HEAD}
                   pixels={head.face === "finished" ? 26 : climbed ? CLIMBED : HEAD}
-                  look={lookX === null ? (climbed ? 0 : 0.35) : (lookX - (x + HEAD / 2)) / 120}
-                  animated={!reduced} blink={mode !== "shelf" || !drag} />
+                  look={lookX === null ? 0 : (lookX - (x + HEAD / 2)) / 120}
+                  animated={!reduced} blink={needs && !drag} />
               </span>
             </button>
           );
         })}
         {overflow > 0 && (
-          <span className="notch-overflow" style={{ left: extraLeft, top: 0, height: band }}>+{overflow}</span>
+          <button type="button" className="notch-overflow" style={{ left: extraLeft, top: 0, height: band }} tabIndex={-1}
+            onClick={() => setShelf(true)}>+{overflow}</button>
         )}
         {overflow === 0 && waitingDot && (
-          <span key={asks[0]!.id} className="notch-dot"
-            style={{ left: extraLeft, top: band / 2 - 4, ["--dot" as string]: dotColor(look(asks[0]!.botId)?.color) }} />
+          <button type="button" key={asks[0]!.id} className="notch-dot" title="needs you" tabIndex={-1}
+            onClick={() => setCardId(asks[0]!.id)}
+            style={{ left: extraLeft - 4, top: band / 2 - 8, ["--dot" as string]: dotColor(look(asks[0]!.botId)?.color) }} />
         )}
         <div ref={panelRef} className="notch-panel" style={{ left: cx - panelWidth / 2, top: band, width: panelWidth }}>
           {panel}
@@ -580,9 +625,12 @@ function AskCard({ ask, bot, climbed = false, onAnswer, onOpen, onTyping }: {
 function MomentLine({ moment, bot, onOpen }: { moment: NotchMoment; bot: Look; onOpen: (botId: string, threadId: string) => void }) {
   return (
     <button type="button" className={`notch-moment notch-enter notch-moment-${moment.kind}`} onClick={() => onOpen(moment.botId, moment.threadId)}>
-      <span className="notch-name">{bot.name}</span>
-      <span className="notch-moment-word">{moment.kind === "done" ? "finished" : "hit a problem"}</span>
-      {moment.title && <span className="notch-sub notch-moment-title">{moment.title}</span>}
+      <span className="notch-moment-top">
+        <span className="notch-name">{bot.name}</span>
+        <span className="notch-moment-word">{moment.kind === "done" ? "finished" : "hit a problem"}</span>
+        {moment.title && <span className="notch-sub notch-moment-title">{moment.title}</span>}
+      </span>
+      {moment.preview && <span className="notch-moment-preview">{moment.preview}</span>}
     </button>
   );
 }
@@ -618,5 +666,34 @@ function ShelfRow({ bot, now, drop, target, look, onOpen, reduced, asking }: {
         </span>
       )}
     </button>
+  );
+}
+
+/** A line for a new message to any bot on the shelf, into the thread its row
+ * opens; the chip picks the bot. The app stays where the person left it. */
+function QuickAsk({ rows, onSend, onTyping }: {
+  rows: readonly NotchBot[];
+  onSend: (botId: string, threadId: string, text: string) => void;
+  onTyping: (active: boolean) => void;
+}) {
+  const [index, setIndex] = useState(0);
+  const [text, setText] = useState("");
+  const bot = rows[index % rows.length]!;
+  return (
+    <form className="notch-quick" onSubmit={(event) => {
+      event.preventDefault();
+      onSend(bot.id, bot.threadId, text);
+    }}>
+      <button type="button" className="notch-chip" title="ask another bot"
+        style={{ ["--row" as string]: dotColor(bot.color) } as CSSProperties}
+        onClick={() => setIndex((value) => (value + 1) % rows.length)}>
+        <NotchMascot color={bot.color} body={bot.body} face="idle" size={16} pixels={16} animated={false} />
+        <span>{bot.name}</span>
+      </button>
+      <input value={text} placeholder={`ask ${bot.name}…`} maxLength={4000} aria-label={`ask ${bot.name}`}
+        onChange={(event) => setText(event.target.value)}
+        onFocus={() => onTyping(true)} onBlur={() => onTyping(Boolean(text))}
+        onMouseDown={() => onTyping(true)} />
+    </form>
   );
 }

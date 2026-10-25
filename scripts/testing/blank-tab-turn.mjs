@@ -15,7 +15,11 @@ const prompt = fs.readFileSync(process.env.FAKE_TURN_PROMPT, 'utf8');
 const system = process.env.FAKE_TURN_SYSTEM_PROMPT ? fs.readFileSync(process.env.FAKE_TURN_SYSTEM_PROMPT, 'utf8') : '';
 const config = JSON.parse(fs.readFileSync(process.env.FAKE_TURN_MCP_CONFIG, 'utf8'));
 const agents = config.mcpServers?.agents;
-const record = {prompt, skill: system.includes('<openmaus-skill id="blank-tab"'), agentsServer: Boolean(agents), cwd: process.cwd()};
+// other verifiers reuse this turn with their own skill and tools (verify-desks)
+const skillId = process.env.FAKE_CLAUDE_TURN_SKILL || 'blank-tab';
+const allowed = process.env.FAKE_CLAUDE_TURN_TOOLS || 'Read,Write,Edit,Glob,Grep,mcp__agents__open_tab,mcp__agents__apps_list,mcp__agents__app_create,mcp__agents__app_read,mcp__agents__app_write';
+const skills = [...system.matchAll(/<openmaus-skill id="([^"]+)"/g)].map(m => m[1]);
+const record = {prompt, skill: skills.includes(skillId), skills, agentsServer: Boolean(agents), cwd: process.cwd()};
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'blank-tab-turn-'));
 const mcp = path.join(tmp, 'mcp.json');
@@ -37,7 +41,7 @@ const env = {...base, ...JSON.parse(process.env.FAKE_CLAUDE_TURN_ENV || '{}')};
 const log = fs.openSync(path.join(evidence, `claude-${n}.log`), 'w');
 const args = ['-p', prompt, ...(resume ? ['--resume', session] : ['--session-id', session]),
   '--append-system-prompt-file', sys, '--mcp-config', mcp, '--strict-mcp-config',
-  '--setting-sources', 'project', '--permission-mode', 'acceptEdits', '--allowedTools', 'Read,Write,Edit,Glob,Grep,mcp__agents__open_tab',
+  '--setting-sources', 'project', '--permission-mode', 'acceptEdits', '--allowedTools', allowed,
   '--output-format', 'text', ...(process.env.FAKE_CLAUDE_TURN_DEBUG ? ['--debug', 'mcp'] : [])];
 let out = '';
 const child = spawn(process.env.FAKE_CLAUDE_TURN_CLAUDE || 'claude', args, {cwd: process.cwd(), env, stdio: ['ignore', 'pipe', log]});

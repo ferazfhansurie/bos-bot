@@ -189,6 +189,7 @@ describe("createGateInterceptor", () => {
     const answer = JSON.parse(refused[0]!);
     expect(answer.id).toBe(2);
     expect(answer.result.isError).toBe(true);
+    expect(answer.result.resultType).toBe("complete");
     expect(answer.result.content[0].text).toMatch(/taken control/i);
   });
 
@@ -260,7 +261,7 @@ describe("createMcpBridgeInterceptor", () => {
       forward: (line) => forwarded.push(line),
     });
     intercept(frame("ping", 1));
-    expect(answered).toEqual(['{"jsonrpc":"2.0","id":1,"result":{}}']);
+    expect(answered).toEqual([JSON.stringify({ jsonrpc: "2.0", id: 1, result: { resultType: "complete" } })]);
     expect(forwarded).toEqual([]);
   });
 
@@ -304,7 +305,7 @@ describe("createMcpBridgeInterceptor", () => {
     await drain();
     expect(forwarded).toEqual([]);
     expect(answered).toHaveLength(2);
-    expect(JSON.parse(answered[0]!)).toEqual({ jsonrpc: "2.0", id: 1, result: {} });
+    expect(JSON.parse(answered[0]!)).toEqual({ jsonrpc: "2.0", id: 1, result: { resultType: "complete" } });
     expect(JSON.parse(answered[1]!).result.isError).toBe(true);
     expect(JSON.parse(answered[1]!).result.content[0].text).toMatch(/taken control/i);
   });

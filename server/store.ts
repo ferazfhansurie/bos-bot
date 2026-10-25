@@ -1608,7 +1608,7 @@ export class Store {
     profile: Partial<
       Pick<
         BotRecord,
-        "name" | "title" | "description" | "soul" | "color" | "mascotExpression" | "mascotBody" | "mascotEyes" | "modelSelection" | "fallbackModel" | "section" | "workContinuity"
+        "name" | "title" | "description" | "soul" | "color" | "mascotExpression" | "mascotBody" | "mascotEyes" | "modelSelection" | "fallbackModel" | "fallbackInstanceId" | "section" | "workContinuity"
       >
     > = {},
     opts: {
@@ -1645,6 +1645,7 @@ export class Store {
       unread: false,
       modelSelection: profile.modelSelection ?? this.defaultSelection(),
       ...(profile.fallbackModel ? { fallbackModel: profile.fallbackModel } : {}),
+      ...(profile.fallbackModel && profile.fallbackInstanceId ? { fallbackInstanceId: profile.fallbackInstanceId } : {}),
       resumeCursors: {},
       createdAt: Date.now(),
       // Only a non-default level is written: an Ask bot keeps the historical

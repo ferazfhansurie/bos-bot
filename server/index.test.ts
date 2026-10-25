@@ -6981,7 +6981,7 @@ describe("harness HTTP API", () => {
   it("keeps skill authoring on by default and persists an explicit opt-out", async () => {
     const before = await api("GET", "/api/config");
     expect(before.status).toBe(200);
-    expect(before.body.features).toEqual({ browser: false, skillAuthoring: true, showToolCalls: true, sharedComputers: false, claudeUserMcp: false, marketplacePublisher: false });
+    expect(before.body.features).toEqual({ browser: false, skillAuthoring: true, autoSkills: true, showToolCalls: true, sharedComputers: false, claudeUserMcp: false, marketplacePublisher: false });
     // the default is the absence of the key: nothing is written until the toggle is used
     const untouched = JSON.parse(readFileSync(join(home, ".openmausbot", "config.json"), "utf8"));
     expect(untouched.features?.skillAuthoring).toBeUndefined();
@@ -6993,7 +6993,8 @@ describe("harness HTTP API", () => {
       features: { skillAuthoring: false },
     });
     expect(saved.status).toBe(200);
-    expect(saved.body.features).toEqual({ browser: false, skillAuthoring: false, showToolCalls: true, sharedComputers: false, claudeUserMcp: false, marketplacePublisher: false });
+    // switching authoring off also stops automatic skills, without writing their key
+    expect(saved.body.features).toEqual({ browser: false, skillAuthoring: false, autoSkills: false, showToolCalls: true, sharedComputers: false, claudeUserMcp: false, marketplacePublisher: false });
 
     const disk = JSON.parse(readFileSync(join(home, ".openmausbot", "config.json"), "utf8"));
     // Earlier browser coverage may have persisted its own toggle. Opting out
@@ -7003,7 +7004,7 @@ describe("harness HTTP API", () => {
     // the opt-out survives patches to sibling flags
     const tools = await api("PATCH", "/api/config", { features: { showToolCalls: false } });
     expect(tools.status).toBe(200);
-    expect(tools.body.features).toEqual({ browser: false, skillAuthoring: false, showToolCalls: false, sharedComputers: false, claudeUserMcp: false, marketplacePublisher: false });
+    expect(tools.body.features).toEqual({ browser: false, skillAuthoring: false, autoSkills: false, showToolCalls: false, sharedComputers: false, claudeUserMcp: false, marketplacePublisher: false });
 
     // an opted-out workspace refuses the skill routes a turn would otherwise reach
     const bot = (await api("POST", "/api/bots", {})).body.bot;
@@ -10297,6 +10298,30 @@ describe("resumable event stream", () => {
       await stream.until(() => stream.frames.filter((f) => f.kind === "bot").length >= 2);
       const bots = stream.frames.filter((f) => f.kind === "bot");
       expect(bots[1].seq).toBeGreaterThan(bots[0].seq);
+    } finally {
+      stream.close();
+    }
+  });
+
+  it("stamps the fleet snapshot with the stream position it covers", async () => {
+    const before = await api("GET", "/api/bots?messages=50");
+    const botId = before.body.bots[0].id;
+    expect(before.body.cursor).toMatch(/^[0-9a-f]{8}:\d+$/);
+
+    const stream = await openSse(`${BASE}/api/events`);
+    try {
+      const hello = await stream.until((f) => f.kind === "hello");
+      const [streamId, helloSeq] = hello.cursor.split(":");
+      // fetched before the stream opened: same stream, never ahead of hello
+      expect(before.body.cursor.split(":")[0]).toBe(streamId);
+      expect(Number(before.body.cursor.split(":")[1])).toBeLessThanOrEqual(Number(helloSeq));
+
+      await nudge(botId);
+      const frame = await stream.until((f) => f.kind === "bot" && f.bot?.id === botId);
+      // a snapshot taken after a numbered frame covers that frame
+      const after = await api("GET", "/api/bots?messages=50");
+      expect(after.body.cursor.split(":")[0]).toBe(streamId);
+      expect(Number(after.body.cursor.split(":")[1])).toBeGreaterThanOrEqual(frame.seq);
     } finally {
       stream.close();
     }

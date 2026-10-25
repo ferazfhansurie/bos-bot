@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { ActivityEntry } from "@/lib/activity-feed";
 import type { InboxItem } from "@/lib/inbox";
-import { askKey, buildNotchSnapshot, momentFor, notchAsk, type NotchInputs } from "./feed";
+import { askKey, buildNotchSnapshot, momentFor, momentPreview, notchAsk, type NotchInputs } from "./feed";
 
 const prefs = { approval: true, question: true, sound: "default" as const };
 const key = (botId: string, threadId: string) => `${botId}\u0000${threadId}`;
@@ -127,5 +127,31 @@ describe("momentFor", () => {
     expect(momentFor("tool", next("failed"), true)).toBe("failed");
     expect(momentFor(undefined, next("idle"), false)).toBeNull();
     expect(momentFor("idle", next("failed"), false)).toBeNull();
+  });
+});
+
+describe("momentPreview", () => {
+  const moment = { botId: "b1", threadId: "t1", kind: "done" as const };
+  const bot = (messages: unknown[], threadId = "t1") =>
+    [{ id: "b1", name: "cash", color: "green", threadId, tasks: [], messages }] as unknown as NotchInputs["bots"];
+
+  it("reads the bot's last words in the finished thread, plain", () => {
+    expect(momentPreview(moment, bot([
+      { role: "user", kind: "text", text: "check it" },
+      { role: "assistant", kind: "text", text: "**done.** the   site is up" },
+      { role: "assistant", kind: "tool", text: "" },
+    ]))).toBe("done. the site is up");
+  });
+
+  it("says nothing before the reply lands, for another thread, or for a failure", () => {
+    expect(momentPreview(moment, bot([{ role: "assistant", kind: "text", text: "old" }, { role: "user", kind: "text", text: "new ask" }]))).toBe("");
+    expect(momentPreview(moment, bot([{ role: "assistant", kind: "text", text: "hi" }], "t2"))).toBe("");
+    expect(momentPreview({ ...moment, kind: "failed" }, bot([{ role: "assistant", kind: "text", text: "hi" }]))).toBe("");
+  });
+
+  it("clips a long reply", () => {
+    const preview = momentPreview(moment, bot([{ role: "assistant", kind: "text", text: "word ".repeat(80) }]));
+    expect(preview.length).toBeLessThanOrEqual(140);
+    expect(preview.endsWith("…")).toBe(true);
   });
 });

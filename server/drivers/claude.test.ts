@@ -1228,7 +1228,7 @@ describe("ClaudeDriver turns (fake CLI)", () => {
 
   it("withholds a flag from a CLI that predates it, instead of failing every turn", async () => {
     // 2.1.100 knows --strict-mcp-config and --setting-sources but not
-    // --autocompact (first shipped in 2.1.122): an unknown flag is a hard
+    // --autocompact (first shipped in 2.1.221): an unknown flag is a hard
     // argument error, so the turn must run without it rather than not at all
     const dump = join(scratch, "old-cli.json");
     await create(undefined, { FAKE_CLAUDE_DUMP: dump, FAKE_CLAUDE_VERSION: "2.1.100" });
@@ -1307,8 +1307,10 @@ describe("ClaudeDriver turns (fake CLI)", () => {
     expect(parseClaudeCliVersion("")).toBeNull();
     expect(parseClaudeCliVersion(null)).toBeNull();
 
-    expect(claudeCliSupports([2, 1, 122], "--autocompact")).toBe(true);
-    expect(claudeCliSupports([2, 1, 121], "--autocompact")).toBe(false);
+    expect(claudeCliSupports([2, 1, 221], "--autocompact")).toBe(true);
+    expect(claudeCliSupports([2, 1, 220], "--autocompact")).toBe(false);
+    // 2.1.172 rejected the flag on a real windows install
+    expect(claudeCliSupports([2, 1, 172], "--autocompact")).toBe(false);
     expect(claudeCliSupports([3, 0, 0], "--autocompact")).toBe(true);
     expect(claudeCliSupports([1, 0, 122], "--setting-sources")).toBe(true);
     expect(claudeCliSupports([1, 0, 120], "--setting-sources")).toBe(false);
@@ -1324,7 +1326,7 @@ describe("ClaudeDriver turns (fake CLI)", () => {
     expect(olderSnapshot?.message).toContain("--system-prompt-snapshot");
     expect(olderSnapshot?.message).toContain("coordinated resumed turns cannot refresh stale system prompts");
     expect(olderSnapshot?.message).not.toContain("no compaction window");
-    expect(claudeCliUpdate("2.1.121 (Claude Code)", "claude")).toMatchObject({
+    expect(claudeCliUpdate("2.1.220 (Claude Code)", "claude")).toMatchObject({
       command: "claude update",
       message: expect.stringContaining("--autocompact"),
     });

@@ -157,6 +157,22 @@ it("never borrows a sibling Claude subscription for direct or room fallback", as
   expect(fallbackSelection(backup.model, f.instances, primary.instanceId)?.instanceId).toBe(primary.instanceId);
 });
 
+it("uses a sibling Claude subscription only when the owner named it", async () => {
+  const f = fixture();
+  f.instances[1] = { ...f.instances[1], driverKind: "claudeAgent" };
+  expect(fallbackSelection(backup.model, f.instances, primary.instanceId, "backup")).toEqual(backup);
+  expect(fallbackSelection(backup.model, f.instances, primary.instanceId, "primary")).toBeNull();
+  expect(fallbackSelection("missing-model", f.instances, primary.instanceId, "backup")).toBeNull();
+  f.store.patchBot(f.bot.id, { fallbackInstanceId: "backup" });
+  expect(await f.service.beforeTurn(f.bot.id, f.bot.threadId)).toBe(true);
+  expect(f.store.projectBotForTask(f.bot.id, f.bot.threadId)?.modelSelection).toEqual(backup);
+  expect(await f.service.beforeRoomTurn(f.bot.id, "fixture-room", "ask")).toEqual(backup);
+  f.now(120_000);
+  f.rows([{ provider: "claude", instanceId: "primary", account: "primary", status: "available", sevenDay: { usedPercent: 20, resetsAt: 210 } }]);
+  expect(await f.service.restore()).toBe(2);
+  expect(f.store.projectBotForTask(f.bot.id, f.bot.threadId)?.modelSelection).toEqual(primary);
+});
+
 const refusal = "The 'gpt-6.1-sol' model is not supported when using Codex with a ChatGPT account.";
 function codexFixture() {
   const sol = { instanceId: "codex", model: "gpt-6.1-sol", effort: "high" as const };

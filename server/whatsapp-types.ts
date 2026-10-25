@@ -66,6 +66,8 @@ export interface ReadOnlyWhatsAppClient {
   /** pid of this client's own Chromium, if launched — used only to force-kill
    * that one process when destroy() hangs */
   browserPid(): number | null;
+  /** A jpeg of bos's WhatsApp Web page, for the owner's desk live view only. */
+  screenshot?(): Promise<Uint8Array | null>;
 }
 
 export interface ReadOnlyClientOptions {

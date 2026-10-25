@@ -1,0 +1,441 @@
+<!doctype html>
+<html lang="en">
+<head>
+<title>Sheet</title>
+<meta name="bos-app" content="Sheet">
+<meta name="bos-app-icon" content="table">
+<meta name="bos-app-schema" content="cells: id is the cell address in capitals (A1, B3, AA10), v (the raw input as a string: plain text, a number like 1200 or 12.5, or a formula starting with = such as =SUM(B1:B5)*2; formulas support + - * / ^ & % comparisons, A1 refs, A1:B5 ranges, SUM AVERAGE MIN MAX COUNT ROUND IF ABS AND OR NOT). Delete a record to clear a cell; meta: one record id sheet with title, cols (number, default 12), rows (number, default 50), widths (object of column letter to pixel width)">
+<style>
+  [hidden]{display:none!important}
+  :root{--accent:#12a150}
+  html,body{height:100%}
+  .app{height:100vh;height:100dvh;min-height:0;overflow:hidden}
+  .app-icon{display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;border-radius:8px;background:var(--accent);color:#fff;flex:none}
+  .app-icon svg,.btn svg{width:16px;height:16px}
+  .title-input{font:inherit;font-size:18px;font-weight:600;border:1px solid transparent;background:transparent;padding:3px 8px;min-height:0;border-radius:8px;width:100%;max-width:420px;letter-spacing:-.01em}
+  .title-input:hover{border-color:var(--line)}
+  .fbar{display:flex;align-items:center;gap:0;border-bottom:1px solid var(--line);background:var(--surface);flex:none}
+  .addr{width:64px;flex:none;text-align:center;font-size:12px;font-weight:600;color:var(--muted);border-right:1px solid var(--line);padding:9px 0;font-variant-numeric:tabular-nums}
+  .fx{flex:none;padding:0 8px 0 12px;color:var(--muted);font-style:italic;font-size:13px;font-family:Georgia,serif}
+  #formula{border:0;border-radius:0;box-shadow:none;background:transparent;min-height:36px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:13px}
+  .wrap{flex:1;min-height:0;overflow:auto;position:relative;background:var(--surface);outline:none;overscroll-behavior:contain}
+  table.ss{border-collapse:separate;border-spacing:0;table-layout:fixed;font-size:13px;font-variant-numeric:tabular-nums}
+  .ss th,.ss td{height:28px;border-right:1px solid var(--line);border-bottom:1px solid var(--line);padding:0 7px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .ss thead th{position:sticky;top:0;z-index:2;background:var(--raised);font-size:11px;font-weight:600;color:var(--muted);text-align:center;user-select:none}
+  .ss tbody th{position:sticky;left:0;z-index:1;background:var(--raised);font-size:11px;font-weight:500;color:var(--muted);text-align:center;user-select:none}
+  .ss thead th.corner{left:0;z-index:3}
+  .ss th.on{background:color-mix(in srgb,var(--accent) 16%,var(--raised));color:var(--ink)}
+  .ss td{cursor:cell;color:var(--ink)}
+  .ss td.n{text-align:right}
+  .ss td.b{text-align:center}
+  .ss td.e{color:var(--bad);font-weight:500}
+  .ss td.sel{box-shadow:inset 0 0 0 2px var(--accent)}
+  .ss td.flash{animation:flash 1.2s ease-out}
+  @keyframes flash{from{background:color-mix(in srgb,var(--warn) 30%,transparent)}to{background:transparent}}
+  .rz{position:absolute;top:0;right:-3px;width:7px;height:100%;cursor:col-resize;z-index:4}
+  .colh{position:relative;overflow:visible!important}
+  .cell-editor{position:absolute;z-index:6;border-radius:0;min-height:0;padding:0 6px;border:2px solid var(--accent);box-shadow:0 4px 14px rgba(0,0,0,.15);font:inherit;font-size:13px;background:var(--surface)}
+  .status{display:flex;align-items:center;gap:12px;padding:6px 14px;border-top:1px solid var(--line);font-size:12px;color:var(--muted);background:var(--bg);flex:none;min-height:30px}
+  .status .val{color:var(--ink);font-variant-numeric:tabular-nums;max-width:50%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  @media (max-width:640px){ .title-input{font-size:16px} .hide-xs{display:none} }
+</style>
+</head>
+<body>
+<div class="app">
+  <header class="app-bar">
+    <h1><span class="app-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M3 15h18M9 3v18"/></svg></span><input class="title-input" id="title" aria-label="Sheet title" value="Untitled sheet"></h1>
+    <button class="btn sm" id="add-rows" title="Add 25 rows"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>Rows</button>
+    <button class="btn sm" id="add-col" title="Add a column"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>Column</button>
+  </header>
+  <div class="fbar">
+    <div class="addr" id="addr">A1</div>
+    <span class="fx">fx</span>
+    <input id="formula" autocomplete="off" spellcheck="false" aria-label="Cell contents" placeholder="Type a value or =formula">
+  </div>
+  <div class="wrap" id="wrap" tabindex="0" aria-label="Sheet grid">
+    <table class="ss" id="grid"></table>
+    <input class="cell-editor" id="editor" autocomplete="off" spellcheck="false" hidden aria-label="Edit cell">
+  </div>
+  <div class="status"><span id="status-cell"></span><span class="spacer"></span><span class="val" id="status-val"></span></div>
+</div>
+
+<script>
+// =====================================================================
+// Formula engine: tokenizer + recursive-descent parser + evaluator.
+// No eval/Function. Values: number | string | boolean | null (empty).
+// =====================================================================
+class FErr { constructor(code) { this.code = code; } }
+const ERR = () => new FErr("#ERR");
+const colName = i => { let s = ""; for (i++; i > 0; i = Math.floor((i - 1) / 26)) s = String.fromCharCode(65 + (i - 1) % 26) + s; return s; };
+const colIndex = s => { let n = 0; for (const ch of s) n = n * 26 + ch.charCodeAt(0) - 64; return n - 1; };
+const parseAddr = a => { const m = /^\$?([A-Z]{1,3})\$?([1-9]\d{0,5})$/.exec(a); return m ? { c: colIndex(m[1]), r: +m[2] - 1 } : null; };
+const addrOf = (c, r) => colName(c) + (r + 1);
+
+function tokenize(src) {
+  const out = []; let i = 0, m;
+  while (i < src.length) {
+    const rest = src.slice(i);
+    if ((m = /^\s+/.exec(rest))) { i += m[0].length; continue; }
+    if ((m = /^(\d+\.?\d*|\.\d+)(e[+-]?\d+)?/i.exec(rest))) { out.push({ t: "num", v: parseFloat(m[0]) }); i += m[0].length; continue; }
+    if (rest[0] === '"') {
+      let j = 1, s = "";
+      for (;;) {
+        if (j >= rest.length) throw ERR();
+        if (rest[j] === '"') { if (rest[j + 1] === '"') { s += '"'; j += 2; continue; } break; }
+        s += rest[j++];
+      }
+      out.push({ t: "str", v: s }); i += j + 1; continue;
+    }
+    if ((m = /^\$?[A-Za-z]{1,3}\$?\d+(?![A-Za-z0-9_(])/.exec(rest))) { out.push({ t: "ref", v: m[0].toUpperCase() }); i += m[0].length; continue; }
+    if ((m = /^[A-Za-z_][A-Za-z0-9_.]*/.exec(rest))) { out.push({ t: "id", v: m[0].toUpperCase() }); i += m[0].length; continue; }
+    if ((m = /^(<=|>=|<>|[-+*/^&(),:<>=%;])/.exec(rest))) { out.push({ t: "op", v: m[0] === ";" ? "," : m[0] }); i += m[0].length; continue; }
+    throw ERR();
+  }
+  return out;
+}
+
+function parse(src) {
+  const toks = tokenize(src); let p = 0;
+  const peek = v => toks[p] && toks[p].t === "op" && toks[p].v === v;
+  const eat = v => { if (!peek(v)) throw ERR(); p++; };
+  const binary = (next, ops) => () => { let a = next(); while (toks[p] && toks[p].t === "op" && ops.includes(toks[p].v)) { const op = toks[p++].v; a = { t: "bin", op, a, b: next() }; } return a; };
+  const primary = () => {
+    const tk = toks[p++];
+    if (!tk) throw ERR();
+    if (tk.t === "num") return { t: "val", v: tk.v };
+    if (tk.t === "str") return { t: "val", v: tk.v };
+    if (tk.t === "ref") {
+      const a = parseAddr(tk.v); if (!a) throw ERR();
+      if (peek(":")) { p++; const tk2 = toks[p++]; const b = tk2 && tk2.t === "ref" && parseAddr(tk2.v); if (!b) throw ERR();
+        return { t: "range", c1: Math.min(a.c, b.c), r1: Math.min(a.r, b.r), c2: Math.max(a.c, b.c), r2: Math.max(a.r, b.r) }; }
+      return { t: "ref", a: addrOf(a.c, a.r) };
+    }
+    if (tk.t === "id") {
+      if (peek("(")) {
+        p++; const args = [];
+        if (!peek(")")) { do { args.push(expr()); } while (peek(",") && ++p); }
+        eat(")");
+        return { t: "fn", name: tk.v, args };
+      }
+      if (tk.v === "TRUE" || tk.v === "FALSE") return { t: "val", v: tk.v === "TRUE" };
+      throw ERR();
+    }
+    if (tk.v === "(") { const e = expr(); eat(")"); return e; }
+    throw ERR();
+  };
+  const postfix = () => { let a = primary(); while (peek("%")) { p++; a = { t: "pct", a }; } return a; };
+  const unary = () => { if (peek("-")) { p++; return { t: "neg", a: unary() }; } if (peek("+")) { p++; return unary(); } return postfix(); };
+  const pow = binary(unary, ["^"]);
+  const mul = binary(pow, ["*", "/"]);
+  const add = binary(mul, ["+", "-"]);
+  const cat = binary(add, ["&"]);
+  const expr = binary(cat, ["=", "<>", "<", ">", "<=", ">="]);
+  const tree = expr();
+  if (p !== toks.length) throw ERR();
+  return tree;
+}
+
+const fmtNum = n => { if (!Number.isFinite(n)) return "#ERR"; const r = Number(n.toPrecision(12)); return Math.abs(r) >= 1e15 || (r !== 0 && Math.abs(r) < 1e-9) ? r.toExponential(4) : String(r); };
+const toNum = v => { if (v === null) return 0; if (typeof v === "number") return v; if (typeof v === "boolean") return v ? 1 : 0; const s = v.trim(); if (s && Number.isFinite(+s)) return +s; throw ERR(); };
+const toStr = v => v === null ? "" : typeof v === "number" ? fmtNum(v) : typeof v === "boolean" ? (v ? "TRUE" : "FALSE") : v;
+const toBool = v => { if (typeof v === "boolean") return v; if (v === null) return false; if (typeof v === "number") return v !== 0; const s = v.toUpperCase(); if (s === "TRUE") return true; if (s === "FALSE") return false; throw ERR(); };
+function compare(a, b) {
+  const rank = v => v === null ? 0 : typeof v === "number" ? 0 : typeof v === "string" ? 1 : 2;
+  if (a === null) a = typeof b === "string" ? "" : typeof b === "boolean" ? false : 0;
+  if (b === null) b = typeof a === "string" ? "" : typeof a === "boolean" ? false : 0;
+  if (rank(a) !== rank(b)) return rank(a) - rank(b);
+  if (typeof a === "string") { a = a.toLowerCase(); b = b.toLowerCase(); }
+  return a < b ? -1 : a > b ? 1 : 0;
+}
+
+let memo = new Map(); const visiting = new Set(), astCache = new Map();
+function literal(raw) {
+  const s = raw.trim();
+  if (/^[-+]?(\d+\.?\d*|\.\d+)(e[-+]?\d+)?$/i.test(s)) return +s;
+  if (/^[-+]?\d{1,3}(,\d{3})+(\.\d+)?$/.test(s)) return +s.replace(/,/g, "");
+  if (/^[-+]?(\d+\.?\d*|\.\d+)%$/.test(s)) return +s.slice(0, -1) / 100;
+  return raw;
+}
+function cellValue(addr) {
+  if (memo.has(addr)) { const v = memo.get(addr); if (v instanceof FErr) throw v; return v; }
+  const raw = rawOf(addr);
+  let v;
+  if (raw === "") v = null;
+  else if (raw[0] !== "=") v = literal(raw);
+  else {
+    if (visiting.has(addr)) throw new FErr("#CYCLE");
+    visiting.add(addr);
+    try {
+      let ast = astCache.get(raw);
+      if (!ast) { ast = parse(raw.slice(1)); astCache.set(raw, ast); }
+      v = evalNode(ast);
+      if (v === null) v = 0;
+    } catch (e) { v = e instanceof FErr ? e : ERR(); }
+    visiting.delete(addr);
+  }
+  memo.set(addr, v);
+  if (v instanceof FErr) throw v;
+  return v;
+}
+function* rangeValues(n) { for (let r = n.r1; r <= n.r2; r++) for (let c = n.c1; c <= n.c2; c++) yield cellValue(addrOf(c, r)); }
+function numbersIn(args) {
+  const out = [];
+  for (const a of args) {
+    if (a.t === "range") { for (const v of rangeValues(a)) if (typeof v === "number") out.push(v); }
+    else { const v = evalNode(a); if (v !== null) out.push(toNum(v)); }
+  }
+  return out;
+}
+const FN = {
+  SUM: a => numbersIn(a).reduce((x, y) => x + y, 0),
+  AVERAGE: a => { const n = numbersIn(a); if (!n.length) throw ERR(); return n.reduce((x, y) => x + y, 0) / n.length; },
+  MIN: a => { const n = numbersIn(a); return n.length ? Math.min(...n) : 0; },
+  MAX: a => { const n = numbersIn(a); return n.length ? Math.max(...n) : 0; },
+  COUNT: a => { let k = 0; for (const x of a) { if (x.t === "range") { for (const v of rangeValues(x)) if (typeof v === "number") k++; } else { try { const v = evalNode(x); if (typeof v === "number") k++; } catch (e) {} } } return k; },
+  ROUND: a => { if (a.length < 1 || a.length > 2) throw ERR(); const x = toNum(evalNode(a[0])), d = a[1] ? Math.trunc(toNum(evalNode(a[1]))) : 0, f = Math.pow(10, d); return Math.sign(x) * Math.round(+(Math.abs(x) * f).toPrecision(15)) / f; },
+  IF: a => { if (a.length < 2 || a.length > 3) throw ERR(); return toBool(evalNode(a[0])) ? evalNode(a[1]) : (a[2] ? evalNode(a[2]) : false); },
+  ABS: a => { if (a.length !== 1) throw ERR(); return Math.abs(toNum(evalNode(a[0]))); },
+  AND: a => a.every(x => x.t === "range" ? [...rangeValues(x)].every(v => v === null || toBool(v)) : toBool(evalNode(x))),
+  OR: a => a.some(x => x.t === "range" ? [...rangeValues(x)].some(v => v !== null && toBool(v)) : toBool(evalNode(x))),
+  NOT: a => { if (a.length !== 1) throw ERR(); return !toBool(evalNode(a[0])); },
+};
+function evalNode(n) {
+  switch (n.t) {
+    case "val": return n.v;
+    case "ref": return cellValue(n.a);
+    case "range": throw ERR(); // a bare range outside a function
+    case "neg": return -toNum(evalNode(n.a));
+    case "pct": return toNum(evalNode(n.a)) / 100;
+    case "fn": { const f = FN[n.name]; if (!f) throw ERR(); return f(n.args); }
+    case "bin": {
+      const a = evalNode(n.a), b = evalNode(n.b);
+      switch (n.op) {
+        case "+": return toNum(a) + toNum(b);
+        case "-": return toNum(a) - toNum(b);
+        case "*": return toNum(a) * toNum(b);
+        case "/": { const d = toNum(b); if (d === 0) throw ERR(); return toNum(a) / d; }
+        case "^": { const r = Math.pow(toNum(a), toNum(b)); if (!Number.isFinite(r)) throw ERR(); return r; }
+        case "&": return toStr(a) + toStr(b);
+        case "=": return compare(a, b) === 0;
+        case "<>": return compare(a, b) !== 0;
+        case "<": return compare(a, b) < 0;
+        case ">": return compare(a, b) > 0;
+        case "<=": return compare(a, b) <= 0;
+        case ">=": return compare(a, b) >= 0;
+      }
+    }
+  }
+  throw ERR();
+}
+function valueOf(addr) { try { return cellValue(addr); } catch (e) { return e instanceof FErr ? e : ERR(); } }
+
+// =====================================================================
+// Data: server cells (from bos.subscribe) + local edits not yet echoed.
+// =====================================================================
+const server = new Map();   // addr -> record {id, v, _at, _by}
+const pending = new Map();  // addr -> {v, t}
+const DEFAULT = { title: "Untitled sheet", cols: 12, rows: 50, widths: {} };
+let meta = { ...DEFAULT }, metaRec = null;
+const rawOf = addr => { const p = pending.get(addr); if (p) return p.v; const r = server.get(addr); return r && r.v != null ? String(r.v) : ""; };
+
+function setCell(addr, raw) {
+  if (!raw.trim()) raw = "";
+  if (raw === rawOf(addr)) return;
+  pending.set(addr, { v: raw, t: Date.now() });
+  paint();
+  const write = raw === "" ? (server.has(addr) ? bos.remove("cells", addr) : Promise.resolve()) : bos.put("cells", { id: addr, v: raw });
+  write.then(() => { if (raw === "" && !server.has(addr)) { pending.delete(addr); } })
+    .catch(e => { pending.delete(addr); paint(); bos.toast("Could not save " + addr + ": " + e.message); });
+}
+function saveMeta(fields) {
+  meta = { ...meta, ...fields };
+  return bos.put("meta", { ...(metaRec || {}), id: "sheet", title: meta.title, cols: meta.cols, rows: meta.rows, widths: meta.widths || {} }).catch(e => bos.toast("Could not save: " + e.message));
+}
+
+// =====================================================================
+// Grid
+// =====================================================================
+const $ = s => document.querySelector(s);
+const grid = $("#grid"), wrap = $("#wrap"), editor = $("#editor"), formula = $("#formula");
+let sel = { c: 0, r: 0 }, editing = null, built = { cols: 0, rows: 0, w: "" }, tds = new Map(), shown = new Map();
+const widthOf = c => Math.max(40, Math.min(600, Number((meta.widths || {})[colName(c)]) || 100));
+
+function build() {
+  const cols = meta.cols, rows = meta.rows, w = JSON.stringify(meta.widths || {});
+  if (built.cols === cols && built.rows === rows && built.w === w) return;
+  if (built.cols !== cols || built.rows !== rows) {
+    let h = `<colgroup><col style="width:46px">`;
+    for (let c = 0; c < cols; c++) h += `<col data-col="${c}">`;
+    h += `</colgroup><thead><tr><th class="corner"></th>`;
+    for (let c = 0; c < cols; c++) h += `<th class="colh" data-col="${c}">${colName(c)}<span class="rz" data-rz="${c}"></span></th>`;
+    h += `</tr></thead><tbody>`;
+    for (let r = 0; r < rows; r++) { h += `<tr><th data-row="${r}">${r + 1}</th>`; for (let c = 0; c < cols; c++) h += `<td data-a="${addrOf(c, r)}"></td>`; h += `</tr>`; }
+    grid.innerHTML = h + `</tbody>`;
+    tds = new Map([...grid.querySelectorAll("td")].map(td => [td.dataset.a, td]));
+    shown = new Map();
+  }
+  let total = 46;
+  grid.querySelectorAll("col[data-col]").forEach(col => { const px = widthOf(+col.dataset.col); col.style.width = px + "px"; total += px; });
+  grid.style.width = total + "px";
+  built = { cols, rows, w };
+  if (sel.c >= cols || sel.r >= rows) sel = { c: Math.min(sel.c, cols - 1), r: Math.min(sel.r, rows - 1) };
+}
+
+function paint(flashFrom) {
+  build();
+  memo = new Map();
+  for (const [addr, td] of tds) {
+    const v = valueOf(addr);
+    const text = v instanceof FErr ? v.code : toStr(v);
+    const cls = v instanceof FErr ? "e" : typeof v === "number" ? "n" : typeof v === "boolean" ? "b" : "";
+    const key = cls + "|" + text;
+    if (shown.get(addr) !== key) {
+      td.textContent = text; td.className = cls;
+      if (flashFrom && flashFrom.has(addr)) { td.classList.add("flash"); }
+      shown.set(addr, key);
+    } else if (flashFrom && flashFrom.has(addr)) { td.classList.remove("flash"); void td.offsetWidth; td.classList.add("flash"); }
+  }
+  showSel();
+}
+
+function showSel(scroll) {
+  grid.querySelectorAll(".sel, th.on").forEach(el => el.classList.remove("sel", "on"));
+  const addr = addrOf(sel.c, sel.r), td = tds.get(addr);
+  if (td) {
+    td.classList.add("sel");
+    const ch = grid.querySelector(`thead th[data-col="${sel.c}"]`), rh = grid.querySelector(`tbody th[data-row="${sel.r}"]`);
+    ch && ch.classList.add("on"); rh && rh.classList.add("on");
+    if (scroll) {
+      const top = td.offsetTop, left = td.offsetLeft, hh = 29, rw = 46;
+      if (top - hh < wrap.scrollTop) wrap.scrollTop = top - hh;
+      else if (top + td.offsetHeight > wrap.scrollTop + wrap.clientHeight) wrap.scrollTop = top + td.offsetHeight - wrap.clientHeight;
+      if (left - rw < wrap.scrollLeft) wrap.scrollLeft = left - rw;
+      else if (left + td.offsetWidth > wrap.scrollLeft + wrap.clientWidth) wrap.scrollLeft = left + td.offsetWidth - wrap.clientWidth;
+    }
+  }
+  $("#addr").textContent = addr;
+  if (!editing || editing.from !== "bar") formula.value = editing ? editor.value : rawOf(addr);
+  const rec = server.get(addr), v = valueOf(addr);
+  $("#status-cell").textContent = rec ? `${addr} edited ${ago(rec._at)}${rec._by ? " by " + rec._by : ""}` : `${server.size} ${server.size === 1 ? "cell" : "cells"} filled`;
+  $("#status-val").textContent = rawOf(addr).startsWith("=") ? "= " + (v instanceof FErr ? v.code : toStr(v)) : "";
+}
+const ago = ms => { const m = Math.round((Date.now() - ms) / 60000); if (m < 1) return "just now"; if (m < 60) return m + "m ago"; const h = Math.round(m / 60); return h < 24 ? h + "h ago" : Math.round(h / 24) + "d ago"; };
+
+function select(c, r, scroll = true) { sel = { c: Math.max(0, Math.min(meta.cols - 1, c)), r: Math.max(0, Math.min(meta.rows - 1, r)) }; showSel(scroll); }
+
+// ----- editing -----
+function startEdit(text, mode) {
+  const td = tds.get(addrOf(sel.c, sel.r)); if (!td) return;
+  editing = { addr: td.dataset.a, mode, from: "cell" };
+  editor.hidden = false;
+  editor.style.left = td.offsetLeft + "px"; editor.style.top = td.offsetTop + "px";
+  editor.style.width = Math.max(td.offsetWidth, 120) + "px"; editor.style.height = td.offsetHeight + "px";
+  editor.value = text; formula.value = text;
+  editor.focus(); editor.setSelectionRange(text.length, text.length);
+}
+function commit(dc, dr) {
+  if (!editing) return;
+  const { addr, from } = editing, raw = from === "bar" ? formula.value : editor.value;
+  editing = null; editor.hidden = true;
+  setCell(addr, raw);
+  if (dc || dr) select(sel.c + dc, sel.r + dr); else showSel();
+  wrap.focus({ preventScroll: true });
+}
+function cancel() { editing = null; editor.hidden = true; showSel(); wrap.focus({ preventScroll: true }); }
+
+editor.addEventListener("input", () => { formula.value = editor.value; });
+editor.addEventListener("keydown", e => {
+  if (e.key === "Enter") { e.preventDefault(); commit(0, e.shiftKey ? -1 : 1); }
+  else if (e.key === "Tab") { e.preventDefault(); commit(e.shiftKey ? -1 : 1, 0); }
+  else if (e.key === "Escape") { e.preventDefault(); cancel(); }
+  else if (editing && editing.mode === "type" && e.key.startsWith("Arrow")) {
+    e.preventDefault();
+    commit(e.key === "ArrowLeft" ? -1 : e.key === "ArrowRight" ? 1 : 0, e.key === "ArrowUp" ? -1 : e.key === "ArrowDown" ? 1 : 0);
+  }
+});
+editor.addEventListener("blur", () => { if (editing && editing.from === "cell") commit(0, 0); });
+
+formula.addEventListener("focus", () => {
+  if (editing && editing.from === "cell") { const v = editor.value; editing.from = "bar"; editor.hidden = true; formula.value = v; }
+  else if (!editing) editing = { addr: addrOf(sel.c, sel.r), mode: "edit", from: "bar" };
+});
+formula.addEventListener("keydown", e => {
+  if (e.key === "Enter") { e.preventDefault(); commit(0, e.shiftKey ? -1 : 1); }
+  else if (e.key === "Tab") { e.preventDefault(); commit(e.shiftKey ? -1 : 1, 0); }
+  else if (e.key === "Escape") { e.preventDefault(); cancel(); }
+});
+formula.addEventListener("blur", () => { if (editing && editing.from === "bar") { const { addr } = editing; editing = null; setCell(addr, formula.value); showSel(); } });
+
+wrap.addEventListener("keydown", e => {
+  if (editing || e.target !== wrap) return;
+  const k = e.key, mv = { ArrowUp: [0, -1], ArrowDown: [0, 1], ArrowLeft: [-1, 0], ArrowRight: [1, 0] }[k];
+  if (mv) { e.preventDefault(); select(sel.c + mv[0], sel.r + mv[1]); }
+  else if (k === "Enter") { e.preventDefault(); select(sel.c, sel.r + (e.shiftKey ? -1 : 1)); }
+  else if (k === "Tab") { e.preventDefault(); select(sel.c + (e.shiftKey ? -1 : 1), sel.r); }
+  else if (k === "Delete" || k === "Backspace") { e.preventDefault(); setCell(addrOf(sel.c, sel.r), ""); }
+  else if (k === "F2") { e.preventDefault(); startEdit(rawOf(addrOf(sel.c, sel.r)), "edit"); }
+  else if (k === "Home") { e.preventDefault(); select(0, e.ctrlKey || e.metaKey ? 0 : sel.r); }
+  else if (k.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) { e.preventDefault(); startEdit(k, "type"); }
+});
+wrap.addEventListener("mousedown", e => {
+  const td = e.target.closest("td"); if (!td || e.target.closest(".rz")) return;
+  if (editing && editing.from === "cell" && td.dataset.a === editing.addr) return;
+  e.preventDefault();
+  if (editing) commit(0, 0);
+  const a = parseAddr(td.dataset.a); select(a.c, a.r, false);
+  wrap.focus({ preventScroll: true });
+});
+wrap.addEventListener("dblclick", e => { const td = e.target.closest("td"); if (td) startEdit(rawOf(td.dataset.a), "edit"); });
+
+// ----- column resize (saved in meta.widths) -----
+wrap.addEventListener("pointerdown", e => {
+  const h = e.target.closest(".rz"); if (!h) return;
+  e.preventDefault();
+  const c = +h.dataset.rz, col = grid.querySelector(`col[data-col="${c}"]`), x0 = e.clientX, w0 = widthOf(c);
+  let w = w0;
+  const move = ev => { w = Math.max(40, Math.min(600, w0 + ev.clientX - x0)); col.style.width = w + "px"; grid.style.width = (grid.offsetWidth + w - parseFloat(col.dataset.last || w0)) + "px"; col.dataset.last = w; };
+  const up = () => { removeEventListener("pointermove", move); removeEventListener("pointerup", up); delete col.dataset.last; if (w !== w0) saveMeta({ widths: { ...(meta.widths || {}), [colName(c)]: Math.round(w) } }); };
+  addEventListener("pointermove", move); addEventListener("pointerup", up);
+});
+
+// ----- toolbar -----
+$("#add-rows").addEventListener("click", () => { saveMeta({ rows: Math.min(meta.rows + 25, 2000) }).then(() => bos.toast("Added 25 rows")); });
+$("#add-col").addEventListener("click", () => { if (meta.cols >= 52) return bos.toast("52 columns is the limit"); saveMeta({ cols: meta.cols + 1 }); });
+const title = $("#title");
+title.addEventListener("change", () => saveMeta({ title: title.value.trim() || DEFAULT.title }));
+title.addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); title.blur(); wrap.focus(); } });
+
+// ----- live data -----
+bos.subscribe("cells", rows => {
+  const before = new Map([...server].map(([a, r]) => [a, r.v]));
+  server.clear();
+  for (const r of rows) if (parseAddr(String(r.id))) server.set(String(r.id).toUpperCase(), r);
+  const now = Date.now(), outside = new Set();
+  for (const [a, p] of pending) {
+    const s = server.get(a), sv = s && s.v != null ? String(s.v) : "";
+    if (sv === p.v || now - p.t > 4000) pending.delete(a);
+  }
+  // cells someone else changed (a bot, another device) flash briefly
+  for (const [a, r] of server) if (before.size && before.get(a) !== r.v && !pending.has(a) && r._by !== "owner") outside.add(a);
+  applyMeta();
+  paint(outside);
+});
+function applyMeta() {
+  const m = metaRec || {};
+  meta = {
+    title: typeof m.title === "string" && m.title ? m.title : DEFAULT.title,
+    cols: Math.max(1, Math.min(52, Math.round(Number(m.cols)) || DEFAULT.cols)),
+    rows: Math.max(1, Math.min(2000, Math.round(Number(m.rows)) || DEFAULT.rows)),
+    widths: m.widths && typeof m.widths === "object" ? m.widths : {},
+  };
+  // a bot writing far-off cells grows the grid to show them
+  for (const a of server.keys()) { const p = parseAddr(a); if (p) { meta.cols = Math.min(52, Math.max(meta.cols, p.c + 1)); meta.rows = Math.min(2000, Math.max(meta.rows, p.r + 1)); } }
+  if (document.activeElement !== title) title.value = meta.title;
+  document.title = meta.title;
+}
+bos.subscribe("meta", rows => { metaRec = rows.find(r => r.id === "sheet") || null; applyMeta(); paint(); });
+paint();
+wrap.focus({ preventScroll: true });
+</script>
+</body>
+</html>
