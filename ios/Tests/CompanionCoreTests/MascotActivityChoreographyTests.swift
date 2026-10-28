@@ -44,4 +44,17 @@ final class MascotActivityChoreographyTests: XCTestCase {
         XCTAssertGreaterThan(before.split, 0.5)
         XCTAssertGreaterThan(MascotActivityChoreography.pose(.thinking, elapsed: 1).curl, 0.5)
     }
+
+    func testToolFaceMatchesTheDesktopToolPoses() {
+        XCTAssertEqual(MascotActivityChoreography.toolFace("Read"), .reading)
+        XCTAssertEqual(MascotActivityChoreography.toolFace("mcp__fs__read_file"), .reading)
+        XCTAssertEqual(MascotActivityChoreography.toolFace("Edit"), .writing)
+        XCTAssertEqual(MascotActivityChoreography.toolFace("str_replace_based_edit_tool"), .writing)
+        XCTAssertEqual(MascotActivityChoreography.toolFace("WebSearch"), .searching)
+        XCTAssertEqual(MascotActivityChoreography.toolFace("Grep"), .searching)
+        XCTAssertEqual(MascotActivityChoreography.toolFace("mcp__browser__agent_browser_open"), .searching)
+        XCTAssertEqual(MascotActivityChoreography.toolFace("WEB_FETCH"), .searching)
+        XCTAssertEqual(MascotActivityChoreography.toolFace("Bash"), .working)
+        XCTAssertEqual(MascotActivityChoreography.toolFace(nil), .working)
+    }
 }

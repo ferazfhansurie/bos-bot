@@ -622,20 +622,20 @@ final class MascotCreature {
     /// The header's own glyph eyes. A new face squashes the old glyphs shut
     /// and opens the new ones, the way every glyph face changes.
     struct GlyphEyes {
-        var left: String
-        var right: String
-        private var next: (left: String, right: String)?
+        var left: [GlyphEyePart]
+        var right: [GlyphEyePart]
+        private var next: (left: [GlyphEyePart], right: [GlyphEyePart])?
         private var swapAt: TimeInterval?
 
-        init(_ face: MascotMoodFace) { left = face.left; right = face.right }
+        init(_ face: MascotMoodFace) { left = face.leftParts; right = face.rightParts }
 
         mutating func aim(_ face: MascotMoodFace, at t: TimeInterval) {
             if let next {
-                guard next.left != face.left || next.right != face.right else { return }
-            } else if face.left == left, face.right == right {
+                guard next.left != face.leftParts || next.right != face.rightParts else { return }
+            } else if face.leftParts == left, face.rightParts == right {
                 return
             }
-            next = (face.left, face.right)
+            next = (face.leftParts, face.rightParts)
             if swapAt == nil { swapAt = t }
         }
 
@@ -657,6 +657,7 @@ final class MascotCreature {
     // Who it is.
     let color: String
     let bodyId: String?
+    let accessories: MascotAccessories?
     let name: String
     let side: CGFloat = 84
     private let seed: Int
@@ -882,6 +883,7 @@ final class MascotCreature {
         recess = pulledAt != nil
         color = bot.color
         bodyId = bot.mascotBody
+        accessories = bot.mascotAccessories
         name = bot.name
         self.seed = seed
         self.reduceMotion = reduceMotion
@@ -2229,12 +2231,12 @@ final class MascotCreature {
             publishLine(line.map { EmptyMascotBrain.line($0, seed: variant) })
         }
 
-        // Blink on its own beat, now and then twice; asleep, the eyes are
-        // already shut.
+        // Blink on the desktop's beat, 6 to 14 seconds apart and twice one
+        // time in seven; asleep, the eyes are already shut.
         if t >= nextBlink {
             blink()
-            nextBlink = t + 1.8 + roll() * 4.4
-            if roll() < 0.18 { secondBlink = t + 0.24 }
+            nextBlink = t + GlyphBlink.rest.lowerBound + roll() * (GlyphBlink.rest.upperBound - GlyphBlink.rest.lowerBound)
+            if roll() < GlyphBlink.doubleChance { secondBlink = t + GlyphBlink.doubleGap }
         }
         if secondBlink >= 0, t >= secondBlink {
             secondBlink = -1
@@ -2441,7 +2443,7 @@ final class MascotCreature {
             let idle = EmptyMascotBrain.face(.idle)
             drawBody(in: &context, centre: CGPoint(x: cameoX.value, y: home.y + side * 0.42), side: size,
                      sx: 1, sy: 1, rotation: -cameoSide * 0.24, shear: 0, color: cameo.color, bodyId: cameo.mascotBody,
-                     face: idle, left: idle.left, right: idle.right, open: blink,
+                     face: idle, left: idle.leftParts, right: idle.rightParts, open: blink,
                      gaze: CGPoint(x: -cameoSide, y: 0.2), lead: .zero, changedAt: -10, scheme: scheme)
         }
 
@@ -2497,7 +2499,8 @@ final class MascotCreature {
                  shear: shear.value, spun: angle, color: color, bodyId: bodyId, face: EmptyMascotBrain.face(mood),
                  left: eyes.left, right: eyes.right, open: min(eyeOpenness, eyeSquash),
                  gaze: CGPoint(x: gazeX.value * still, y: gazeY.value * still),
-                 lead: CGPoint(x: leadX.value, y: leadY.value), changedAt: moodChangedAt, scheme: scheme)
+                 lead: CGPoint(x: leadX.value, y: leadY.value), changedAt: moodChangedAt, scheme: scheme,
+                 accessories: accessories)
 
         drawCombo(in: &context, paint: paint, scheme: scheme)
 
@@ -2589,15 +2592,17 @@ final class MascotCreature {
         let eyeSide = pill.height * 0.5
         let scale = eyeSide / GlyphFaces.viewBox
         let ink = GlyphFaces.contrast(GlyphFaces.resolveColor(color), "#000000") >= 2 ? paint.body : Color.white
-        for (glyph, x) in [(eyes.left, -pill.height * 0.42), (eyes.right, pill.height * 0.42)] {
+        for (parts, x) in [(eyes.left, -pill.height * 0.42), (eyes.right, pill.height * 0.42)] {
             var eye = context
             eye.opacity *= alpha
             eye.translateBy(x: pill.midX + x + lookX * pill.width * 0.1, y: pill.midY + lookY * pill.height * 0.12)
             eye.rotate(by: .degrees(GlyphFaces.tiltDegrees))
             eye.scaleBy(x: scale, y: scale * blink * (0.6 + 0.4 * CGFloat(appear)))
             eye.translateBy(x: -GlyphFaces.viewBox / 2, y: -GlyphFaces.viewBox / 2)
-            eye.stroke(Path(EmptyMascotBrain.path(glyph)), with: .color(ink),
-                       style: StrokeStyle(lineWidth: max(GlyphFaces.stroke, 1.4 / scale), lineCap: .round, lineJoin: .round))
+            for part in parts {
+                eye.stroke(Path(EmptyMascotBrain.path(part.glyph)), with: .color(ink),
+                           style: StrokeStyle(lineWidth: max(GlyphFaces.stroke * part.weight, 1.4 / scale), lineCap: .round, lineJoin: .round))
+            }
         }
     }
 
@@ -2620,8 +2625,8 @@ final class MascotCreature {
     /// the side reads as the whole round body turning.
     private func drawBody(in context: inout GraphicsContext, centre: CGPoint, side: CGFloat, sx: CGFloat, sy: CGFloat,
                           rotation: CGFloat, shear: CGFloat, spun: CGFloat = 0, color: String, bodyId: String?, face: MascotMoodFace,
-                          left: String, right: String, open: CGFloat, gaze: CGPoint, lead: CGPoint,
-                          changedAt: TimeInterval, scheme: ColorScheme) {
+                          left: [GlyphEyePart], right: [GlyphEyePart], open: CGFloat, gaze: CGPoint, lead: CGPoint,
+                          changedAt: TimeInterval, scheme: ColorScheme, accessories: MascotAccessories? = nil) {
         guard side > 1 else { return }
         let paint = palette(color, scheme)
         let layout = GlyphFaces.layout
@@ -2662,16 +2667,28 @@ final class MascotCreature {
         let eyeSide = layout.eyeBox * diameter
         let eyeScale = eyeSide / GlyphFaces.viewBox
         guard eyeScale > 0.01 else { return }
-        let eyeStroke = max(GlyphFaces.stroke, layout.minStrokePx / eyeScale)
         // Turned aside, the pair closes up a little on the round body.
         let spread = 1 - 0.12 * min(abs(gaze.x), 1)
-        for (glyph, x) in [(left, -layout.eyeX), (right, layout.eyeX)] {
+        for (parts, x) in [(left, -layout.eyeX), (right, layout.eyeX)] {
             var eye = eyes
             eye.translateBy(x: x * spread * diameter, y: layout.eyeY * diameter)
             eye.scaleBy(x: eyeScale, y: eyeScale * max(open, 0.1))
             eye.translateBy(x: -GlyphFaces.viewBox / 2, y: -GlyphFaces.viewBox / 2)
-            eye.stroke(Path(EmptyMascotBrain.path(glyph)), with: .color(paint.ink),
-                       style: StrokeStyle(lineWidth: eyeStroke, lineCap: .round, lineJoin: .round))
+            for part in parts {
+                eye.stroke(Path(EmptyMascotBrain.path(part.glyph)), with: .color(paint.ink),
+                           style: StrokeStyle(lineWidth: max(GlyphFaces.stroke * part.weight, layout.minStrokePx / eyeScale),
+                                              lineCap: .round, lineJoin: .round))
+            }
+        }
+
+        // What it wears rides the body: squash, spin and the glance.
+        if let accessories, !accessories.isEmpty {
+            let unit = min(bounds.width, bounds.height)
+            let back = -GlyphFaces.tiltDegrees * .pi / 180
+            let glance = CGPoint(x: look.x / diameter, y: look.y / diameter)
+            let shift = CGSize(width: glance.x * cos(back) - glance.y * sin(back), height: glance.x * sin(back) + glance.y * cos(back))
+            MascotAccessoryArt.draw(accessories, in: &c, box: CGRect(x: -bounds.midX * k, y: -bounds.midY * k, width: side, height: side),
+                                    bodyId: bodyId, color: color, face: MascotFace(centre: mass, diameter: unit, shift: shift))
         }
 
         let sinceChange = t - changedAt

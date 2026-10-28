@@ -5,10 +5,12 @@
 // thread and never starts, resumes or creates one.
 import { useEffect, useState } from "react";
 import { ChevronDown, ChevronRight, CircleAlert, CircleHelp, ListChecks, Loader2, RefreshCw } from "lucide-react";
-import { openThread, useStore, type AppState } from "@/state/store";
+import { openThread, useOptionalStore, useStore, type AppState } from "@/state/store";
 import { cn } from "@/lib/cn";
 import { t } from "@/lib/i18n";
 import { BotAvatar } from "./Avatar";
+import { V3Empty } from "./v3/Empty";
+import { useV3 } from "@/lib/v3";
 import {
   jobNextStep,
   jobOwners,
@@ -235,6 +237,9 @@ export function JobInboxBody({ jobs, asks, busy, onOpenAsk, onAnswer, ...rows }:
   onOpenAsk: (item: InboxItem) => void;
   onAnswer: (item: InboxItem, choice: InboxAnswer) => void;
 }) {
+  const v3 = useV3();
+  const store = useOptionalStore();
+  const jobBot = store?.state.bots.find((bot) => bot.id === store.state.selectedId && !bot.hidden) ?? store?.state.bots.find((bot) => !bot.hidden);
   const split = splitJobs(jobs?.items ?? []);
   const yourMoveLoaded = asks !== undefined && jobs !== undefined;
   const yours = (asks?.length ?? 0) + split.yours.length;
@@ -254,6 +259,9 @@ export function JobInboxBody({ jobs, asks, busy, onOpenAsk, onAnswer, ...rows }:
         <div data-jobs-loading className="flex justify-center py-10 text-ink-secondary"><Loader2 size={18} className="animate-spin" /></div>
       ) : jobs === null ? (
         <p data-jobs-unsupported className="py-10 text-center text-[13px] text-ink-secondary">{t("jobs.unsupported")}</p>
+      ) : jobs.items.length === 0 && v3 ? (
+        <div data-jobs-empty><V3Empty bot={jobBot} text={t("v3.empty.jobs")}
+          action={jobBot && store ? { label: t("v3.home.newJob", { name: jobBot.name }), onClick: () => store.dispatch({ type: "newTask", botId: jobBot.id }) } : undefined} /></div>
       ) : jobs.items.length === 0 ? (
         <div data-jobs-empty className="flex flex-col items-center gap-2 py-10 text-center">
           <p className="text-[14px] text-ink">{t("jobs.empty")}</p>

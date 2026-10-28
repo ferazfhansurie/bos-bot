@@ -71,7 +71,7 @@ struct UpdatesSheet: View {
     }
 }
 
-private struct UpdateRow: View {
+struct UpdateRow: View {
     let update: ChatUpdate
     let open: () -> Void
     @EnvironmentObject private var session: Session

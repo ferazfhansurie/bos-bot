@@ -4,7 +4,7 @@ import { modsDesktop } from "@/mods/use-mods";
 // Per-bot settings (persona, model, computer) live in BotSettingsDialog — this
 // is the stuff shared by every bot: who you are, your keys, and the
 // machine your bots can borrow.
-import { useEffect, useRef, useState } from "react";
+import { Fragment, useEffect, useRef, useState } from "react";
 import { Archive, Coins, Download, KeyRound, RefreshCw, Search, TabletSmartphone, Terminal, User, Users, X, Building2, HeartPulse } from "lucide-react";
 import { api, useStore, type AppSettingsSection, type ConfigStatus } from "@/state/store";
 import { analyticsEnabled, setAnalyticsEnabled } from "@/lib/analytics";
@@ -28,9 +28,12 @@ import { SetupImportSettings } from "./SetupImport";
 import { UpdatesSettings } from "./BosUpdate";
 import { WorkspacesSection, workspacesAvailable } from "./WorkspacesSection";
 import { SkinPicker } from "./SkinPicker";
+import { applyGlass, applySkin, glassOn, readSkin } from "@/lib/skins";
+import { setReduceTransparency, setV3, useReduceTransparency, useV3, v3Forced } from "@/lib/v3";
 import { AnonymousUsageSettings } from "./AnonymousUsageSettings";
 import { DefaultApprovalsSettings } from "./DefaultApprovalsSettings";
 import { AttentionSettings } from "./AttentionSettings";
+import { HomeBoardSettings } from "./HomeBoardSettings";
 import { ApprovalRulesSettings } from "./ApprovalRulesSettings";
 import { WorkspaceBackupSettings } from "./WorkspaceBackupSettings";
 import { HealthSettings } from "./HealthSettings";
@@ -69,6 +72,19 @@ const SECTIONS: Array<{
   { id: "backups", labelKey: "settings.section.backups", icon: Archive, keywords: ["export", "import", "restore", "full backup", "password", "recovery"] },
   { id: "workspaces", labelKey: "settings.section.workspaces", icon: Building2, keywords: ["clients", "tenants", "fleet", "workspaces"] },
 ];
+
+// 3.0 groups the nav under four plain headings. Anything not listed falls
+// into Advanced, so a new section can never become unreachable.
+const V3_GROUPS: ReadonlyArray<{ label: string; ids: readonly AppSettingsSection[] }> = [
+  { label: "You", ids: ["general"] },
+  { label: "AI", ids: ["engines", "usage"] },
+  { label: "Apps and devices", ids: ["connections", "companion", "desktopWorkspaces"] },
+  { label: "Advanced", ids: [] },
+];
+
+function v3GroupOf(id: AppSettingsSection): string {
+  return V3_GROUPS.find((group) => group.ids.includes(id))?.label ?? "Advanced";
+}
 
 function sectionMatches(section: (typeof SECTIONS)[number], query: string): boolean {
   if (!query) return true;
@@ -222,6 +238,34 @@ function AnalyticsRow() {
   );
 }
 
+/** bos bot 3.0 is on for everyone since 3.0.0; this switch turns it off.
+ * English only for now. */
+function LabsRows() {
+  const v3 = useV3();
+  const reduce = useReduceTransparency();
+  return (
+    <div>
+      <SettingRow title="bos bot 3.0" subtitle={v3Forced() ? "Set by this build." : "Cards, mini apps, automations and the new look. Turn it off to go back to 2.x."}>
+        <Switch
+          checked={v3}
+          disabled={v3Forced()}
+          aria-label="bos bot 3.0"
+          onClick={() => {
+            setV3(!v3);
+            applySkin(readSkin(!v3));
+            applyGlass(!v3 && glassOn());
+          }}
+        />
+      </SettingRow>
+      {v3 && (
+        <SettingRow title="Reduce transparency" subtitle="Solid surfaces instead of glass.">
+          <Switch checked={reduce} aria-label="Reduce transparency" onClick={() => setReduceTransparency(!reduce)} />
+        </SettingRow>
+      )}
+    </div>
+  );
+}
+
 function LanguageRow() {
   const { state, dispatch } = useStore();
   const current = state.config?.language ?? "";
@@ -294,6 +338,8 @@ export function SettingsModal() {
   const [query, setQuery] = useState("");
   useEffect(() => window.ogb?.environments?.onOpenSettings?.(() => setQuery("")), []);
   const q = query.trim().toLowerCase();
+  const v3 = useV3();
+  const reduceTransparency = useReduceTransparency();
   const availableSections = SECTIONS.filter(entry => entry.id !== "mods" || modsDesktop()).filter((entry) => !entry.hidden || entry.id === section)
     .filter((entry) => !remoteActive || entry.id === "companion" || entry.id === "general" || entry.id === "desktopWorkspaces")
     .filter((entry) => entry.id !== "desktopWorkspaces" || Boolean(window.ogb?.environments))
@@ -395,19 +441,31 @@ export function SettingsModal() {
               {t("settings.noMatch", { query: query.trim() })}
             </div>
           )}
-          {visibleSections.map(({ id, labelKey, icon: Icon }) => (
-            <button
-              key={id}
-              onClick={() => dispatch({ type: "toggleAppSettings", open: true, section: id })}
-              aria-current={section === id ? "page" : undefined}
-              className={cn(
-                "flex min-h-10 items-center gap-3 rounded-xl px-3 py-2 text-start text-[14px] transition-colors motion-reduce:transition-none",
-                section === id ? "bg-raised-hover font-medium text-ink" : "text-ink-secondary hover:bg-raised/70 hover:text-ink",
+          {(v3 && !q
+            ? V3_GROUPS.map((group) => ({ group: group.label, entries: visibleSections.filter((entry) => v3GroupOf(entry.id) === group.label) }))
+            : [{ group: "", entries: visibleSections }]
+          ).map(({ group, entries }) => entries.length === 0 ? null : (
+            <Fragment key={group || "all"}>
+              {group && (
+                <div className="px-3 pb-1 pt-3 text-[11.5px] font-medium uppercase tracking-[0.04em] text-ink-secondary first:pt-0" data-testid="settings-nav-group">
+                  {group}
+                </div>
               )}
-            >
-              <Icon size={17} className="shrink-0" />
-              {t(labelKey)}
-            </button>
+              {entries.map(({ id, labelKey, icon: Icon }) => (
+                <button
+                  key={id}
+                  onClick={() => dispatch({ type: "toggleAppSettings", open: true, section: id })}
+                  aria-current={section === id ? "page" : undefined}
+                  className={cn(
+                    "flex min-h-10 items-center gap-3 rounded-xl px-3 py-2 text-start text-[14px] transition-colors motion-reduce:transition-none",
+                    section === id ? "bg-raised-hover font-medium text-ink" : "text-ink-secondary hover:bg-raised/70 hover:text-ink",
+                  )}
+                >
+                  <Icon size={17} className="shrink-0" />
+                  {t(labelKey)}
+                </button>
+              ))}
+            </Fragment>
           ))}
         </nav>
 
@@ -468,12 +526,18 @@ export function SettingsModal() {
                 </Card>}
                 <Card title={t("settings.skin.title")} subtitle={t("settings.skin.subtitle")}>
                   <SkinPicker />
+                  {v3 && (
+                    <SettingRow title="Reduce transparency" subtitle="Solid surfaces instead of glass.">
+                      <Switch checked={reduceTransparency} aria-label="Reduce transparency (look)" onClick={() => setReduceTransparency(!reduceTransparency)} />
+                    </SettingRow>
+                  )}
                 </Card>
                 <div>
                   <ShowThreadsRow />
                   {!remoteActive && <LanguageRow />}
                 </div>
                 <AttentionSettings />
+                {v3 && <HomeBoardSettings />}
                 {!remoteActive && <ApprovalRulesSettings />}
                 {!remoteActive && (
                   <>
@@ -555,6 +619,7 @@ export function SettingsModal() {
                 <div>
                   <UpdatesRow />
                 </div>
+                <LabsRows />
               </>
             )}
 

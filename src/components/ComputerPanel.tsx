@@ -66,6 +66,7 @@ import {
 } from "@/lib/computer-panel-view";
 import { approvalModeFor } from "../../shared/approval-mode";
 import { t } from "@/lib/i18n";
+import { AutomationsWord } from "@/components/automations/AutomationsWord";
 import type { LocaleKey } from "@/locales";
 
 /** Keep local failure copy translatable while it remains in panel state. */
@@ -1268,7 +1269,7 @@ export function ComputerPanel({
               onClick={() => selectPanelView("routines")}
               aria-pressed={panelView === "routines"}
               className={cn("flex items-center gap-1.5 border-l border-hairline/40 px-2.5 py-1 text-[12.5px]", panelView === "routines" ? "bg-control text-ink" : "text-ink-secondary hover:text-ink")}
-            ><CalendarClock size={13} />{t("computer.tab.routines")}</button>
+            ><CalendarClock size={13} /><AutomationsWord /></button>
             {androidConnected && (
             <button
               onClick={() => selectPanelView("android")}
@@ -1805,7 +1806,7 @@ export function ComputerPanel({
         <button type="button" onClick={() => selectPanelView("routines")} className="mt-4 flex w-full items-start gap-3 rounded-xl bg-card p-4 text-left hover:bg-raised">
           <CalendarClock size={17} className="mt-0.5 shrink-0 text-accent" />
           <span className="min-w-0 flex-1">
-            <span className="block text-[14px] font-medium text-ink">{t("computer.tab.routines")} <span className="ml-1 text-[11px] text-ink-secondary">{botRoutines.length}</span></span>
+            <span className="block text-[14px] font-medium text-ink"><AutomationsWord /> <span className="ml-1 text-[11px] text-ink-secondary">{botRoutines.length}</span></span>
             <span className={cn("mt-1 block truncate text-[11.5px]", activeRoutineRun ? routineRunTone(activeRoutineRun) : "text-ink-secondary")}>{activeRoutineRun ? `${activeRoutineRun.routineName} · ${routineRunLabel(activeRoutineRun)}` : t("computer.routines.openTitle")}</span>
           </span>
           <span className="text-ink-secondary" aria-hidden="true">→</span>

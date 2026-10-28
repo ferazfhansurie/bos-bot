@@ -66,6 +66,9 @@ function inboxItemOf(raw: unknown): InboxItem | null {
   if (raw.approval === true && item.requestId) item.approval = true;
   const options = Array.isArray(raw.options) ? raw.options.filter((option): option is string => typeof option === "string" && option.trim() !== "") : [];
   if (options.length && !item.approval) item.options = options;
+  if (isRecord(raw.connect) && text(raw.connect.slug) && text(raw.connect.label)) {
+    item.connect = { slug: text(raw.connect.slug), label: text(raw.connect.label), ...(raw.connect.reconnect === true ? { reconnect: true } : {}) };
+  }
   return item;
 }
 

@@ -42,6 +42,9 @@ export interface HubOptions {
   sendEmail?: (to: string, subject: string, html: string, text: string) => Promise<void>;
   now?: () => number;
   limits?: Partial<typeof DEFAULT_LIMITS>;
+  /** Home of the BOS Bot founder. Every other home can join it as a contact
+   * through POST /hub/v1/founder, so the founder can talk to users in the app. */
+  founderHomeId?: string;
 }
 const DEFAULT_LIMITS = { registerPerIpHour: 10, homes: 20_000, invitesPerHomeDay: 100, emailsPerHomeDay: 20, emailsPerDay: 500, acceptPerIpHour: 40 };
 
@@ -208,6 +211,21 @@ export class PeopleHub {
     }
     const room = this.direct(ownerOf(home.homeId), ownerOf(invite.homeId));
     return { room, contact: { id: ownerOf(invite.homeId), name: this.home(invite.homeId)!.name, kind: "person" } };
+  }
+
+  /** Connects this home to the founder's home and opens their direct room.
+   * 404 until the founder's own home has registered, so apps retry later. */
+  joinFounder(home: Home): { self: true } | { room: SharedRoom; contact: { id: string; name: string; kind: "person" } } {
+    const founderId = this.opts.founderHomeId;
+    const founder = founderId ? this.home(founderId) : undefined;
+    if (!founder) throw new HttpError(404, "no founder contact yet");
+    if (founder.homeId === home.homeId) return { self: true };
+    if (!this.connected(founder.homeId, home.homeId)) {
+      this.state.connections.push([founder.homeId, home.homeId]);
+      this.save();
+    }
+    const room = this.direct(ownerOf(home.homeId), ownerOf(founder.homeId));
+    return { room, contact: { id: ownerOf(founder.homeId), name: founder.name, kind: "person" } };
   }
 
   private direct(actorId: string, targetId: string): SharedRoom {
@@ -550,6 +568,7 @@ export class PeopleHub {
       if (method === "POST" && path === "/hub/v1/invites") return send(res, 201, await this.createInvite(home, await readJson(req, 4096)));
       m = /^\/hub\/v1\/invites\/([\w-]{10,64})\/accept$/.exec(path);
       if (m && method === "POST") { await readJson(req, 1024); return send(res, 200, this.acceptInvite(home, m[1], ip)); }
+      if (method === "POST" && path === "/hub/v1/founder") { await readJson(req, 1024); return send(res, 200, this.joinFounder(home)); }
       if (method === "GET" && path === "/hub/v1/events") {
         const after = Number(url.searchParams.get("after") ?? -1);
         const wait = Math.min(Math.max(Number(url.searchParams.get("wait") ?? 0), 0), 30) * 1000;

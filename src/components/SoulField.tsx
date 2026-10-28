@@ -7,6 +7,7 @@ import { useEffect, useState } from "react";
 
 import { BOT_PROFILE_LIMITS } from "../../shared/bot-profile";
 import { cn } from "@/lib/cn";
+import { useV3 } from "@/lib/v3";
 import { firstSentence, soulPatchFor, utf8Bytes } from "@/lib/soul";
 import { api, useStore, type Bot } from "@/state/store";
 import { inputCls } from "./bot-settings/field";
@@ -21,6 +22,8 @@ export function SoulField({
   onPatch: (patch: { soul?: string; description?: string }) => void;
 }) {
   const { dispatch, flushBotPatches } = useStore();
+  // 3.0 says "instructions"; the SOUL.md file name stays in the advanced detail below
+  const v3 = useV3();
   const limit = BOT_PROFILE_LIMITS.soul;
   const [draft, setDraft] = useState(bot.soul ?? "");
   const [info, setInfo] = useState<SoulRead | null>(null);
@@ -75,7 +78,7 @@ export function SoulField({
     <div className="block">
       <div className="mb-1.5 flex items-center justify-between gap-3">
         <label htmlFor={`bot-soul-${bot.id}`} className="text-[13px] text-ink-secondary">
-          Standing instructions (SOUL.md)
+          {v3 ? "Instructions" : "Standing instructions (SOUL.md)"}
         </label>
         {canMigrate && (
           <button
@@ -84,13 +87,13 @@ export function SoulField({
             onClick={() => onPatch({ soul: bot.description, description: firstSentence(bot.description) })}
             className="rounded-md px-1.5 py-1 text-[11.5px] font-medium text-accent-text hover:bg-accent/10"
           >
-            Move instructions into SOUL.md
+            {v3 ? "Move the blurb into instructions" : "Move instructions into SOUL.md"}
           </button>
         )}
       </div>
       {info?.drift && (
         <div className="mb-2 rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-[12px] text-ink">
-          <div className="font-medium">SOUL.md on disk was edited outside the app.</div>
+          <div className="font-medium">{v3 ? "The instructions file was edited outside the app." : "SOUL.md on disk was edited outside the app."}</div>
           <div className="mt-1 text-ink-secondary">
             The bot keeps using the saved version until you choose. File: <span className="break-all">{info.file}</span>
           </div>

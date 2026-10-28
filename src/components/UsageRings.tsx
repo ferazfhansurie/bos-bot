@@ -79,7 +79,7 @@ export function UsageRings({ children, open = false }: { children: ReactNode; op
       {spent && <span aria-hidden="true" className="pointer-events-none absolute right-0 top-0 size-2 rounded-full border border-panel bg-danger" />}
       {/* the exact numbers, on hover only and never over the open menu */}
       {!open && (
-        <span
+        <span data-popover
           role="tooltip"
           className="pointer-events-none absolute bottom-full left-0 z-50 mb-2.5 w-[248px] translate-y-1 rounded-2xl border border-hairline/50 bg-menu p-3 text-left opacity-0 shadow-2xl shadow-black/50 transition-[opacity,transform] delay-0 duration-150 group-hover/usage:translate-y-0 group-hover/usage:opacity-100 group-hover/usage:delay-300"
         >

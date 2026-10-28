@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { mapClaudeUsage, mapCodexUsage, claudeCredentialService, readClaudeUsageToken } from "./provider-usage.ts";
+import { mapClaudeUsage, mapCodexUsage, claudeCredentialService, readClaudeUsageToken, cachedUsage, resetUsageCache, FRESH_MS, type ProviderUsage } from "./provider-usage.ts";
 import { launchVerificationServer } from "../scripts/control-omb.ts";
 
 describe("subscription usage mapping", () => {
@@ -60,5 +60,54 @@ describe("provider usage endpoint", () => {
     let called = false;
     expect(await readClaudeUsageToken("/fixture", "/fixture", io(null, async () => { called=true; return oauth("host-secret"); }, "/fixture"))).toBeNull();
     expect(called).toBe(false);
+  });
+});
+
+describe("usage cache", () => {
+  const good = (pct: number, resetsAt: number | null = 2_000_000_000): ProviderUsage => ({ provider: "claude", account: "Work", instanceId: "claude",
+    fiveHour: { usedPercent: pct, resetsAt }, sevenDay: { usedPercent: pct, resetsAt: 2_000_000_000 }, status: "available" });
+  const down = (): ProviderUsage => ({ provider: "claude", account: "Work", instanceId: "claude", fiveHour: { usedPercent: null, resetsAt: null }, sevenDay: { usedPercent: null, resetsAt: null }, status: "unavailable" });
+  const setup = () => { resetUsageCache(); let t = 1_000_000; const clock = { now: () => t, advance: (ms: number) => { t += ms; } }; return clock; };
+
+  it("reads each account at most once per fresh window, even when asked concurrently", async () => {
+    const clock = setup(); let calls = 0;
+    const read = async () => { calls++; return { row: good(40), retryAfterMs: null }; };
+    await Promise.all([cachedUsage("a", read, clock.now), cachedUsage("a", read, clock.now), cachedUsage("a", read, clock.now)]);
+    clock.advance(FRESH_MS - 1); await cachedUsage("a", read, clock.now);
+    expect(calls).toBe(1);
+    clock.advance(2); await cachedUsage("a", read, clock.now);
+    expect(calls).toBe(2);
+  });
+
+  it("keeps the last good numbers on a 429 and waits out retry-after before asking again", async () => {
+    const clock = setup(); let calls = 0; let limited = false;
+    const read = async () => { calls++; return limited ? { row: down(), retryAfterMs: 2422_000 } : { row: good(52), retryAfterMs: null }; };
+    await cachedUsage("a", read, clock.now);
+    limited = true; clock.advance(FRESH_MS);
+    const row = await cachedUsage("a", read, clock.now);
+    expect(row).toMatchObject({ status: "available", stale: true, checkedAt: 1_000_000, fiveHour: { usedPercent: 52 } });
+    clock.advance(2421_000); await cachedUsage("a", read, clock.now);
+    expect(calls).toBe(2);
+    limited = false; clock.advance(1_000);
+    expect(await cachedUsage("a", read, clock.now)).toMatchObject({ stale: false, fiveHour: { usedPercent: 52 } });
+    expect(calls).toBe(3);
+  });
+
+  it("never asks the provider again during a backoff when it has no numbers yet", async () => {
+    const clock = setup(); let calls = 0;
+    const read = async () => { calls++; return { row: down(), retryAfterMs: 600_000 }; };
+    expect(await cachedUsage("a", read, clock.now)).toMatchObject({ status: "unavailable" });
+    clock.advance(599_000);
+    expect(await cachedUsage("a", read, clock.now)).toMatchObject({ status: "unavailable" });
+    expect(calls).toBe(1);
+  });
+
+  it("zeroes a stale window whose reset has passed", async () => {
+    const clock = setup(); let ok = true;
+    const resetsAt = Math.floor((1_000_000 + FRESH_MS + 60_000) / 1000);
+    const read = async () => ok ? { row: good(90, resetsAt), retryAfterMs: null } : { row: down(), retryAfterMs: null };
+    await cachedUsage("a", read, clock.now);
+    ok = false; clock.advance(FRESH_MS + 120_000);
+    expect(await cachedUsage("a", read, clock.now)).toMatchObject({ stale: true, fiveHour: { usedPercent: 0, resetsAt: null }, sevenDay: { usedPercent: 90 } });
   });
 });

@@ -9,6 +9,10 @@ export type UsageAccount = {
   fiveHour?: UsageWindow;
   sevenDay: UsageWindow;
   status: string;
+  /** When the numbers were read, ms since epoch. */
+  checkedAt?: number;
+  /** The latest read failed; these are the last good numbers. */
+  stale?: boolean;
 };
 
 export interface XaiUsage {

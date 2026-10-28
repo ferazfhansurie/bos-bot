@@ -28,7 +28,8 @@ export function htmlTitle(html: string): string | undefined {
 
 /** Typed into the chat composer by the blank tab's starter chips. */
 export const COMPOSER_INSERT_EVENT = "bos:composer-insert";
-export type ComposerInsertDetail = { botId: string; threadId?: string; text: string };
+/** ifEmpty: only fill a composer that has no draft (focus it otherwise). */
+export type ComposerInsertDetail = { botId: string; threadId?: string; text: string; ifEmpty?: boolean };
 
 /** The document the tab's iframe gets: the chat-preview CSP first, then
  * the present shim, then bos's markup. The shim marks slides, shows one at

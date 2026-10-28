@@ -43,7 +43,7 @@ final class PushAppDelegate: NSObject, UIApplicationDelegate {
 @main
 struct CompanionApp: App {
     @UIApplicationDelegateAdaptor(PushAppDelegate.self) private var pushDelegate
-    @StateObject private var session = Session()
+    @StateObject private var session = Session.main
     @State private var showingLaunchSplash = true
     @Environment(\.scenePhase) private var scenePhase
     @State private var liveActivities = LiveActivityCoordinator()
@@ -134,6 +134,12 @@ struct CompanionApp: App {
                     session.connectHomes()
                     liveActivities.attach(to: session)
                     CallIntentRouter.shared.attach(session)
+                    VoiceCallOutbox.shared.attach(session)
+                    VoiceCallOutbox.shared.foreground()
+                }
+                // Recents and "hey siri, call bos": a call to the bot by name
+                .onContinueUserActivity("INStartCallIntent") { activity in
+                    if let name = CallIntentRouter.callTarget(activity) { CallIntentRouter.shared.call(name: name) }
                 }
                 // call/thread links from Shortcuts, controls and the Live
                 // Activity; anything else is a pairing link
@@ -149,13 +155,15 @@ struct CompanionApp: App {
                         PhoneUsageTelemetry.shared.foreground()
                         BosSharedInbox.removeDirectories(olderThan: 60 * 60)
                         session.connectHomes()
+                        VoiceCallOutbox.shared.foreground()
                         Task { await session.refreshNotificationAuthorization() }
                     case .background:
 #if DEBUG
                         PerfProbe.mark("scene.background")
 #endif
                         PhoneUsageTelemetry.shared.background()
-                        session.lingerHomes()
+                        // a car screen still up keeps them (App/CarPlay)
+                        if !CarPlayPresence.carOnScreen { session.lingerHomes() }
                     case .inactive: break
                     @unknown default: break
                     }

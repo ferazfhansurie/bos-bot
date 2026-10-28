@@ -4,7 +4,15 @@ import type { CallAudio } from "./audio";
 import { MicrophoneError } from "./audio";
 import { STAY_SILENT_ERROR, VoiceCallEngine, type CallHost, type CallSocket, type Timers } from "./engine";
 import { floatToPcm16Base64 } from "./pcm";
+import { MemoryStore, VoiceJournal, type VoiceServer } from "./journal";
 import type { VoiceCallTicket } from "./protocol";
+import type {
+  VoiceCallEndRequest,
+  VoiceCallEvent,
+  VoiceJob,
+  VoiceJobsRequest,
+  VoiceToolRequest,
+} from "../../../shared/voice-call";
 
 class FakeSocket implements CallSocket {
   readyState = 0;
@@ -503,7 +511,7 @@ describe("work landed", () => {
 });
 
 describe("reconnect", () => {
-  it("re-mints, rejoins the conversation with keep_context false and replays history", async () => {
+  it("v2 server: re-mints, rejoins the conversation and replays history", async () => {
     const { engine, socket } = await goLive();
     socket.server({ type: "conversation.item.input_audio_transcription.completed", item_id: "u1", transcript: "hello" });
     socket.server({ type: "response.created", response: {} });
@@ -522,7 +530,8 @@ describe("reconnect", () => {
     expect(next.protocols).toEqual(["xai-client-secret.s2"]);
     next.open();
     expect(next.sent[0].type).toBe("session.update");
-    expect(next.sent[0].session.keep_context).toBe(false);
+    expect(next.sent[0].session.keep_context).toBeUndefined();
+    expect(next.sent[0].session.resumption).toEqual({ enabled: true });
     expect(next.sent.slice(1)).toEqual([
       { type: "conversation.item.create", item: { type: "message", role: "user", content: [{ type: "input_text", text: "hello" }] } },
       { type: "conversation.item.create", item: { type: "message", role: "assistant", content: [{ type: "output_text", text: "hi firaz" }] } },
@@ -610,5 +619,376 @@ describe("settings and hang up", () => {
     expect(hangupChime).toHaveBeenCalledTimes(1);
     expect(finished).toHaveBeenCalledTimes(1);
     expect(engine.getSnapshot().phase).toBe("idle");
+  });
+});
+
+
+// ── voice calls v3 ───────────────────────────────────────────────────────
+
+class FakeServer implements VoiceServer {
+  online = true;
+  events: VoiceCallEvent[] = [];
+  toolRequests: VoiceToolRequest[] = [];
+  jobRequests: VoiceJobsRequest[] = [];
+  /** Jobs the server took for the first time (a resend does not add). */
+  received = new Map<string, VoiceJob>();
+  ends: VoiceCallEndRequest[] = [];
+  toolImpl: (request: VoiceToolRequest) => Promise<{ output: string }> = async () => ({ output: "ok" });
+  async jobs(request: VoiceJobsRequest) {
+    this.jobRequests.push(request);
+    if (!this.online) throw new Error("network");
+    return {
+      results: request.jobs.map((job) => {
+        const duplicate = this.received.has(job.jobId);
+        if (!duplicate) this.received.set(job.jobId, job);
+        return { jobId: job.jobId, status: duplicate ? ("duplicate" as const) : ("sent" as const), threadId: `thread-${job.jobId}`, botId: request.botId };
+      }),
+    };
+  }
+  async event(request: { event: VoiceCallEvent }) {
+    this.events.push(request.event);
+    return { ok: true };
+  }
+  tool(request: VoiceToolRequest) {
+    this.toolRequests.push(request);
+    return this.toolImpl(request);
+  }
+  async end(request: VoiceCallEndRequest) {
+    if (!this.online) throw new Error("network");
+    this.ends.push(request);
+    return { threadId: "t", messageId: "m" };
+  }
+}
+
+function v3Ticket(secret = "s1"): VoiceCallTicket {
+  const base = ticket(secret);
+  return {
+    ...base,
+    plan: {
+      ...base.plan,
+      v: 3,
+      keyterms: ["Partner", "Acme"],
+      roster: [{ id: "bot-1", name: "bos" }],
+      tools: [
+        { type: "function", name: "send_task", description: "d", parameters: {} },
+        { type: "function", name: "confirm_job", description: "d", parameters: {} },
+        { type: "function", name: "check_jobs", description: "d", parameters: {} },
+      ],
+    },
+  };
+}
+
+describe("voice v3", () => {
+  let server: FakeServer;
+  let journal: VoiceJournal;
+  let store: MemoryStore;
+  let jobSeq: number;
+
+  beforeEach(() => {
+    server = new FakeServer();
+    store = new MemoryStore();
+    journal = new VoiceJournal(store);
+    jobSeq = 0;
+    mint = vi.fn(async () => v3Ticket());
+  });
+
+  function v3Engine() {
+    return new VoiceCallEngine({
+      botId: "bot-1",
+      callId: "call-1",
+      mint: mint as () => Promise<VoiceCallTicket>,
+      openSocket: (url, protocols) => {
+        const socket = new FakeSocket(url, protocols);
+        sockets.push(socket);
+        return socket;
+      },
+      createAudio: () => audio,
+      host,
+      loadSettings: () => ({ voice: "eve", speed: 1, language: "auto" }),
+      saveSettings: () => undefined,
+      timers,
+      now: () => timers.now,
+      onFinished: finished as () => void,
+      server,
+      journal,
+      newJobId: () => `job-${++jobSeq}`,
+    });
+  }
+
+  async function live() {
+    const result = await goLive(v3Engine());
+    await flush();
+    result.socket.server({ type: "response.created", response: {} });
+    result.socket.take();
+    return result;
+  }
+
+  const call = (socket: FakeSocket, name: string, args: unknown, id = `c-${Math.random()}`) =>
+    socket.server({ type: "response.function_call_arguments.done", call_id: id, name, arguments: JSON.stringify(args) });
+  const rawOutput = (socket: FakeSocket): string => {
+    const frame = [...socket.sent].reverse().find((f) => f.type === "conversation.item.create" && f.item.type === "function_call_output");
+    return frame.item.output;
+  };
+  const lastOutput = (socket: FakeSocket) => JSON.parse(rawOutput(socket));
+  const say = (socket: FakeSocket, itemId: string, transcript: string) =>
+    socket.server({ type: "conversation.item.input_audio_transcription.completed", item_id: itemId, transcript });
+
+  async function resume(previous: FakeSocket) {
+    previous.drop(1006, "");
+    timers.advance(0);
+    await flush();
+    const next = sockets.at(-1)!;
+    next.open();
+    next.server({ type: "session.updated" });
+    return next;
+  }
+
+  it("session.update carries resumption and the plan's keyterms, never keep_context", async () => {
+    const engine = v3Engine();
+    engine.start();
+    audio.grant();
+    await flush();
+    sockets[0].open();
+    const update = sockets[0].sent[0].session;
+    expect(update.resumption).toEqual({ enabled: true });
+    expect(update.keep_context).toBeUndefined();
+    expect(update.audio.input.transcription.keyterms).toEqual(["Partner", "Acme"]);
+    expect(server.events).toEqual([{ kind: "start" }]);
+  });
+
+  it("send_task reads back; the job is the request only and confirm go journals it before sending", async () => {
+    const { socket } = await live();
+    say(socket, "u1", "send an email to ali about the invoice please");
+    call(socket, "send_task", { request: "email Ali about the invoice", readback: "email Ali about the invoice." });
+    expect(lastOutput(socket)).toEqual({ status: "read_back", job_id: "job-1", say: "email Ali about the invoice. go?" });
+    expect(journal.list()).toEqual([]);
+
+    server.online = false;
+    call(socket, "confirm_job", { job_id: "job-1", decision: "go" });
+    expect(lastOutput(socket)).toEqual({ status: "saved", say: "saved." });
+    // Durable on the device even though nothing reached the server.
+    expect(journal.list().map((e) => e.job)).toEqual([{ jobId: "job-1", text: "email Ali about the invoice" }]);
+  });
+
+  it("a confirmed job survives a drop: journal keeps it, flushes after resume, the server sees it once", async () => {
+    const { socket } = await live();
+    server.online = false;
+    call(socket, "send_task", { request: "check the invoices for Partner" });
+    call(socket, "confirm_job", { job_id: "job-1", decision: "go" });
+    await flush();
+    expect(server.received.size).toBe(0);
+    expect(journal.list()).toHaveLength(1);
+
+    // The socket drops with the network still down: the entry stays.
+    socket.drop(1006, "");
+    timers.advance(0);
+    await flush();
+    expect(journal.list()).toHaveLength(1);
+
+    // The network is back and the line resumes: the journal flushes.
+    server.online = true;
+    const next = sockets.at(-1)!;
+    next.open();
+    next.server({ type: "session.updated" });
+    await flush();
+    expect(server.received.size).toBe(1);
+    expect(server.received.get("job-1")?.text).toBe("check the invoices for Partner");
+    expect(journal.list()).toEqual([]);
+    expect(server.jobRequests.at(-1)).toMatchObject({ callId: "call-1", botId: "bot-1" });
+  });
+
+  it("a resend after an uncertain answer is a duplicate, never a second job", async () => {
+    const { socket } = await live();
+    call(socket, "send_task", { request: "check the invoices for Partner" });
+    call(socket, "confirm_job", { job_id: "job-1", decision: "go" });
+    await flush();
+    expect(journal.list()).toEqual([]);
+    journal.add({ callId: "call-1", botId: "bot-1", job: { jobId: "job-1", text: "check the invoices for Partner" }, at: 0 });
+    const next = await resume(socket);
+    await flush();
+    expect(next).toBeTruthy();
+    expect(server.received.size).toBe(1);
+    expect(journal.list()).toEqual([]);
+  });
+
+  it("cancel drops the job without journaling it", async () => {
+    const { socket } = await live();
+    call(socket, "send_task", { request: "delete the old files now" });
+    call(socket, "confirm_job", { job_id: "job-1", decision: "cancel" });
+    expect(lastOutput(socket)).toEqual({ status: "cancelled" });
+    call(socket, "confirm_job", { job_id: "job-1", decision: "go" });
+    expect(lastOutput(socket).status).toBe("unknown_job");
+    await flush();
+    expect(journal.list()).toEqual([]);
+    expect(server.received.size).toBe(0);
+  });
+
+  it("noisy input: [noise] uh gets 'say that again?', an unclear event, and nothing journaled", async () => {
+    const { socket } = await live();
+    say(socket, "u1", "[noise] uh");
+    call(socket, "send_task", { request: "check the invoices for Partner" });
+    expect(lastOutput(socket)).toEqual({ status: "unclear", say: "say that again?" });
+    expect(server.events).toContainEqual({ kind: "unclear" });
+    call(socket, "confirm_job", { job_id: "job-1", decision: "go" });
+    await flush();
+    expect(journal.list()).toEqual([]);
+    expect(server.jobRequests).toEqual([]);
+  });
+
+  it("a short mumble is unclear too, a real request is not", async () => {
+    const { socket } = await live();
+    say(socket, "u1", "pain");
+    call(socket, "send_task", { request: "uh pain" });
+    expect(lastOutput(socket).status).toBe("unclear");
+    say(socket, "u2", "check the partner invoices");
+    call(socket, "send_task", { request: "check the partner invoices" });
+    expect(lastOutput(socket).status).toBe("read_back");
+  });
+
+  it("other plan tools go to the server with the call's job ids, and the output is fed back", async () => {
+    const { socket } = await live();
+    call(socket, "send_task", { request: "check the invoices for Partner" });
+    call(socket, "confirm_job", { job_id: "job-1", decision: "go" });
+    await flush();
+    server.toolImpl = async () => ({ output: "one job running" });
+    call(socket, "check_jobs", {});
+    await flush();
+    expect(server.toolRequests).toEqual([
+      { callId: "call-1", botId: "bot-1", name: "check_jobs", args: {}, jobIds: ["job-1"] },
+    ]);
+    expect(rawOutput(socket)).toBe("one job running");
+  });
+
+  it("a server tool that takes over 8s answers with the fallback text", async () => {
+    const { socket } = await live();
+    server.toolImpl = () => new Promise(() => undefined);
+    call(socket, "check_jobs", {});
+    timers.advance(7_999);
+    await flush();
+    expect(socket.sent.filter((f) => f.type === "conversation.item.create")).toHaveLength(0);
+    timers.advance(1);
+    await flush();
+    expect(rawOutput(socket)).toBe("couldn't reach the computer. want me to make it a job?");
+  });
+
+  it("a tool the plan does not list is refused", async () => {
+    const { socket } = await live();
+    call(socket, "rm_rf", {});
+    expect(lastOutput(socket).error).toMatch(/no tool named/);
+    expect(server.toolRequests).toEqual([]);
+  });
+
+  it("drop: event, resume on the same conversation with a spare secret, 'back.' turn, event with ms", async () => {
+    const { engine, socket } = await live();
+    expect(mint).toHaveBeenCalledTimes(2); // the call and the spare
+    mint.mockImplementation(async () => v3Ticket("spare-2"));
+    socket.drop(1006, "");
+    expect(server.events).toContainEqual({ kind: "drop" });
+    timers.advance(0);
+    // The spare dials at once: no new mint before the socket exists.
+    expect(sockets).toHaveLength(2);
+    expect(mint).toHaveBeenCalledTimes(2);
+    const next = sockets[1];
+    expect(next.url).toBe("wss://api.x.ai/v1/realtime?model=grok-voice&conversation_id=conv_1");
+    expect(next.protocols).toEqual(["xai-client-secret.s1"]);
+    next.open();
+    expect(next.sent[0].session.resumption).toEqual({ enabled: true });
+    expect(next.sent[0].session.keep_context).toBeUndefined();
+    expect(next.sent[0].session.audio.input.transcription.keyterms).toEqual(["Partner", "Acme"]);
+    // No history replay: the conversation resumes on xAI's side.
+    expect(next.types()).toEqual(["session.update"]);
+    timers.advance(300);
+    next.server({ type: "session.updated" });
+    expect(next.sent.at(-1).response.instructions).toMatch(/say "back\."/);
+    expect(server.events).toContainEqual({ kind: "resume", ms: 300 });
+    expect(engine.getSnapshot().phase).toBe("live");
+    await flush();
+    // A fresh spare is minted after the resume.
+    expect(mint).toHaveBeenCalledTimes(3);
+  });
+
+  it("gives up after 5 dials and ends the call normally", async () => {
+    const { engine, socket } = await live();
+    mint.mockImplementation(async () => v3Ticket("again"));
+    socket.drop(1006, "");
+    for (let i = 0; i < 12 && !engine.getSnapshot().phase.match(/idle|failed/); i++) {
+      timers.advance(1_500);
+      await flush();
+      const latest = sockets.at(-1)!;
+      if (latest.readyState !== 3) latest.drop(1006, "");
+    }
+    expect(engine.getSnapshot().phase).toBe("idle");
+    expect(sockets.length - 1).toBe(5);
+    expect(finished).toHaveBeenCalledTimes(1);
+  });
+
+  it("gives up 20s after the drop when the dial hangs", async () => {
+    const { engine, socket } = await live();
+    socket.drop(1006, "");
+    timers.advance(0);
+    await flush();
+    expect(engine.getSnapshot().phase).toBe("reconnecting");
+    timers.advance(19_999);
+    expect(engine.getSnapshot().phase).not.toBe("idle");
+    timers.advance(1);
+    expect(engine.getSnapshot().phase).toBe("idle");
+  });
+
+  it("books first_audio from the click to the first audio played", async () => {
+    const engine = v3Engine();
+    engine.start();
+    timers.advance(0);
+    audio.grant();
+    await flush();
+    const socket = sockets[0];
+    socket.open();
+    socket.server({ type: "conversation.created", conversation: { id: "conv_1" } });
+    socket.server({ type: "session.updated" });
+    timers.advance(650);
+    socket.server({ type: "response.created", response: {} });
+    socket.server({ type: "response.output_audio.delta", item_id: "a1", content_index: 0, delta: delta(2400) });
+    socket.server({ type: "response.output_audio.delta", item_id: "a1", content_index: 0, delta: delta(2400) });
+    expect(server.events.filter((e) => e.kind === "first_audio")).toEqual([{ kind: "first_audio", ms: 650 }]);
+  });
+
+  it("keeps each transcript line once per item id for the end report", async () => {
+    const { engine, socket } = await live();
+    say(socket, "u1", "hello partner");
+    socket.server({ type: "conversation.item.input_audio_transcription.delta", item_id: "u1", delta: "hello partner" });
+    say(socket, "u1", "hello partner");
+    socket.server({ type: "response.output_audio_transcript.done", item_id: "a1", transcript: "hi" });
+    const report = engine.endReport();
+    expect(report.transcript.map((l) => [l.role, l.text])).toEqual([
+      ["user", "hello partner"],
+      ["bot", "hi"],
+    ]);
+  });
+
+  it("end report: jobs with status, seconds, metrics", async () => {
+    const { engine, socket } = await live();
+    timers.advance(5_000);
+    call(socket, "send_task", { request: "check the invoices for Partner" });
+    call(socket, "confirm_job", { job_id: "job-1", decision: "go" });
+    await flush();
+    call(socket, "send_task", { request: "book a table for four" });
+    engine.hangUp();
+    const report = engine.endReport();
+    expect(report).toMatchObject({ callId: "call-1", botId: "bot-1", seconds: 5, metrics: { drops: 0, resumes: 0 } });
+    expect(report.jobs).toEqual([
+      { jobId: "job-1", text: "check the invoices for Partner", status: "sent", threadId: "thread-job-1", botId: "bot-1" },
+      { jobId: "job-2", text: "book a table for four", status: "said" },
+    ]);
+  });
+
+  it("no network: mint fails, the call ends cleanly, and the end report is a seconds-0 call", async () => {
+    mint.mockRejectedValueOnce(new TypeError("Failed to fetch"));
+    const engine = v3Engine();
+    engine.start();
+    await flush();
+    expect(sockets).toHaveLength(0);
+    expect(engine.getSnapshot().phase).toBe("failed");
+    expect(engine.getSnapshot().failure?.title).toBe("No connection");
+    expect(finished).toHaveBeenCalledTimes(1);
+    expect(engine.endReport()).toMatchObject({ callId: "call-1", seconds: 0, transcript: [], jobs: [] });
   });
 });

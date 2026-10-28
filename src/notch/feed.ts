@@ -5,7 +5,8 @@ import type { ActivityEntry, ActivityState } from "@/lib/activity-feed";
 import type { InboxItem } from "@/lib/inbox";
 import type { AttentionPreferences } from "@/lib/attention-preferences";
 import type { Bot, Group } from "@/state/store";
-import type { NotchAsk, NotchBot, NotchMoment, NotchSnapshot } from "./types";
+import type { NotchAsk, NotchBot, NotchClock, NotchMoment, NotchSnapshot } from "./types";
+import { resolveMausColor } from "../../shared/glyph-faces";
 
 /** waiting needs the person most; then whatever is visibly moving */
 const RANK: Record<ActivityState, number> = { waiting: 0, tool: 1, typing: 2, thinking: 3, failed: 4, stopped: 5, idle: 6 };
@@ -64,7 +65,7 @@ function liveRows(inputs: NotchInputs): NotchBot[] {
     if (bot.hidden) continue;
     const entry = best.get(bot.id);
     if (entry) {
-      rows.push(row(bot, entry.threadId, entry.state, entry.since, inputs));
+      rows.push(row(bot, entry.threadId, entry.state, entry.since, inputs, entry));
       continue;
     }
     // an older server without the feed still reports busy tasks
@@ -77,8 +78,9 @@ function liveRows(inputs: NotchInputs): NotchBot[] {
   return rows.sort((a, b) => RANK[a.state] - RANK[b.state] || a.since - b.since || a.id.localeCompare(b.id)).slice(0, MAX_WORKING);
 }
 
-function row(bot: NotchBotRecord, threadId: string, state: ActivityState, since: number, inputs: NotchInputs): NotchBot {
+function row(bot: NotchBotRecord, threadId: string, state: ActivityState, since: number, inputs: NotchInputs, entry?: ActivityEntry): NotchBot {
   return {
+    ...jobFields(entry),
     id: bot.id,
     name: bot.name,
     color: bot.color,
@@ -87,6 +89,30 @@ function row(bot: NotchBotRecord, threadId: string, state: ActivityState, since:
     title: clip(threadTitle(threadId, inputs.bots, inputs.groups), 80),
     state,
     since,
+  };
+}
+
+/** The job clock, step and plan a newer server folds onto a busy thread. */
+function jobFields(entry: ActivityEntry | undefined): Pick<NotchBot, "jobSince" | "step" | "plan"> {
+  if (!entry || !isLive(entry.state)) return {};
+  const plan = entry.state !== "waiting" && entry.stepCount && entry.stepCount >= 2 && entry.stepIndex && entry.stepIndex >= 1
+    ? { index: Math.min(entry.stepIndex, entry.stepCount), count: entry.stepCount } : undefined;
+  return {
+    ...(entry.jobSince ? { jobSince: entry.jobSince } : {}),
+    ...(entry.step && entry.state !== "waiting" ? { step: clip(entry.step, 40) } : {}),
+    ...(plan ? { plan } : {}),
+  };
+}
+
+/** What the menu bar clock shows (electron/menubar-clock.mjs): the most
+ * urgent working bot, its plan and when its job began. */
+export function menuBarClock(working: readonly NotchBot[]): NotchClock | null {
+  const head = working[0];
+  if (!head) return null;
+  return {
+    botId: head.id, threadId: head.threadId, name: head.name, color: resolveMausColor(head.color),
+    needsYou: head.state === "waiting", start: head.jobSince ?? head.since,
+    ...(head.plan ? { plan: head.plan } : {}), more: working.length - 1,
   };
 }
 
@@ -139,6 +165,7 @@ export function buildNotchSnapshot(inputs: NotchInputs): NotchSnapshot {
   for (const bot of visible) bots[bot.id] = { id: bot.id, name: bot.name, color: bot.color, body: bot.mascotBody ?? null };
   return {
     working,
+    clock: menuBarClock(working),
     shelf: [...working, ...resting],
     bots,
     asks,

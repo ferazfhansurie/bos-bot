@@ -2,6 +2,8 @@
 // the system language; unknown tags and untranslated keys fall back to
 // English, so a partial pack can ship the day it has one string.
 import { en, locales, type LocaleKey, type LocalePack } from "@/locales";
+import { v3Enabled } from "./v3";
+import { V3_WORDS } from "./v3-words";
 
 /** "zh-Hant-TW" → exact tag, then "zh-hant", then "zh", then "en". Pure, for tests. */
 export function resolveLocale(tag: string | undefined, available: ReadonlySet<string>): string {
@@ -49,7 +51,9 @@ export function tFromServer(key: string | undefined, fallback: string | undefine
  * a placeholder without a matching param stays verbatim so a bad pack shows
  * its seams instead of dropping words. */
 export function t(key: LocaleKey, params?: Record<string, string | number>): string {
-  const template = activePack[key] ?? en[key];
+  // 3.0's plain words: checked only for the few keys it rewords
+  const plain = Object.hasOwn(V3_WORDS, key) && active === "en" && v3Enabled() ? V3_WORDS[key] : undefined;
+  const template = plain ?? activePack[key] ?? en[key];
   if (!params) return template;
   return template.replace(/\{(\w+)\}/g, (match, name: string) =>
     name in params ? String(params[name]) : match,

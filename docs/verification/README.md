@@ -168,6 +168,9 @@ using the real renderer and an isolated fake-engine server.
 
 The [notification choices and named app events fixture](routine-events.md) checks saved per-routine reporting policies and authenticated, source-filtered webhook relays without installing provider subscriptions.
 
+The [check-ins fixture](checkins.md) checks the 3.0 today screen: chief
+proposals through the real tools, dedupe, set-up, the taps and the iPhone card.
+
 The [interval restrictions recipe](interval-restrictions.md) checks weekday and
 time-window limits on scheduled routines in that same disposable fixture.
 

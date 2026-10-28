@@ -30,6 +30,10 @@ final class CallKitRinger: NSObject {
     private var answered: UUID?
     /// An answer waiting for CallKit to hand over the audio session.
     private var pendingAnswer: (UUID, PendingRing)?
+    /// The CallKit call carrying a call the owner placed (v3): it shows in
+    /// Recents, and the lock screen's end and mute drive the engine.
+    private var outgoing: UUID?
+    private let controller = CXCallController()
 
     static let tokenKey = "bos.voipToken"
     /// Sent next to the APNs token; nil until PushKit hands one over.
@@ -42,7 +46,7 @@ final class CallKitRinger: NSObject {
         configuration.maximumCallGroups = 1
         configuration.maximumCallsPerCallGroup = 1
         configuration.supportedHandleTypes = [.generic]
-        configuration.includesCallsInRecents = false
+        configuration.includesCallsInRecents = true
         // The label above the caller is the app's display name ("BOS Bot
         // Audio"); iOS ignores localizedName since 14. What is ours: the
         // bos chime and the glyph on the answer screen's app button.
@@ -148,8 +152,56 @@ final class CallKitRinger: NSObject {
         }
     }
 
+    // MARK: Outgoing call
+
+    /// Place the owner's call through CallKit (CXStartCallAction), so iOS
+    /// treats it as a phone call: Recents, the green pill, the lock-screen
+    /// controls. Returns false when CallKit is not involved (an answered ring
+    /// already owns the call); the caller then starts audio itself. A refused
+    /// request starts the audio anyway, without CallKit.
+    func startOutgoing(_ call: RealtimeVoiceCall) -> Bool {
+        guard answered == nil, pendingAnswer == nil else { return false }
+        if let previous = outgoing { provider.reportCall(with: previous, endedAt: nil, reason: .remoteEnded) }
+        let uuid = UUID()
+        outgoing = uuid
+        let action = CXStartCallAction(call: uuid, handle: CXHandle(type: .generic, value: call.bot.name))
+        action.isVideo = false
+        controller.request(CXTransaction(action: action)) { [weak self, weak call] error in
+            guard error != nil else { return }
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    if self?.outgoing == uuid { self?.outgoing = nil }
+                    call?.callKitAudioActivated()
+                }
+            }
+        }
+        return true
+    }
+
+    /// The line is up: CallKit's timer starts.
+    func outgoingConnected() {
+        guard let outgoing else { return }
+        provider.reportOutgoingCall(with: outgoing, connectedAt: nil)
+    }
+
+    /// Mute from the app's own button, mirrored to CallKit.
+    func callMuted(_ muted: Bool) {
+        guard let uuid = outgoing ?? answered else { return }
+        controller.request(CXTransaction(action: CXSetMutedCallAction(call: uuid, muted: muted))) { _ in }
+    }
+
     /// The realtime call ended in the app (hung up, bot ended, failed).
     func callEnded(failed: Bool) {
+        if let uuid = outgoing {
+            outgoing = nil
+            if failed {
+                provider.reportCall(with: uuid, endedAt: nil, reason: .failed)
+            } else {
+                controller.request(CXTransaction(action: CXEndCallAction(call: uuid))) { [provider] error in
+                    if error != nil { provider.reportCall(with: uuid, endedAt: nil, reason: .remoteEnded) }
+                }
+            }
+        }
         guard let uuid = answered else { return }
         answered = nil
         provider.reportCall(with: uuid, endedAt: nil, reason: failed ? .failed : .remoteEnded)
@@ -181,8 +233,9 @@ extension CallKitRinger: CXProviderDelegate {
         MainActor.assumeIsolated {
             rings = [:]
             pendingAnswer = nil
-            if answered != nil {
+            if answered != nil || outgoing != nil {
                 answered = nil
+                outgoing = nil
                 VoiceCallCenter.shared.call?.hangUp()
             }
         }
@@ -207,8 +260,34 @@ extension CallKitRinger: CXProviderDelegate {
         }
     }
 
+    nonisolated func provider(_ provider: CXProvider, perform action: CXStartCallAction) {
+        MainActor.assumeIsolated {
+            guard action.callUUID == outgoing else { return action.fail() }
+            // CallKit activates the session it is given; the engine starts
+            // in didActivate, with the mic setting's options.
+            let mic = VoiceCallCenter.shared.call?.settings.mic ?? .phone
+            try? AVAudioSession.sharedInstance().setCategory(.playAndRecord, mode: .voiceChat,
+                                                             options: VoiceCallAudio.categoryOptions(for: mic))
+            let update = CXCallUpdate()
+            update.remoteHandle = action.handle
+            update.localizedCallerName = action.handle.value
+            update.hasVideo = false
+            update.supportsHolding = false
+            update.supportsGrouping = false
+            update.supportsUngrouping = false
+            update.supportsDTMF = false
+            action.fulfill()
+            provider.reportCall(with: action.callUUID, updated: update)
+            provider.reportOutgoingCall(with: action.callUUID, startedConnectingAt: nil)
+        }
+    }
+
     nonisolated func provider(_ provider: CXProvider, didActivate audioSession: AVAudioSession) {
         MainActor.assumeIsolated {
+            if outgoing != nil {
+                VoiceCallCenter.shared.call?.callKitAudioActivated()
+                return
+            }
             guard let (uuid, pending) = pendingAnswer else { return }
             answer(uuid, pending)
         }
@@ -218,8 +297,9 @@ extension CallKitRinger: CXProviderDelegate {
         MainActor.assumeIsolated {
             rings[action.callUUID] = nil
             if pendingAnswer?.0 == action.callUUID { pendingAnswer = nil }
-            if answered == action.callUUID {
+            if answered == action.callUUID || outgoing == action.callUUID {
                 answered = nil
+                if outgoing == action.callUUID { outgoing = nil }
                 VoiceCallCenter.shared.call?.hangUp()
             }
             action.fulfill()
@@ -228,7 +308,7 @@ extension CallKitRinger: CXProviderDelegate {
 
     nonisolated func provider(_ provider: CXProvider, perform action: CXSetMutedCallAction) {
         MainActor.assumeIsolated {
-            if let call = VoiceCallCenter.shared.call, !call.isOver, call.muted != action.isMuted { call.toggleMute() }
+            if let call = VoiceCallCenter.shared.call, !call.isOver { call.setMuted(action.isMuted, fromCallKit: true) }
             action.fulfill()
         }
     }

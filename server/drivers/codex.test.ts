@@ -690,6 +690,7 @@ describe("CodexDriver turns (fake app-server)", () => {
     const member = { userId: "sam@example.com", roles: ["Sales User"], sessionId: "s-1" };
     await instance.adapter.sendTurn({
       threadId: "t-member-mcp",
+      botId: "b-crm",
       text: "go",
       member,
       integrations: { custom: { crm: { command: "node", args: ["crm.mjs"], env: {}, autoApprove: ["my_day"] } } },
@@ -698,8 +699,11 @@ describe("CodexDriver turns (fake app-server)", () => {
     const seen = JSON.parse(readFileSync(dump, "utf8"));
     const argv = seen.argv.join(" ");
     expect(JSON.parse(seen.env.BOS_MEMBER)).toEqual(member);
-    expect(argv).toContain('mcp_servers.crm.env_vars=["BOS_MEMBER"]');
-    expect(argv).toContain('mcp_servers.crm.tools.my_day.approval_mode="auto"');
+    // the calling conversation travels too, so the server never guesses it
+    expect(seen.env.OMB_THREAD_ID).toBe("t-member-mcp");
+    expect(seen.env.OMB_BOT_ID).toBe("b-crm");
+    expect(argv).toContain('mcp_servers.crm.env_vars=["BOS_MEMBER","OMB_BOT_ID","OMB_THREAD_ID"]');
+    expect(argv).toContain('mcp_servers.crm.tools.my_day.approval_mode="approve"');
     expect(argv).not.toContain("mcp_servers.crm.default_tools_approval_mode");
   });
 
@@ -786,7 +790,7 @@ describe("CodexDriver turns (fake app-server)", () => {
 
     const seen = JSON.parse(readFileSync(dump, "utf8"));
     expect(seen.argv.join(" ")).toContain("mcp_servers.agents.command");
-    expect(seen.argv).toContain('mcp_servers.agents.default_tools_approval_mode="auto"');
+    expect(seen.argv).toContain('mcp_servers.agents.default_tools_approval_mode="approve"');
     expect(seen.argv.join(" ")).toContain("/tmp/agents-proxy.js");
     expect(seen.argv.join(" ")).toContain("OMB_COMMS_TOKEN");
     expect(seen.argv.join(" ")).not.toContain("peer-comms-secret");
@@ -818,7 +822,7 @@ describe("CodexDriver turns (fake app-server)", () => {
 
     const seen = JSON.parse(readFileSync(dump, "utf8"));
     expect(seen.argv.join(" ")).toContain("mcp_servers.browser.command");
-    expect(seen.argv).toContain('mcp_servers.browser.default_tools_approval_mode="auto"');
+    expect(seen.argv).toContain('mcp_servers.browser.default_tools_approval_mode="approve"');
     expect(seen.argv.join(" ")).toContain("/tmp/browser-proxy.js");
     expect(seen.argv.join(" ")).not.toContain("browser-capability-secret");
     expect(seen.env.OMB_BROWSER_TOKEN).toBe("browser-capability-secret");

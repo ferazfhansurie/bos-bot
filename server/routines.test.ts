@@ -2887,3 +2887,49 @@ describe("routine v2 retry and wakes", () => {
     expect(() => h.manager.createWake({ botId: "maus-d", threadId: "main", at: new Date(2026, 7, 17, 13, 0).getTime(), why: "ninth" })).toThrow(/daily cap/);
   });
 });
+
+describe("check-in routines", () => {
+  const start = Date.parse("2026-10-27T00:30:00Z"); // 08:30 in Kuala Lumpur
+  const withResults = (h: ReturnType<typeof harness>) => {
+    let made = 0;
+    h.options.isResultsThread = (_botId, threadId) => threadId.startsWith("results-");
+    h.options.resolveResultsThread = (routine, forceNew) => (forceNew ? `results-${++made}` : routine.resultsThreadId);
+    return () => made;
+  };
+
+  it("creates 9/14/22 in the person's timezone once, sharing one results thread", () => {
+    const h = harness(start);
+    const made = withResults(h);
+    const first = h.manager.createCheckins({ botId: "chief", timeZone: "Asia/Kuala_Lumpur" });
+    expect(first.map((routine) => routine.checkin)).toEqual(["morning", "afternoon", "night"]);
+    expect(first.map((routine) => routine.schedule)).toEqual([9, 14, 22].map((hour) => ({ type: "cron", expression: `0 ${hour} * * *`, timeZone: "Asia/Kuala_Lumpur" })));
+    expect(new Set(first.map((routine) => routine.resultsThreadId)).size).toBe(1);
+    expect(made()).toBe(1);
+    expect(first[0].nextRunAt).toBe(Date.parse("2026-10-27T01:00:00Z"));
+    const again = h.manager.createCheckins({ botId: "chief", timeZone: "Asia/Kuala_Lumpur" });
+    expect(again.map((routine) => routine.id)).toEqual(first.map((routine) => routine.id));
+    expect(h.manager.listRoutines()).toHaveLength(3);
+  });
+
+  it("skips a scheduled check-in quietly when the gate says nothing changed, and runs it when it did", async () => {
+    const h = harness(start);
+    withResults(h);
+    let changed = false;
+    h.options.checkinGate = () => changed;
+    h.options.checkinPrompt = (routine) => `custom ${routine.checkin}`;
+    const [morning] = h.manager.createCheckins({ botId: "chief", timeZone: "Asia/Kuala_Lumpur" });
+    h.manager.start();
+    h.setNow(morning.nextRunAt!);
+    await h.manager.tick();
+    expect(h.started).toEqual([]);
+    const skipped = h.manager.listRuns().find((run) => run.routineId === morning.id)!;
+    expect(skipped.status).toBe("completed");
+    expect(skipped.output).toMatch(/nothing changed/);
+    expect(h.manager.lastCheckinAt("chief")).toBeUndefined();
+    changed = true;
+    h.setNow(Date.parse("2026-10-28T01:00:00Z"));
+    await h.manager.tick();
+    expect(h.started.map((turn) => turn.prompt)).toContain("custom morning");
+    h.manager.stop();
+  });
+});

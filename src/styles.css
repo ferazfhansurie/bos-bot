@@ -1536,6 +1536,36 @@ button:disabled.bg-danger {
   --radius-xl: 14px;
   --font-sans: "Inter", -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", system-ui, sans-serif;
 }
+/* ── Liquid glass (bos bot 3.0) ────────────────────────────────────────────
+   A layer over any skin, not a skin: `data-liquid-glass` on the root frosts
+   the floating chrome (composer, header pill, popovers, sidebar) in that
+   skin's own composer colour. It reads as glass because of what scrolls
+   beneath it, so the skin's ground stays solid. Dark values first; the light
+   skins (and Sakura in light mode) lift the shine and soften the shadow.
+   ───────────────────────────────────────────────────────────────────────── */
+[data-liquid-glass] {
+  --glass-fill: color-mix(in srgb, var(--color-composer) 62%, transparent);
+  --glass-solid: var(--color-composer);
+  --glass-edge: color-mix(in srgb, var(--color-ink) 10%, transparent);
+  --glass-shine: rgba(255, 255, 255, 0.14);
+  --glass-shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
+  --glass-blur: 18px;
+  --glass-saturate: 1.6;
+}
+[data-liquid-glass]:is([data-skin="atelier"], [data-skin="lagoon"], [data-skin="linen"], [data-skin="daylight"], [data-skin="blossom"], [data-skin="sakura"]) {
+  --glass-fill: color-mix(in srgb, var(--color-composer) 66%, transparent);
+  --glass-shine: rgba(255, 255, 255, 0.9);
+  --glass-shadow: 0 10px 30px rgba(17, 19, 24, 0.12);
+  --glass-saturate: 1.8;
+}
+@media (prefers-color-scheme: dark) {
+  [data-liquid-glass][data-skin="sakura"] {
+    --glass-fill: color-mix(in srgb, var(--color-composer) 62%, transparent);
+    --glass-shine: rgba(255, 255, 255, 0.14);
+    --glass-shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
+    --glass-saturate: 1.6;
+  }
+}
 @media (prefers-color-scheme: dark) {
   [data-skin="sakura"] {
     /* usage rings: back to the dark-skin hues */
@@ -2123,4 +2153,68 @@ button:disabled.bg-danger {
   .composer-context-strip [data-testid="place-chip"] > span.truncate { display: none; }
   .composer-context-strip [data-testid="place-chip"] { padding-inline: 8px; }
   .composer-model > button > span { display: none; }
+}
+
+/* ── Glass chrome (bos bot 3.0) ────────────────────────────────────────────
+   `.bos-glass` is stamped by <Glass> only while the v3 flag is on, and it
+   only looks like glass while liquid glass is on; off, it keeps its fill.
+   Unlayered on purpose, so it beats the bg-/ring- utilities on the elements
+   it wraps. Refraction comes from --glass-filter (an SVG filter <Glass>
+   registers); without it the same rule is a plain frosted blur. */
+[data-liquid-glass] .bos-glass {
+  background-color: var(--glass-fill);
+  border-color: var(--glass-edge);
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+  box-shadow: inset 0 1px 0 var(--glass-shine), inset 0 0 0 1px var(--glass-edge);
+}
+[data-liquid-glass] .bos-glass[data-glass-floating] {
+  box-shadow: inset 0 1px 0 var(--glass-shine), inset 0 0 0 1px var(--glass-edge), var(--glass-shadow);
+}
+/* docked chrome (the sidebar) meets the window frame on three sides; only
+   the edge facing the content gets a line */
+[data-liquid-glass] .bos-glass:not([data-glass-floating]) {
+  box-shadow: inset -1px 0 0 var(--glass-edge);
+}
+/* refracted: the bend does the work, so the blur stays light enough to see it */
+[data-liquid-glass] .bos-glass[style*="--glass-filter"] {
+  -webkit-backdrop-filter: var(--glass-filter) blur(3px) saturate(var(--glass-saturate)) brightness(1.04);
+  backdrop-filter: var(--glass-filter) blur(3px) saturate(var(--glass-saturate)) brightness(1.04);
+}
+[data-liquid-glass] .bos-glass[data-glass="solid"],
+[data-liquid-glass][data-reduce-transparency] .bos-glass {
+  background-color: var(--glass-solid);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+@media (prefers-reduced-transparency: reduce) {
+  [data-liquid-glass] .bos-glass {
+    background-color: var(--glass-solid);
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+}
+/* the composer's solid strip exists to hide bubbles under the pill; 3.0
+   wants them there: glass bends them, and a flat skin shows them in the
+   gap around the pill */
+[data-v3] [data-composer-backdrop] { display: none; }
+/* popovers that are not wrapped in <Glass> still frost, without refraction */
+[data-liquid-glass][data-v3] :is([role="menu"], [data-popover]):not(.bos-glass) {
+  background-color: var(--glass-fill);
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+  border-color: var(--glass-edge);
+  box-shadow: inset 0 1px 0 var(--glass-shine), inset 0 0 0 1px var(--glass-edge), var(--glass-shadow);
+}
+[data-liquid-glass][data-v3][data-reduce-transparency] :is([role="menu"], [data-popover]):not(.bos-glass) {
+  background-color: var(--glass-solid);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+@media (prefers-reduced-transparency: reduce) {
+  [data-liquid-glass][data-v3] :is([role="menu"], [data-popover]):not(.bos-glass) {
+    background-color: var(--glass-solid);
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
 }

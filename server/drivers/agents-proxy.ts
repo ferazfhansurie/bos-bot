@@ -56,6 +56,12 @@ const SKILL_AUTHORING_ENABLED = compatEnv.OMB_SKILL_AUTHORING_ENABLED === "1";
 // Opt-in computer sharing (server features.sharedComputers). Off unless the
 // harness says "1", the same way skill authoring is gated above.
 const SHARED_COMPUTERS_ENABLED = compatEnv.OMB_SHARED_COMPUTERS_ENABLED === "1";
+// 3.0 setting cards (server features.v3). Off unless the harness says
+// "1": propose_setting is then absent from the tool list entirely.
+const SETTING_CARDS_ENABLED = compatEnv.OMB_SETTING_CARDS_ENABLED === "1";
+// 3.0 check-ins (features.v3, chief bots only): propose_item / resolve_item /
+// list_items, the person's today list. Absent otherwise.
+const CHECKINS_ENABLED = compatEnv.OMB_CHECKINS_ENABLED === "1";
 // "0" when the bot has no computer or browser it could select (a client-facing
 // deployment with none configured): select_computer is then not advertised, or
 // the model offers staff a computer prompt that can only fail.
@@ -464,6 +470,38 @@ const TOOLS = [
     }, required: ["bot_ids", "message", "request_key"] },
   },
   {
+    name: "propose_item",
+    description: "Put one item on the person's today list, for their check-in. Use it in a check-in run, or when something truly waits on them. kind: did (work finished they would miss), broke (something failed or stalled), decide (a call only they can make), tonight (work you will run tonight on a yes). Every item names its source (a thread, routine, commit, app or url) so they can trace it; one without a source is refused. Give the plan you will run on approve, or the draft they would send. Same source in the same state is the same item, so re-proposing it is harmless. Never relay whatsapp, calendar or mail content: only the conclusion they would otherwise miss. At most 3 per check-in; draft more in your head and keep the best 3.",
+    inputSchema: { type: "object", additionalProperties: false, properties: {
+      kind: { type: "string", enum: ["did", "broke", "decide", "tonight"] },
+      title: { type: "string", minLength: 1, maxLength: 120, description: "One short lowercase line, e.g. \"acme bot stopped replying at 3pm\"." },
+      why: { type: "string", minLength: 1, maxLength: 400, description: "One line: why they would want to know now." },
+      sources: { type: "array", minItems: 1, maxItems: 5, items: { type: "object", additionalProperties: false, properties: {
+        type: { type: "string", enum: ["thread", "routine", "commit", "app", "url"] },
+        ref: { type: "string", description: "thread id (list_threads), routine id (list_routines), commit sha, app id, or the url." },
+        url: { type: "string", description: "A link for commit or app sources (required for app)." },
+        label: { type: "string", maxLength: 80, description: "Short chip text, e.g. \"#acme bot fix\"." },
+      }, required: ["type", "ref"] } },
+      plan: { type: "string", maxLength: 4000, description: "What you will do on approve, as the brief for a fresh thread. Required for decide and tonight unless you give a draft." },
+      draft: { type: "string", maxLength: 4000, description: "A message you drafted for them, shown as-is." },
+      state_hash: { type: "string", maxLength: 200, description: "Optional fingerprint of the source's current state (e.g. last message id + status). Defaults to a hash of the item." },
+    }, required: ["kind", "title", "why", "sources"] },
+  },
+  {
+    name: "resolve_item",
+    description: "Take one of your own items off the person's today list because it no longer needs them: you finished it, or it stopped being true. Items the person answered, replied to or closed leave by themselves.",
+    inputSchema: { type: "object", additionalProperties: false, properties: {
+      item_id: { type: "string", description: "The item id from propose_item or list_items." },
+      outcome: { type: "string", enum: ["done", "withdrawn"] },
+      reason: { type: "string", maxLength: 120, description: "One short line, e.g. \"fixed it myself\"." },
+    }, required: ["item_id", "outcome"] },
+  },
+  {
+    name: "list_items",
+    description: "See the person's today list: items waiting on them, with ids, plus today's later / done / said-no counts and which kinds they muted by saying no three times. Read it at the start of a check-in so you never propose what is already there.",
+    inputSchema: { type: "object", additionalProperties: false, properties: {} },
+  },
+  {
     name: "set_next_wake",
     description: "Check back on your own later, without a routine. Use it when your reply leaves a natural follow-up: someone owes the person a reply, they said \"later\", an event is coming, or you promised to look again (\"i'll check at 4\"). At that time you wake in this conversation, look at what changed, and message the person only if it is worth it; otherwise nothing shows. Give either in_minutes or an RFC3339 at with offset. Caps: 3 waiting and 8 a day; 23:00–08:00 moves to 08:00. No approval needed.",
     inputSchema: { type: "object", additionalProperties: false, properties: {
@@ -503,6 +541,23 @@ const TOOLS = [
       query: { type: "string", maxLength: 200 },
       limit: { type: "integer", minimum: 1, maximum: 200 },
     }, required: ["app_id"] },
+  },
+  {
+    name: "app_update",
+    description: "Rename an app or change its icon; every list and open tab shows it straight away. Only your own apps, in your own conversation with the owner.",
+    inputSchema: { type: "object", additionalProperties: false, properties: {
+      app_id: { type: "string", description: "App id (a-…) from apps_list." },
+      name: { type: "string", minLength: 1, maxLength: 60 },
+      icon: { type: "string", maxLength: 32, description: "A lucide icon name, as in app_create." },
+    }, required: ["app_id"] },
+  },
+  {
+    name: "app_delete",
+    description: "Delete one of your apps and all its records, only when the owner asks for that app to go. It leaves every list at once; the page file stays in your folder. confirm_name must be the app's exact name from apps_list. Not in rooms.",
+    inputSchema: { type: "object", additionalProperties: false, properties: {
+      app_id: { type: "string", description: "App id (a-…) from apps_list." },
+      confirm_name: { type: "string", minLength: 1, maxLength: 60, description: "The app's exact current name." },
+    }, required: ["app_id", "confirm_name"] },
   },
   {
     name: "app_write",
@@ -995,6 +1050,37 @@ const TOOLS = [
     },
   },
   {
+    name: "propose_setting",
+    description:
+      "Show the person a one-tap card that changes one bot setting when they ask in chat (\"make cash use haiku\", \"mute oracle\", \"pin bos\", \"let cash use my apps\", \"cash works on boxcompute\"). Settings: model, notifications (false mutes), pinned, computer (where the bot works), apps (connected apps), browser, speak_replies. A Chief of Staff may pass for_bot_id (from list_bots) to change a bot in its section; anyone else changes only itself. This never applies anything, even under Full Access: the person taps Apply on the card, and can Undo it afterwards. After calling it, say the card is there; never claim the setting changed.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        setting: {
+          type: "string",
+          enum: ["model", "notifications", "pinned", "computer", "apps", "browser", "speak_replies"],
+          description: "Which setting to change.",
+        },
+        value: {
+          type: "string",
+          maxLength: 200,
+          description: "model: a model id or name exactly as the model catalog offers it (never invent one; an unknown model is refused with the choices). computer: auto, cloud, vm, local, browser, boxcompute or off. Every other setting: on or off (notifications off = muted).",
+        },
+        instance_id: {
+          type: "string",
+          description: "model only, optional: the engine instance that offers the model, when the name matches more than one.",
+        },
+        for_bot_id: {
+          type: "string",
+          description: "Chief of Staff only: the id of another bot in your section whose setting this changes. Omit to change your own.",
+        },
+        reason: { type: "string", maxLength: 500, description: "Optional short note shown with the card." },
+      },
+      required: ["setting", "value"],
+    },
+  },
+  {
     name: "skills_list",
     description:
       "List this bot's imported skills (enabled and disabled) and any staged skill writes waiting for the user to confirm. Use this before skill_manage to avoid duplicate names. Listing does not enable anything.",
@@ -1189,9 +1275,12 @@ const AUTHORING_TOOLS = (SKILL_AUTHORING_ENABLED
 // so they must not be advertised at all: a model that sees a tool it cannot
 // use spends turns discovering that.
 const SHARED_COMPUTER_TOOL_NAMES = new Set(["list_shared_computers", "shared_computer"]);
-const SHAREABLE_TOOLS = SHARED_COMPUTERS_ENABLED
+const CHECKIN_TOOL_NAMES = new Set(["propose_item", "resolve_item", "list_items"]);
+const SHAREABLE_TOOLS = (SHARED_COMPUTERS_ENABLED
   ? AUTHORING_TOOLS
-  : AUTHORING_TOOLS.filter((tool) => !SHARED_COMPUTER_TOOL_NAMES.has(tool.name));
+  : AUTHORING_TOOLS.filter((tool) => !SHARED_COMPUTER_TOOL_NAMES.has(tool.name)))
+  .filter((tool) => SETTING_CARDS_ENABLED || tool.name !== "propose_setting")
+  .filter((tool) => CHECKINS_ENABLED || !CHECKIN_TOOL_NAMES.has(tool.name));
 // One teamwork path in room turns; keep all unrelated integrations available.
 // Ordinary direct chats use this same bounded coordinator. Goal-owned turns
 // retain their independent loop and cannot start a second coordinator.
@@ -1207,7 +1296,7 @@ const PAGE_TOOL_NAMES = new Set(["pages_list", "page_read", "page_create", "page
 // Videos are private the same way.
 const VIDEO_TOOL_NAMES = new Set(["videos_list", "video_read", "video_create", "video_add_media", "video_edit", "video_render", "video_snapshot"]);
 // Apps stay in room turns: the server scopes them to apps shared into the room.
-const APP_TOOL_NAMES = new Set(["apps_list", "app_create", "app_read", "app_write"]);
+const APP_TOOL_NAMES = new Set(["apps_list", "app_create", "app_read", "app_write", "app_update", "app_delete"]);
 const OWN_THREAD_CREATION = compatEnv.OMB_OWN_THREAD_CREATION === "1";
 const AVAILABLE_TOOLS_FOR_TURN = COORDINATING
   ? SHAREABLE_TOOLS.filter(tool => !PAGE_TOOL_NAMES.has(tool.name) && !VIDEO_TOOL_NAMES.has(tool.name) && !MOD_TOOL_NAMES.has(tool.name))
@@ -1441,12 +1530,14 @@ function resolvePath(path: string): string {
 
 async function appTool(name: string, args: Json): Promise<{ text: string; isError?: boolean }> {
   const appId = typeof args.app_id === "string" ? args.app_id.trim() : "";
-  if ((name === "app_read" || name === "app_write") && !/^a-[a-z0-9]{12}$/.test(appId)) return { text: "app_id must be an app id like a-… from apps_list.", isError: true };
+  if (name !== "apps_list" && name !== "app_create" && !/^a-[a-z0-9]{12}$/.test(appId)) return { text: "app_id must be an app id like a-… from apps_list.", isError: true };
   const query = new URLSearchParams();
   for (const key of ["collection", "query", "limit"] as const) if (args[key] !== undefined && args[key] !== "") query.set(key, String(args[key]));
   const r = name === "apps_list" ? await apiResponse("/api/internal/apps")
     : name === "app_create" ? await apiResponse("/api/internal/apps", { method: "POST", body: JSON.stringify({ template: args.template, name: args.name, icon: args.icon }) })
     : name === "app_read" ? await apiResponse(`/api/internal/apps/${appId}/read${query.size ? `?${query}` : ""}`)
+    : name === "app_update" ? await apiResponse(`/api/internal/apps/${appId}`, { method: "PATCH", body: JSON.stringify({ name: args.name, icon: args.icon }) })
+    : name === "app_delete" ? await apiResponse(`/api/internal/apps/${appId}`, { method: "DELETE", body: JSON.stringify({ confirm_name: args.confirm_name }) })
     : await apiResponse(`/api/internal/apps/${appId}/write`, { method: "POST", body: JSON.stringify({ ops: args.ops }) });
   if (!r.ok) return { text: String(r.body.error ?? `HTTP ${r.status}`), isError: true };
   if (name === "apps_list") {
@@ -1454,6 +1545,8 @@ async function appTool(name: string, args: Json): Promise<{ text: string; isErro
     return { text: apps.length ? JSON.stringify(apps) : "No apps yet. app_create makes one." };
   }
   if (name === "app_create") return { text: `Made ${String(r.body.name)} (${String(r.body.app_id)}) and opened it in a tab beside this chat. The page is ${String(r.body.page)}; edit that file to customise it, and use app_read / app_write for its data.\n${JSON.stringify(r.body)}` };
+  if (name === "app_update") return { text: `Updated. It shows as ${String(r.body.name)} everywhere now.\n${JSON.stringify(r.body)}` };
+  if (name === "app_delete") return { text: `Deleted ${String(r.body.name)} (${String(r.body.deleted)}) and its records. It's gone from every list; the page file is still in your folder.` };
   if (name === "app_write") return { text: `Saved (rev ${String(r.body.rev)}). Any open tab updates now.\n${JSON.stringify(r.body.records)}` };
   return { text: JSON.stringify(r.body) };
 }
@@ -1491,6 +1584,47 @@ async function callTool(name: string, args: Json): Promise<{ text: string; isErr
     return { text: name === "page_read" ? `${head}\n\n${page.text}` : `${name === "page_create" ? "Created" : "Saved"} ${head}. The owner sees it in the page panel.\n\n${page.text}` };
   }
   if (APP_TOOL_NAMES.has(name)) return appTool(name, args);
+  if (name === "propose_item") {
+    const parsed = z.object({
+      kind: z.enum(["did", "broke", "decide", "tonight"]),
+      title: z.string().trim().min(1).max(120),
+      why: z.string().trim().min(1).max(400),
+      sources: z.array(z.object({
+        type: z.enum(["thread", "routine", "commit", "app", "url"]),
+        ref: z.string().trim().min(1).max(2000),
+        url: z.string().trim().max(2048).optional(),
+        label: z.string().trim().max(80).optional(),
+      }).strict()).min(1).max(5),
+      plan: z.string().max(4000).optional(),
+      draft: z.string().max(4000).optional(),
+      state_hash: z.string().trim().max(200).optional(),
+    }).strict().safeParse(args);
+    if (!parsed.success) return { text: "propose_item needs kind (did|broke|decide|tonight), title, why and at least one source {type, ref}.", isError: true };
+    const { state_hash: stateHash, ...rest } = parsed.data;
+    const response = await apiResponse("/api/internal/checkins", { method: "POST", body: JSON.stringify({ ...rest, stateHash }) });
+    if (!response.ok) return { text: String(response.body.error ?? `HTTP ${response.status}`), isError: true };
+    const status = String(response.body.status);
+    const id = String(response.body.id);
+    return { text: status === "duplicate"
+      ? `Already on the list (or already answered) as ${id}, unchanged. Nothing new to show.`
+      : `${status === "created" ? "Added" : status === "resurfaced" ? "Brought back" : "Updated"} ${id} on the today list.` };
+  }
+  if (name === "resolve_item") {
+    const parsed = z.object({
+      item_id: z.string().trim().min(1).max(80),
+      outcome: z.enum(["done", "withdrawn"]),
+      reason: z.string().trim().max(120).optional(),
+    }).strict().safeParse(args);
+    if (!parsed.success) return { text: "resolve_item needs item_id and outcome (done|withdrawn).", isError: true };
+    const response = await apiResponse("/api/internal/checkins/resolve", { method: "POST", body: JSON.stringify(parsed.data) });
+    if (!response.ok) return { text: String(response.body.error ?? `HTTP ${response.status}`), isError: true };
+    return { text: `Took ${parsed.data.item_id} off the today list.` };
+  }
+  if (name === "list_items") {
+    const response = await apiResponse("/api/internal/checkins", { method: "GET" });
+    if (!response.ok) return { text: String(response.body.error ?? `HTTP ${response.status}`), isError: true };
+    return { text: JSON.stringify(response.body) };
+  }
   if (name === "set_next_wake") {
     const parsed = z.object({
       why: z.string().trim().min(1).max(300),
@@ -2105,6 +2239,31 @@ async function callTool(name: string, args: Json): Promise<{ text: string; isErr
       }),
     });
     return confirmationResult(r, "the profile change", "profile");
+  }
+  if (name === "propose_setting") {
+    // Second lock: with the switch off the tool is not advertised and a call
+    // is refused as unknown before it gets here.
+    if (!SETTING_CARDS_ENABLED) return { text: "Setting cards are turned off in this workspace.", isError: true };
+    const forBotId = String(args.for_bot_id ?? "").trim();
+    const { body: r } = await apiResponse("/api/internal/setting-requests", {
+      method: "POST",
+      body: JSON.stringify({
+        fromBotId: BOT_ID,
+        fromThreadId: THREAD_ID,
+        setting: args.setting,
+        value: args.value,
+        instanceId: typeof args.instance_id === "string" && args.instance_id.trim() ? args.instance_id.trim() : undefined,
+        reason: typeof args.reason === "string" ? args.reason : undefined,
+        forBotId: forBotId || undefined,
+      }),
+    });
+    if (typeof r.error === "string" || r.state !== "pending") {
+      return { text: `No card was shown: ${typeof r.error === "string" ? r.error : "the harness did not accept it"}. Nothing changed. Tell the person why instead of retrying the same request.`, isError: true };
+    }
+    const summary = typeof r.summary === "string" ? r.summary : "the setting change";
+    return {
+      text: `A setting card is now shown to the person: ${summary}.\n\nIt has NOT been applied. It changes only when they tap Apply on the card (they can Undo it afterwards). Say the card is there; do not claim the setting changed, and do not call propose_setting again for the same change.`,
+    };
   }
   if (name === "memory_update") {
     if (!["append", "replace", "remove", "supersede"].includes(String(args.action))

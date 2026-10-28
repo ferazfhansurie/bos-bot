@@ -10,8 +10,10 @@ import {
   GLYPH_TILT_DEG,
   glyphInk,
   resolveMausColor,
+  type GlyphEyePart,
   type GlyphFaceState,
   type GlyphId,
+  type GlyphMotion,
 } from "../../shared/glyph-faces";
 
 export interface GlyphMark {
@@ -33,10 +35,21 @@ export interface GlyphFaceParts {
   tilt: string;
   /** the face centre the tilt and a blink squash pivot on */
   centre: [number, number];
+  /** each eye's main mark (its first part) */
   eyes: [GlyphMark, GlyphMark];
+  /** every part of each eye, main mark first (a dot plus a brow, a lid) */
+  eyeParts: [GlyphMark[], GlyphMark[]];
+  /** each eye's centre, for motions that turn an eye about itself */
+  eyeCentres: [[number, number], [number, number]];
+  /** where the eyes look, in the caller's units, applied inside the tilt */
+  gaze: [number, number];
   accent: GlyphMark | null;
   /** accent stroke colour; a CSS value, so read it as a style, not an attribute */
   accentColor: string;
+  /** the sheet's motion for this face (shared names; desktop plays them) */
+  motion: GlyphMotion;
+  /** one sheet px (a 64px body) in the caller's units, for motion distances */
+  unit: number;
 }
 
 /** The theme's text colour; what an accent falls back to when the body
@@ -97,14 +110,20 @@ export function glyphFaceParts({
   };
   const L = GLYPH_LAYOUT;
   const eyeBox = L.eyeBox * D;
-  const eyes: [GlyphMark, GlyphMark] = [
-    mark(face.left, cx - L.eyeX * D, cy + L.eyeY * D, eyeBox, GLYPH_STROKE),
-    mark(face.right, cx + L.eyeX * D, cy + L.eyeY * D, eyeBox, GLYPH_STROKE),
+  const eyeCentres: [[number, number], [number, number]] = [
+    [round(cx - L.eyeX * D), round(cy + L.eyeY * D)],
+    [round(cx + L.eyeX * D), round(cy + L.eyeY * D)],
   ];
+  const eye = (parts: GlyphEyePart[], [x, y]: [number, number]) =>
+    parts.map((part) => mark(part.glyph, x, y, eyeBox, GLYPH_STROKE * part.weight));
+  const eyeParts: [GlyphMark[], GlyphMark[]] = [eye(face.leftParts, eyeCentres[0]), eye(face.rightParts, eyeCentres[1])];
   let accent: GlyphMark | null = null;
+  let accentColor = glyphAccentColor(body, accentFallback);
   if (face.accent && face.anchor && pixels >= L.accentMinSize) {
-    const a = L.accent[face.anchor];
+    const a: { x: number; y: number; box: number; stroke: number; onBodyAlpha?: number } = L.accent[face.anchor];
     accent = mark(face.accent, cx + a.x * D, cy + a.y * D, a.box * D, a.stroke);
+    // a cheek accent sits on the body, so it takes the colour opposite the eyes
+    if (a.onBodyAlpha !== undefined) accentColor = glyphInk(body) === "#000000" ? `rgba(255,255,255,${a.onBodyAlpha})` : `rgba(0,0,0,${a.onBodyAlpha})`;
   }
   return {
     state,
@@ -112,9 +131,14 @@ export function glyphFaceParts({
     ink: glyphInk(body),
     tilt: `rotate(${GLYPH_TILT_DEG} ${round(cx)} ${round(cy)})`,
     centre: [cx, cy],
-    eyes,
+    eyes: [eyeParts[0][0], eyeParts[1][0]],
+    eyeParts,
+    eyeCentres,
+    gaze: [round(face.gaze[0] * D), round(face.gaze[1] * D)],
     accent,
-    accentColor: glyphAccentColor(body, accentFallback),
+    accentColor,
+    motion: face.motion,
+    unit: round(D / 64),
   };
 }
 
@@ -124,8 +148,9 @@ export function glyphFaceParts({
 export function glyphFaceMarkup(parts: GlyphFaceParts): string {
   const path = (m: GlyphMark, color: string) =>
     `<g transform="${m.transform}"><path d="${m.d}" fill="none" stroke="${color}" stroke-width="${m.width}" stroke-linecap="round" stroke-linejoin="round"/></g>`;
+  const eyes = [...parts.eyeParts[0], ...parts.eyeParts[1]].map((m) => path(m, parts.ink)).join("");
   return (
-    `<g transform="${parts.tilt}">${path(parts.eyes[0], parts.ink)}${path(parts.eyes[1], parts.ink)}</g>` +
+    `<g transform="${parts.tilt}"><g transform="translate(${parts.gaze[0]} ${parts.gaze[1]})">${eyes}</g></g>` +
     (parts.accent ? path(parts.accent, parts.accentColor) : "")
   );
 }

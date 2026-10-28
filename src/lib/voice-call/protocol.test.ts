@@ -3,6 +3,10 @@ import { describe, expect, it } from "vitest";
 import {
   formatCallDuration,
   heardMs,
+  isNoisyTranscript,
+  passesNoiseGate,
+  readBackSay,
+  realWords,
   historyFrames,
   parseServerEvent,
   readTheLine,
@@ -70,6 +74,7 @@ describe("session.update", () => {
       type: "session.update",
       session: {
         voice: "eve",
+        resumption: { enabled: true },
         instructions: "be brief",
         turn_detection: { type: "server_vad" },
         audio: {
@@ -89,8 +94,26 @@ describe("session.update", () => {
     expect("keep_context" in frame.session).toBe(false);
   });
 
-  it("sets keep_context false only on reconnect", () => {
-    expect(JSON.parse(sessionUpdateFrame(plan, { voice: "eve", speed: 1, language: "auto" }, true)).session.keep_context).toBe(false);
+  it("asks for resumption on the first session and every resumed one, never keep_context", () => {
+    for (const reconnect of [false, true]) {
+      const frame = JSON.parse(sessionUpdateFrame(plan, { voice: "eve", speed: 1, language: "auto" }, reconnect));
+      expect(frame.session.resumption).toEqual({ enabled: true });
+      expect("keep_context" in frame.session).toBe(false);
+    }
+  });
+
+  it("sends the plan's keyterms to the transcriber, trimmed, deduped and within limits", () => {
+    const terms = ["Partner", " partner ", "Acme", "", "x".repeat(80), ...Array.from({ length: 150 }, (_, i) => `term${i}`)];
+    const frame = JSON.parse(sessionUpdateFrame({ ...plan, keyterms: terms }, { voice: "eve", speed: 1, language: "auto" }, false));
+    const sent = frame.session.audio.input.transcription.keyterms as string[];
+    expect(sent.slice(0, 3)).toEqual(["Partner", "Acme", "x".repeat(50)]);
+    expect(sent).toHaveLength(100);
+    expect(sent.every((t) => t.length <= 50)).toBe(true);
+  });
+
+  it("omits keyterms when the plan has none", () => {
+    const frame = JSON.parse(sessionUpdateFrame(plan, { voice: "eve", speed: 1, language: "auto" }, false));
+    expect("keyterms" in frame.session.audio.input.transcription).toBe(false);
   });
 });
 
@@ -263,5 +286,31 @@ describe("helpers", () => {
     expect(samples.length).toBe(2160 + 3600);
     expect(samples[0]).toBe(0);
     expect(Math.max(...Array.from(samples, Math.abs))).toBeLessThanOrEqual(0.16);
+  });
+});
+
+describe("v3 noise gate", () => {
+  it("counts real words, not noise tags or filler", () => {
+    expect(realWords("[noise] uh um")).toEqual([]);
+    expect(realWords("Uh, email Ali the invoice.")).toEqual(["email", "ali", "the", "invoice"]);
+  });
+
+  it("flags empty and mostly-noise transcripts", () => {
+    expect(isNoisyTranscript("")).toBe(true);
+    expect(isNoisyTranscript("[noise] uh")).toBe(true);
+    expect(isNoisyTranscript("[noise] [noise] email ali")).toBe(true);
+    expect(isNoisyTranscript("email ali the invoice [noise]")).toBe(false);
+  });
+
+  it("gates short requests and noisy callers, passes a clear one", () => {
+    expect(passesNoiseGate("uh pain", "pain")).toBe(false);
+    expect(passesNoiseGate("check the invoices", "[noise]")).toBe(false);
+    expect(passesNoiseGate("check the invoices", "check the invoices please")).toBe(true);
+    expect(passesNoiseGate("check the invoices", null)).toBe(true);
+  });
+
+  it("builds the read-back line", () => {
+    expect(readBackSay("email Ali the invoice.", "x")).toBe("email Ali the invoice. go?");
+    expect(readBackSay(undefined, "email Ali the invoice")).toBe("email Ali the invoice. go?");
   });
 });

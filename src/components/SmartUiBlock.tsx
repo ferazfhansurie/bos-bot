@@ -4,6 +4,7 @@
 // post into this same thread as the person.
 import { useCallback, useEffect, useRef, useState } from "react";
 import { SmartUi, smartUiKey, type SmartUiTheme } from "@/openui/SmartUi";
+import { useV3 } from "@/lib/v3";
 
 export { smartUiKey };
 import { api, useStore } from "@/state/store";
@@ -39,6 +40,7 @@ export const SMART_UI_STATE_MAX = 16_000;
 
 export default function SmartUiBlock({ code, streaming, message }: { code: string; streaming: boolean; message?: SmartUiMessage }) {
   const theme = useSkinScheme();
+  const cards = useV3();
   const { state, dispatch } = useStore();
   const key = smartUiKey(code);
   const liveKey = message ? `${message.messageId}:${key}` : "";
@@ -77,6 +79,7 @@ export default function SmartUiBlock({ code, streaming, message }: { code: strin
         onState={onState}
         onAssistant={message ? onAssistant : undefined}
         onOpenUrl={onOpenUrl}
+        cards={cards}
         fallback={(
           <div>
             <CodeBlock code={code} lang="openui" streaming={false} />

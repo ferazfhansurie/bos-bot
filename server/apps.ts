@@ -13,6 +13,7 @@ import {
   APP_ID_RE, APP_LIMITS, cleanFields, validCollection, validRecordId,
   type AppChange, type AppMeta, type AppRecord, type AppSummary,
 } from "../shared/apps.ts";
+import { installOrigin, MINI_APP_LIMITS, manifestSchema, type MiniAppManifest } from "../shared/mini-apps.ts";
 
 const fail = (status: number, message: string): never => { throw Object.assign(new Error(message), { status }); };
 
@@ -26,6 +27,10 @@ export type AppOp =
 export interface AppWriteResult { records: (AppRecord | null)[]; collections: string[]; rev: number }
 
 const newAppId = () => `a-${Array.from(randomBytes(12), b => "abcdefghijklmnopqrstuvwxyz0123456789"[b % 36]).join("")}`;
+/** An installed app's page sits beside its data file: <app id>.app.html. */
+const INSTALLED_PAGE = ".app.html";
+export const INSTALLED_PATH_PREFIX = "installed:";
+
 const newRecordId = () => Date.now().toString(36) + randomBytes(4).toString("hex");
 
 export class AppStore {
@@ -143,6 +148,61 @@ export class AppStore {
     return this.summary(file);
   }
 
+  /** Install a mini app for a bot, or update the one it already has from the
+   * same site and manifest id (the data stays; the page, version and grants change). */
+  install(botId: string, input: { manifest: MiniAppManifest; html: string; source: string; schema?: string }, by: string): AppSummary {
+    const { manifest, html } = input;
+    if (Buffer.byteLength(html) > MINI_APP_LIMITS.htmlBytes) fail(413, `the app's page is over ${MINI_APP_LIMITS.htmlBytes / 1024 / 1024} MB`);
+    const at = this.now();
+    const installed = {
+      manifestId: manifest.id, version: manifest.version, source: clip(input.source, 2000), author: manifest.author,
+      description: manifest.description, permissions: [...manifest.permissions], installedAt: at,
+    };
+    const schema = manifestSchema(manifest, input.schema);
+    const existing = this.installedFile(botId, manifest.id, input.source);
+    const file: AppFile = existing
+      ? { ...existing, meta: { ...existing.meta, name: clip(manifest.name, 60) || existing.meta.name, icon: manifest.icon, schema, installed, updatedAt: at } }
+      : (() => {
+        if (this.apps(botId).size >= APP_LIMITS.appsPerBot) fail(409, `a bot can keep at most ${APP_LIMITS.appsPerBot} apps; delete one first`);
+        const id = newAppId();
+        return {
+          meta: { id, botId, threadId: "", path: `${INSTALLED_PATH_PREFIX}${manifest.id}`, name: clip(manifest.name, 60) || "App", icon: manifest.icon, schema, createdAt: at, updatedAt: at, rev: 0, sharedRoomIds: [], installed },
+          data: {},
+        };
+      })();
+    const dir = this.dir(botId);
+    mkdirSync(dir, { recursive: true, mode: 0o700 });
+    writeFileAtomic(join(dir, `${file.meta.id}${INSTALLED_PAGE}`), html, { mode: 0o600 });
+    this.persist(file);
+    this.onChange({ appId: file.meta.id, botId, rev: file.meta.rev, collections: [], by, meta: true });
+    return this.summary(file);
+  }
+
+  private installedFile(botId: string, manifestId: string, source: string): AppFile | null {
+    const origin = installOrigin(source);
+    for (const f of this.apps(botId).values()) {
+      const got = f.meta.installed;
+      if (got?.manifestId === manifestId && installOrigin(got.source) === origin) return f;
+    }
+    return null;
+  }
+
+  /** The bot's installed copy of this site's manifest id, if it has one. */
+  installedFor(botId: string, manifestId: string, source: string): AppSummary | null {
+    const file = this.installedFile(botId, manifestId, source);
+    return file ? this.summary(file) : null;
+  }
+
+  /** An installed app's page; null for a page bos wrote (that one is a file in the conversation folder). */
+  installedPage(appId: string): { html: string; mtime: number } | null {
+    const file = this.file(appId);
+    if (!file.meta.installed) return null;
+    try {
+      const html = readFileSync(join(this.dir(file.meta.botId), `${appId}${INSTALLED_PAGE}`), "utf8");
+      return { html, mtime: file.meta.installed.installedAt };
+    } catch { return null; }
+  }
+
   records(appId: string, collection: string): AppRecord[] {
     if (!validCollection(collection)) fail(400, "collection must be a short lowercase name like contacts");
     return Object.values(this.file(appId).data[collection] ?? {});
@@ -212,6 +272,7 @@ export class AppStore {
   /** A copy of the app (data included) for a copied page. */
   duplicate(appId: string, input: { path: string; name: string }, by: string): AppSummary {
     const file = this.file(appId);
+    if (file.meta.installed) fail(409, "an installed app can't be copied; install it for another bot instead");
     if (this.apps(file.meta.botId).size >= APP_LIMITS.appsPerBot) fail(409, `a bot can keep at most ${APP_LIMITS.appsPerBot} apps; delete one first`);
     const at = this.now();
     const copy: AppFile = {
@@ -226,6 +287,7 @@ export class AppStore {
   destroy(appId: string, by: string) {
     const file = this.file(appId);
     rmSync(join(this.dir(file.meta.botId), `${appId}.json`), { force: true });
+    if (file.meta.installed) rmSync(join(this.dir(file.meta.botId), `${appId}${INSTALLED_PAGE}`), { force: true });
     this.apps(file.meta.botId).delete(appId);
     this.onChange({ appId, botId: file.meta.botId, rev: file.meta.rev, collections: [], by, deleted: true });
   }

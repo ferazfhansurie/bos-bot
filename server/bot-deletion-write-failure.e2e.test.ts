@@ -82,7 +82,8 @@ it("preserves conversations and scheduled work when deletion cannot save, then s
     expect(bots.some((item: any) => item.id === bot.id)).toBe(false);
     expect(bots.some((item: any) => item.id === guest.id)).toBe(true);
     const afterRetry = await schedules();
-    expect(afterRetry.routines.find((item: any) => item.id === routine.id)).toMatchObject({ enabled: false, nextRunAt: null });
+    // A deleted bot's routines leave the calendar with it.
+    expect(afterRetry.routines.some((item: any) => item.id === routine.id)).toBe(false);
     expect(afterRetry.webhooks.find((item: any) => item.id === webhook.id)).toMatchObject({ enabled: false });
     expect(afterRetry.calls.some((item: any) => item.id === solo.id)).toBe(false);
     expect(afterRetry.calls.find((item: any) => item.id === shared.id)?.botIds).toEqual([guest.id]);

@@ -24,7 +24,9 @@ export function VoiceSection({
         <div>
           <div className="text-[15px] font-medium text-ink">Notifications</div>
           <div className="mt-0.5 text-[13px] text-ink-secondary">
-            Get notified when this agent finishes or needs input
+            {bot.notifications
+              ? "Get notified when this agent finishes or needs input"
+              : "Muted: no banners or phone pushes when it finishes. Approvals and questions still come through."}
           </div>
         </div>
         <Switch

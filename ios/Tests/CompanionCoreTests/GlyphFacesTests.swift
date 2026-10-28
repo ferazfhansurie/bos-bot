@@ -17,18 +17,42 @@ final class GlyphFacesTests: XCTestCase {
         XCTAssertEqual(GlyphFaces.document.states, GlyphFaceState.allCases.map(\.rawValue))
         for state in GlyphFaceState.allCases {
             let face = GlyphFaces.face(state)
-            for id in [face.left, face.right] + (face.accent.map { [$0] } ?? []) {
+            let parts = (face.leftParts + face.rightParts).map(\.glyph)
+            for id in [face.left, face.right] + parts + (face.accent.map { [$0] } ?? []) {
                 let box = GlyphFaces.path(id).boundingBoxOfPath
                 XCTAssertFalse(GlyphFaces.path(id).isEmpty, id)
-                XCTAssertTrue(box.minX >= 0 && box.maxX <= 24 && box.minY >= 0 && box.maxY <= 24, "\(id) \(box)")
+                // brows sit above the eye in the same box, so they may reach y -3
+                let top: CGFloat = id.hasPrefix("brow") ? -3 : 0
+                XCTAssertTrue(box.minX >= 0 && box.maxX <= 24 && box.minY >= top && box.maxY <= 24, "\(id) \(box)")
             }
+            XCTAssertEqual(face.leftParts.first?.glyph, face.left, state.rawValue)
+            XCTAssertEqual(face.rightParts.first?.glyph, face.right, state.rawValue)
+            XCTAssertEqual(face.gaze.count, 2, state.rawValue)
             XCTAssertEqual(face.accent == nil, face.anchor == nil, state.rawValue)
             if let anchor = face.anchor { XCTAssertNotNil(GlyphFaces.placement(anchor)) }
+            // every motion name is one the app knows how to play
+            if let eyes = face.motion.eyes { XCTAssertTrue(Self.eyeMotions.contains(eyes), eyes) }
+            if let accent = face.motion.accent { XCTAssertTrue(Self.accentMotions.contains(accent), accent) }
+            if let body = face.motion.body { XCTAssertTrue(Self.bodyMotions.contains(body), body) }
         }
-        XCTAssertEqual(GlyphFaces.face(.finished), GlyphFace(left: "gt", right: "lt", accent: "spark", anchor: .split))
+        XCTAssertEqual(GlyphFaces.face(.finished), GlyphFace(left: "gt", right: "lt", accent: "spark", anchor: .split,
+                                                             motion: GlyphMotion(body: "hop")))
+        // B eyes: resting is a heavy dot, ++ is the working face only, no ^ ^ or - - at rest
+        XCTAssertEqual(GlyphFaces.face(.idle).leftParts, [GlyphEyePart(glyph: "dot", weight: 3.2)])
+        for state in GlyphFaceState.allCases where state != .working {
+            XCTAssertNotEqual(GlyphFaces.face(state).left, "plus", state.rawValue)
+        }
+        for state in GlyphFaceState.allCases {
+            XCTAssertNotEqual(GlyphFaces.face(state).left, "caret", state.rawValue)
+        }
         XCTAssertEqual(GlyphFaces.stroke, 3.2)
         XCTAssertEqual(GlyphFaces.tiltDegrees, -12)
     }
+
+    static let eyeMotions: Set<String> = ["look", "lean", "drift", "scan", "read", "bob", "pulse", "pop", "shake",
+                                          "breathe", "slow", "spin", "twinkle", "beat", "tilt", "giggle"]
+    static let accentMotions: Set<String> = ["float", "fly", "burst", "pulse", "ring", "slide"]
+    static let bodyMotions: Set<String> = ["hop", "squish", "stretch", "giggle", "tap"]
 
     func testPathParserReadsLinesCurvesAndCloses() {
         let dash = GlyphFaces.path("dash").boundingBoxOfPath

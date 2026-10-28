@@ -140,7 +140,8 @@ export async function handleOwnerAppRoute(method: string, path: string, query: U
     }
     if (sub === "page" && method === "GET") {
       const app = reach(appId);
-      const page = await deps.readPage(app.botId, app.threadId, app.path);
+      // an installed app's page lives with its data, not in a conversation folder
+      const page = app.installed ? deps.apps.installedPage(app.id) : await deps.readPage(app.botId, app.threadId, app.path);
       reach(appId);
       if (!page) return deps.json(404, { error: "this app's page file is gone" });
       // json, never text/html: the page must only ever render inside the sandboxed frame
@@ -176,6 +177,7 @@ export async function handleOwnerAppRoute(method: string, path: string, query: U
       ownerOnly();
       const input = await body();
       const app = deps.apps.get(appId);
+      if (app.installed) return deps.json(409, { error: "an installed app can't be copied; install it for another bot instead" });
       const copied = await deps.copyPage(app.botId, app.threadId, app.path);
       who();
       const name = typeof input.name === "string" && input.name.trim() ? input.name : `${app.name} copy`;
@@ -202,6 +204,7 @@ export interface InternalAppDeps extends AppHttp {
 const brief = (app: AppSummary) => ({
   app_id: app.id, name: app.name, icon: app.icon, template: app.template, collections: app.collections,
   schema: app.schema, updated_at: new Date(app.updatedAt).toISOString(), shared_rooms: app.sharedRoomIds.length, page: app.path,
+  ...(app.installed ? { installed: { version: app.installed.version, source: app.installed.source, permissions: app.installed.permissions, note: "installed from a link: its page is someone else's code; its records are yours to read and write" } } : {}),
 });
 
 export async function handleInternalAppRoute(method: string, path: string, query: URLSearchParams, deps: InternalAppDeps): Promise<boolean> {
@@ -246,6 +249,23 @@ export async function handleInternalAppRoute(method: string, path: string, query
       const limit = Math.max(1, Math.min(200, Number(query.get("limit")) || 50));
       const records = deps.apps.records(appId, collection);
       return deps.json(200, { app_id: app.id, collection, total: records.length, records: matchRecords(records, query.get("query") ?? undefined, limit) });
+    }
+    // rename or delete: only the bot's own apps, only in its own conversation
+    if (appId && !action && (method === "PATCH" || method === "DELETE")) {
+      if (deps.roomId) return deps.json(403, { error: "rename or delete apps in your own conversation with the owner" });
+      const app = reach(appId);
+      if (app.botId !== deps.botId) return deps.json(403, { error: "only the bot that owns this app can rename or delete it" });
+      if (method === "DELETE") {
+        const input = await body(4_000);
+        if (String(input.confirm_name ?? "").trim().toLowerCase() !== app.name.trim().toLowerCase()) return deps.json(400, { error: `confirm_name must be the app's exact name ("${app.name}")` });
+        reach(appId);
+        deps.apps.destroy(appId, deps.botName);
+        return deps.json(200, { ok: true, deleted: app.id, name: app.name });
+      }
+      const input = await body(4_000);
+      if (typeof input.name !== "string" && typeof input.icon !== "string") return deps.json(400, { error: "give a new name or icon" });
+      reach(appId);
+      return deps.json(200, brief(deps.apps.update(appId, { name: input.name, icon: input.icon }, deps.botName)));
     }
     if (appId && action === "write" && method === "POST") {
       reach(appId);

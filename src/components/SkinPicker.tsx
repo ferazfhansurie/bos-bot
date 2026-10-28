@@ -4,10 +4,12 @@
 // `[data-skin]` rather than `:root[data-skin]` — any element can open a skin
 // context for its own subtree, so the miniature styles itself and can never
 // drift from what picking it actually does.
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Check } from "lucide-react";
-import { SKINS, applySkin, readSkin, type SkinId } from "@/lib/skins";
+import { applySkin, glassOn, pickableSkins, readSkin, setGlass, type SkinId } from "@/lib/skins";
+import { useV3 } from "@/lib/v3";
 import { cn } from "@/lib/cn";
+import { SettingRow, Switch } from "./SettingsPrimitives";
 
 /**
  * The app's own layout at roughly 1/14 scale: rail, sidebar with a selected
@@ -72,42 +74,65 @@ export function SkinPicker() {
   const [active, setActive] = useState<SkinId>(
     () => (document.documentElement.dataset.skin as SkinId) || readSkin(),
   );
+  const v3 = useV3();
+  useEffect(() => {
+    // SAFETY: as above, applySkin() is the only writer of this attribute.
+    setActive((document.documentElement.dataset.skin as SkinId) || readSkin(v3));
+  }, [v3]);
+  // glass is a layer over whichever skin is picked, not a skin of its own
+  const [glass, setGlassState] = useState(glassOn);
 
   return (
-    // Four columns keep each miniature useful while allowing the collection
-    // to grow into a second row; Settings already scrolls on short windows.
-    <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-      {SKINS.map((skin) => {
-        const selected = skin.id === active;
-        return (
-          <button
-            key={skin.id}
-            type="button"
-            onClick={() => {
-              applySkin(skin.id);
-              setActive(skin.id);
-            }}
-            aria-pressed={selected}
-            className={cn(
-              "flex flex-col gap-2 rounded-xl border p-2 text-left transition-colors",
-              selected
-                ? "border-accent-border bg-control"
-                : "border-hairline/60 hover:border-hairline hover:bg-control/50",
-            )}
-          >
-            <Miniature skin={skin.id} />
-            <div className="flex items-start gap-1.5 px-0.5 pb-0.5">
-              <div className="min-w-0 flex-1">
-                <div className="text-[13px] font-medium text-ink">{skin.name}</div>
-                <div className="mt-0.5 text-[11px] leading-snug text-ink-secondary">
-                  {skin.tagline}
+    <div>
+      {v3 && (
+        <div className="mb-3">
+          <SettingRow title="Liquid glass" subtitle={glass ? "Frosted chrome over any skin below. Turn it off for the flat look." : "Flat surfaces. Turn it on to frost any skin below."}>
+            <Switch
+              checked={glass}
+              aria-label="Liquid glass"
+              onClick={() => {
+                setGlass(!glass);
+                setGlassState(!glass);
+              }}
+            />
+          </SettingRow>
+        </div>
+      )}
+      {/* Four columns keep each miniature useful while allowing the collection
+          to grow into a second row; Settings already scrolls on short windows. */}
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+        {pickableSkins().map((skin) => {
+          const selected = skin.id === active;
+          return (
+            <button
+              key={skin.id}
+              type="button"
+              onClick={() => {
+                applySkin(skin.id);
+                setActive(skin.id);
+              }}
+              aria-pressed={selected}
+              className={cn(
+                "flex flex-col gap-2 rounded-xl border p-2 text-left transition-colors",
+                selected
+                  ? "border-accent-border bg-control"
+                  : "border-hairline/60 hover:border-hairline hover:bg-control/50",
+              )}
+            >
+              <Miniature skin={skin.id} />
+              <div className="flex items-start gap-1.5 px-0.5 pb-0.5">
+                <div className="min-w-0 flex-1">
+                  <div className="text-[13px] font-medium text-ink">{skin.name}</div>
+                  <div className="mt-0.5 text-[11px] leading-snug text-ink-secondary">
+                    {skin.tagline}
+                  </div>
                 </div>
+                {selected && <Check size={13} className="mt-0.5 shrink-0 text-accent-text" />}
               </div>
-              {selected && <Check size={13} className="mt-0.5 shrink-0 text-accent-text" />}
-            </div>
-          </button>
-        );
-      })}
+            </button>
+          );
+        })}
+      </div>
     </div>
   );
 }

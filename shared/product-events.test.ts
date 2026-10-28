@@ -13,3 +13,9 @@ it("allows only finite nonnegative bounded counts and named enumerations", () =>
 it("does not interpret prototype field names as property enums", () => {
   expect(productEvent("error", JSON.parse('{"constructor":"private","toString":"private","__proto__":{"class":"auth"}}'), 0)?.props).toEqual({});
 });
+it("carries the 3.0 funnel events with only their card kind", () => {
+  expect(productEvent("card_clicked", { card: "fixit", check: "auth", title: "Gmail is signed out", botId: "atlas" }, 0)?.props).toEqual({ card: "fixit", check: "auth" });
+  expect(productEvent("connect_finished", { success: false, source: "chat", app: "gmail" }, 0)?.props).toEqual({ success: false, source: "chat" });
+  expect(productEvent("card_clicked", { card: "somewhere" }, 0)?.props).toEqual({});
+  for (const name of ["island_seen", "connect_started", "automation_created"]) expect(productEvent(name, undefined, 0)?.name).toBe(name);
+});

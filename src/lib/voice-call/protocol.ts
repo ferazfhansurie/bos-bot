@@ -80,6 +80,12 @@ export interface VoiceCallPlan {
   tools: VoiceCallTool[];
   receiptTurn: string;
   maxRequestChars: number;
+  /** 3 = voice calls v3 (journal, resumption, server tools). Absent = old server. */
+  v?: number;
+  /** Vocabulary hint for the transcriber: names, projects. Max 100 terms, 50 chars each. */
+  keyterms?: string[];
+  /** Bots a job can be routed to. */
+  roster?: Array<{ id: string; name: string }>;
 }
 
 export interface VoiceCallOptions {
@@ -92,6 +98,31 @@ export interface VoiceCallTicket {
   credential: VoiceCallCredential;
   plan: VoiceCallPlan;
   options: VoiceCallOptions;
+  /** The world brief this call started with (v3). */
+  brief?: { text: string; builtAt: number };
+}
+
+/** The v3 flow is on only when the server says so. */
+export function isV3Plan(plan: Pick<VoiceCallPlan, "v"> | null | undefined): boolean {
+  return plan?.v === 3;
+}
+
+export const MAX_KEYTERMS = 100;
+export const MAX_KEYTERM_CHARS = 50;
+
+/** keyterms for session.update: trimmed, deduped, within xAI's limits. */
+export function cleanKeyterms(terms: readonly unknown[] | undefined): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const term of terms ?? []) {
+    if (typeof term !== "string") continue;
+    const clean = term.trim().slice(0, MAX_KEYTERM_CHARS).trim();
+    if (!clean || seen.has(clean.toLowerCase())) continue;
+    seen.add(clean.toLowerCase());
+    out.push(clean);
+    if (out.length >= MAX_KEYTERMS) break;
+  }
+  return out;
 }
 
 export interface VoiceSettings {
@@ -144,18 +175,24 @@ export function snapSpeed(speed: number, speeds: readonly number[] = SPEEDS): nu
 
 // ── client → server frames ───────────────────────────────────────────────
 
+/** One session.update, for the first session and every resumed one. Always
+ * asks for `resumption` (without it a conversation_id resumes nothing) and
+ * never sends keep_context. `reconnect` is kept for callers; the frame is the
+ * same either way. */
 export function sessionUpdateFrame(
-  plan: Pick<VoiceCallPlan, "instructions" | "tools">,
+  plan: Pick<VoiceCallPlan, "instructions" | "tools" | "keyterms">,
   settings: VoiceSettings,
-  reconnect: boolean,
+  _reconnect = false,
 ): string {
-  const transcription: Record<string, string> = { model: TRANSCRIBE_MODEL };
+  const transcription: Record<string, unknown> = { model: TRANSCRIBE_MODEL };
   if (settings.language && settings.language !== AUTO_LANGUAGE) transcription.language_hint = settings.language;
+  const keyterms = cleanKeyterms(plan.keyterms);
+  if (keyterms.length > 0) transcription.keyterms = keyterms;
   return JSON.stringify({
     type: "session.update",
     session: {
       ...(settings.voice ? { voice: settings.voice } : {}),
-      ...(reconnect ? { keep_context: false } : {}),
+      resumption: { enabled: true },
       instructions: plan.instructions,
       turn_detection: { type: "server_vad" },
       audio: {
@@ -433,4 +470,53 @@ export function formatCallDuration(ms: number): string {
   const s = total % 60;
   const ss = String(s).padStart(2, "0");
   return h > 0 ? `${h}:${String(m).padStart(2, "0")}:${ss}` : `${m}:${ss}`;
+}
+
+// ── v3 send_task noise gate + read-back ──────────────────────────────────
+
+export const UNCLEAR_SAY = "say that again?";
+export const TOOL_TIMEOUT_MS = 8_000;
+export const TOOL_TIMEOUT_TEXT = "couldn't reach the computer. want me to make it a job?";
+export const BACK_ON_LINE_TURN =
+  'the line dropped and is back. say "back." then in under ten words what the caller was saying.';
+/** A request needs at least this many real words to be worth reading back. */
+export const MIN_REQUEST_WORDS = 3;
+
+const FILLER = new Set([
+  "uh", "um", "umm", "uhm", "er", "erm", "ah", "eh", "hm", "hmm", "mm", "mmm", "mhm", "huh", "oh", "ha", "hah", "like", "ok", "okay", "yeah", "yep", "so",
+]);
+
+function tokens(text: string): string[] {
+  return text.split(/\s+/).filter(Boolean);
+}
+
+/** Words that carry meaning: no [noise] tags, no uh/um, at least one letter or digit. */
+export function realWords(text: string): string[] {
+  return tokens(text)
+    .filter((token) => !/^\[.*\]$|^\(.*\)$/.test(token))
+    .map((token) => token.toLowerCase().replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, ""))
+    .filter((word) => word.length > 0 && !FILLER.has(word));
+}
+
+/** True for a transcript that is empty or mostly `[noise]` and filler. */
+export function isNoisyTranscript(text: string): boolean {
+  const all = tokens(text);
+  if (all.length === 0) return true;
+  const real = realWords(text).length;
+  return real === 0 || real * 2 <= all.length;
+}
+
+/** send_task's gate: a request under three real words, or a caller whose last
+ * transcript line is empty or mostly noise, is "unclear" and holds nothing.
+ * `lastTranscript` is null while no transcript has settled for the turn. */
+export function passesNoiseGate(request: string, lastTranscript: string | null): boolean {
+  if (realWords(request).length < MIN_REQUEST_WORDS) return false;
+  if (lastTranscript !== null && isNoisyTranscript(lastTranscript)) return false;
+  return true;
+}
+
+/** `"<readback>. go?"`: the model reads it out, the caller says go or no. */
+export function readBackSay(readback: unknown, request: string): string {
+  const base = (typeof readback === "string" && readback.trim() ? readback : request).trim().replace(/[.?!\s]+$/u, "");
+  return `${base}. go?`;
 }

@@ -60,6 +60,10 @@ export type OnboardingChatEvent =
  * (a prepared invite link). The greeting shows it back to them, with their
  * team and the first job, so they can correct it before anything runs. */
 export interface OnboardingPrepared {
+  /** How bos knows: absent for a prepared invite (researched before they
+   * arrived), "read" when it just read their page, "told" when they answered
+   * two questions (the 60-second start, server/faststart.ts). */
+  intro?: "read" | "told";
   profile: { label: string; value: string }[];
   team: { name: string; job: string }[];
   firstJob?: { title: string; prompt: string };
@@ -135,7 +139,7 @@ export function preparedGreeting(ctx: Pick<OnboardingScriptContext, "personName"
   const facts = prepared.profile.filter(item => item.value.trim()).map(item => `- ${item.label}: ${item.value.trim()}`).join("\n");
   const team = prepared.team.map(bot => `${bot.name} (${bot.job.trim().replace(/\.$/, "")})`).join(", ");
   const text = [
-    `Hi${person ? ` ${person}` : ""}, I'm ${ctx.botName}, your own AI teammate. Before you got here I read up on your business. Here's what I have:`,
+    `Hi${person ? ` ${person}` : ""}, I'm ${ctx.botName}, your own AI teammate. ${prepared.intro === "read" ? "I just read up on your business." : prepared.intro === "told" ? "Thanks, that's enough to start." : "Before you got here I read up on your business."} Here's what I have:`,
     facts,
     "If anything's off, tell me and I'll fix it.",
     team ? `Your team is set up and ready: ${team}.` : "",

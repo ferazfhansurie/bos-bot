@@ -102,8 +102,10 @@ struct TrailingFraction: Layout {
 
 // MARK: - Lead line
 
-/// BOS's one change to ChatGPT: the bot's face and name at the start of
-/// each reply. A room reply carries the member who said it.
+/// BOS's one change to ChatGPT: the bot's name at the start of each reply.
+/// A room reply carries the face of the member who said it; a 1:1 reply is
+/// the name alone in the bot's colour, since the bot's one face on screen is
+/// already the island or the empty-thread mascot (3.0 one face on screen).
 struct AssistantLeadLine: View {
     let chat: Chat
     /// The member who replied, in a room; nil in a 1:1.
@@ -112,18 +114,25 @@ struct AssistantLeadLine: View {
     var state: MausState = .idle
     var animated = false
     @Environment(\.sessionActions) private var sessionActions
+    @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
         HStack(spacing: 8) {
-            avatar.frame(width: 22, height: 22)
+            if solo == nil { avatar.frame(width: 22, height: 22) }
             Text(name)
                 .font(.system(size: 15, weight: .semibold))
-                .foregroundStyle(Color.primary)
+                .foregroundStyle(solo.map { BotNameColor.color($0.color, scheme: colorScheme) } ?? Color.primary)
                 .lineLimit(1)
         }
         .accessibilityElement(children: .combine)
         .accessibilityLabel(name)
         .padding(.bottom, 2)
+    }
+
+    /// The bot of a 1:1, whose reply shows no face.
+    private var solo: Bot? {
+        guard botId == nil, case let .bot(bot) = chat else { return nil }
+        return bot
     }
 
     private var member: Bot? {
@@ -144,6 +153,16 @@ struct AssistantLeadLine: View {
         } else {
             ChatAvatarView(chat: chat, size: 22, state: state, animated: animated)
         }
+    }
+}
+
+/// A bot's name in its own colour, where the name stands in for its face.
+/// A body too pale to read on a light page keeps the primary ink.
+enum BotNameColor {
+    static func color(_ stored: String, scheme: ColorScheme) -> Color {
+        let hex = GlyphFaces.resolveColor(stored)
+        if scheme == .light, hex == "#FFFFFF" { return .primary }
+        return Color(hex: hex)
     }
 }
 

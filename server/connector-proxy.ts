@@ -9,6 +9,7 @@ import { compatEnv } from "../electron/branding-env.cjs";
 // stdout is the MCP transport. Never log there.
 import readline from "node:readline";
 import { randomUUID } from "node:crypto";
+import { expiredConnections } from "./connector-auth.ts";
 
 type Json = Record<string, unknown>;
 
@@ -22,6 +23,10 @@ const TOKEN = compatEnv.OMB_CONNECTOR_TOKEN ?? compatEnv.OMB_COMMS_TOKEN ?? "";
 // every call. The reply tool mounts only with a separate owner policy.
 const WHATSAPP_NATIVE = compatEnv.OMB_WHATSAPP_NATIVE === "1";
 const WHATSAPP_REPLIES = compatEnv.OMB_WHATSAPP_REPLIES === "1";
+// 3.0 cards (features.v3, the labs switch): connect asks carry a reason, WhatsApp links
+// in the chat through the same card, and an expired sign-in comes back as a
+// reconnect card. Off, every answer below is exactly the 2.x one.
+const V3_CARDS = compatEnv.OMB_V3_CARDS === "1";
 const MAX_RESPONSE_BYTES = 20 * 1024 * 1024;
 const INITIALIZE_RELAY_TIMEOUT_MS = 1_000;
 const RELAY_TIMEOUT_MS = 10 * 60_000;
@@ -206,6 +211,59 @@ async function whatsappRead(name: string, args: unknown): Promise<string> {
 interface ConnectorRequest {
   slug: string;
   alias?: string;
+  /** v3: the bot's one line on why it needs the app ("so i can draft those replies"). */
+  reason?: string;
+  /** v3: the app was connected but its sign-in expired or was revoked. */
+  reconnect?: true;
+}
+
+const REASON_SCHEMA = {
+  type: "string",
+  maxLength: 140,
+  description: "One short line, shown to the user on the connect card, saying what you need the app for. Starts lowercase and reads after \"<bot> needs <app>\", e.g. \"so i can draft those 4 replies\".",
+};
+
+/** v3 tools/list: MANAGE_CONNECTIONS takes a reason. */
+function withReason(tool: Json): Json {
+  const schema = tool.inputSchema && typeof tool.inputSchema === "object" && !Array.isArray(tool.inputSchema) ? tool.inputSchema as Json : null;
+  if (!schema || (schema.type !== undefined && schema.type !== "object")) return tool;
+  const properties = schema.properties && typeof schema.properties === "object" && !Array.isArray(schema.properties) ? schema.properties as Json : {};
+  if (properties.reason !== undefined) return tool;
+  return { ...tool, inputSchema: { ...schema, properties: { ...properties, reason: REASON_SCHEMA } } };
+}
+
+/** v3, when Composio lists no MANAGE_CONNECTIONS (only native WhatsApp is
+ * mounted, or the service is down): the bridge answers connect asks itself,
+ * so a bot can still put a connect card (WhatsApp's QR) in the chat. */
+const LOCAL_MANAGE_CONNECTIONS = {
+  name: "COMPOSIO_MANAGE_CONNECTIONS",
+  description: "Ask the user to connect an app without leaving the chat. BOS Bot shows a secure connect card (WhatsApp shows its QR code in the card) and continues your task once it is connected. Only action \"add\" is available here.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      toolkits: {
+        type: "array",
+        minItems: 1,
+        items: {
+          type: "object",
+          properties: {
+            name: { type: "string", description: "Toolkit slug, e.g. whatsapp or gmail." },
+            action: { type: "string", enum: ["add"] },
+          },
+          required: ["name"],
+        },
+      },
+      reason: REASON_SCHEMA,
+    },
+    required: ["toolkits"],
+  },
+  annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
+} as const;
+
+function reasonOf(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const line = value.replace(/[\u0000-\u001f\u007f]+/g, " ").replace(/\s+/g, " ").trim().slice(0, 140);
+  return line || undefined;
 }
 
 function connectorRemoves(args: unknown): boolean {
@@ -219,6 +277,7 @@ function connectorAdds(args: unknown): ConnectorRequest[] {
   if (!args || typeof args !== "object" || Array.isArray(args)) return [];
   const toolkits = (args as { toolkits?: unknown }).toolkits;
   if (!Array.isArray(toolkits)) return [];
+  const sharedReason = V3_CARDS ? reasonOf((args as { reason?: unknown }).reason) : undefined;
   const seen = new Set<string>();
   const requests: ConnectorRequest[] = [];
   for (const item of toolkits) {
@@ -227,12 +286,12 @@ function connectorAdds(args: unknown): ConnectorRequest[] {
       const key = JSON.stringify([slug, ""]);
       if (!seen.has(key)) {
         seen.add(key);
-        requests.push({ slug });
+        requests.push({ slug, ...(sharedReason ? { reason: sharedReason } : {}) });
       }
       continue;
     }
     if (!item || typeof item !== "object" || Array.isArray(item)) continue;
-    const row = item as { name?: unknown; toolkit?: unknown; action?: unknown; alias?: unknown; account?: unknown };
+    const row = item as { name?: unknown; toolkit?: unknown; action?: unknown; alias?: unknown; account?: unknown; reason?: unknown };
     const action = String(row.action ?? "add").toLowerCase();
     if (!["add", "connect", "initiate"].includes(action)) continue;
     const slug = typeof row.toolkit === "string" ? row.toolkit : row.name;
@@ -242,7 +301,8 @@ function connectorAdds(args: unknown): ConnectorRequest[] {
     const key = JSON.stringify([normalized, alias.toLowerCase()]);
     if (seen.has(key)) continue;
     seen.add(key);
-    requests.push({ slug: normalized, ...(alias ? { alias } : {}) });
+    const reason = V3_CARDS ? reasonOf(row.reason) ?? sharedReason : undefined;
+    requests.push({ slug: normalized, ...(alias ? { alias } : {}), ...(reason ? { reason } : {}) });
   }
   return requests;
 }
@@ -258,6 +318,38 @@ async function showConnectorCards(items: ConnectorRequest[]): Promise<void> {
     const body = (await response.json().catch(() => ({}))) as { error?: unknown };
     throw new Error(String(body.error ?? `could not show connection card (HTTP ${response.status})`));
   }
+}
+
+// One reconnect card per app for the life of this bridge (one turn); the
+// harness also refuses a second open reconnect card for the same thread.
+const reconnectShown = new Set<string>();
+
+/** v3: a tool result that says the sign-in expired raises a reconnect card,
+ * and the bot is told so instead of having to explain an auth error. */
+async function noteExpiredSignIns(message: Json, response: Json): Promise<void> {
+  const params = (message.params ?? {}) as Json;
+  const result = response.result as Json | undefined;
+  if (!result || !Array.isArray(result.content)) return;
+  const expired = expiredConnections(String(params.name ?? ""), params.arguments, result);
+  if (!expired.length) return;
+  const fresh = expired.filter((slug) => !reconnectShown.has(slug));
+  if (fresh.length) {
+    try {
+      await showConnectorCards(fresh.map((slug) => ({ slug, reconnect: true as const })));
+      for (const slug of fresh) reconnectShown.add(slug);
+    } catch {
+      // the original result still reaches the bot unchanged
+    }
+  }
+  const shown = expired.filter((slug) => reconnectShown.has(slug));
+  if (!shown.length) return;
+  result.content = [
+    ...result.content,
+    {
+      type: "text",
+      text: `BOS Bot: the ${shown.join(", ")} sign-in expired, so the user now sees a card in the chat to sign in again. Tell them in one short line, then end this turn. The task continues automatically once they reconnect; do not ask them to connect it again.`,
+    },
+  ];
 }
 
 async function handle(message: Json): Promise<void> {
@@ -313,7 +405,14 @@ async function handle(message: Json): Promise<void> {
       tool && typeof tool === "object" && /MANAGE_CONNECTIONS$/i.test(String((tool as Json).name ?? ""))
         ? { ...(tool as Json), annotations: { ...((tool as Json).annotations as Json | undefined), readOnlyHint: true, destructiveHint: false, openWorldHint: false } }
         : tool);
-    const local = WHATSAPP_NATIVE ? [...WHATSAPP_TOOLS, ...(WHATSAPP_REPLIES ? WHATSAPP_REPLY_TOOLS : [])] : [];
+    const local: Json[] = WHATSAPP_NATIVE ? [...WHATSAPP_TOOLS, ...(WHATSAPP_REPLIES ? WHATSAPP_REPLY_TOOLS : [])] : [];
+    if (V3_CARDS) {
+      const manage = (tool: unknown) => !!tool && typeof tool === "object" && /MANAGE_CONNECTIONS$/i.test(String((tool as Json).name ?? ""));
+      const v3Tools = tools.map((tool) => (manage(tool) ? withReason(tool as Json) : tool));
+      if (!v3Tools.some(manage)) local.unshift(LOCAL_MANAGE_CONNECTIONS);
+      send({ jsonrpc: "2.0", id, result: { ...result, tools: [...v3Tools, ...local] } });
+      return;
+    }
     send({ jsonrpc: "2.0", id, result: { ...result, tools: [...tools, ...local] } });
     return;
   }
@@ -343,9 +442,9 @@ async function handle(message: Json): Promise<void> {
       return;
     }
     const allRequests = /MANAGE_CONNECTIONS$/i.test(name) ? connectorAdds(params.arguments) : [];
-    // WhatsApp links natively (a QR code in Connected apps), never through a
-    // Composio connection card.
-    const requests = allRequests.filter((request) => request.slug !== "whatsapp");
+    // WhatsApp links natively, never through a Composio connection card. In
+    // 2.x that QR lives in Connected apps; in v3 the chat card draws it.
+    const requests = V3_CARDS ? allRequests : allRequests.filter((request) => request.slug !== "whatsapp");
     if (allRequests.length && !requests.length) {
       send(textResult(
         id,
@@ -366,9 +465,15 @@ async function handle(message: Json): Promise<void> {
       send(textResult(id, "BOS Bot is handling connection completion and will continue the task automatically."));
       return;
     }
+    if (V3_CARDS && /MANAGE_CONNECTIONS$/i.test(name) && params.arguments && typeof params.arguments === "object" && "reason" in (params.arguments as Json)) {
+      // the reason is ours: Composio's own schema does not know it
+      const { reason: _reason, ...rest } = params.arguments as Json;
+      message = { ...message, params: { ...params, arguments: rest } };
+    }
   }
   try {
     const response = await relay(message);
+    if (response && id !== undefined && V3_CARDS && method === "tools/call") await noteExpiredSignIns(message, response);
     if (response && id !== undefined) send(response);
   } catch (error) {
     if (id === undefined) return;

@@ -510,6 +510,7 @@ function mountMcpServer(
   server: McpServerSpec,
   preApproved = true,
   member?: TurnMember,
+  caller?: { botId?: string; threadId: string },
 ): void {
   const prefix = `mcp_servers.${name}`;
   if ("url" in server) {
@@ -545,6 +546,15 @@ function mountMcpServer(
       env[MEMBER_ENV] = JSON.stringify(member);
       names.push(MEMBER_ENV);
     }
+    // Same as the Claude driver: a custom server learns which conversation
+    // called it instead of guessing from whichever thread is busy. Two busy
+    // threads made sénira's studio tools refuse every write (2026-10-28).
+    // The names are reserved, so a config can't claim another thread.
+    if (caller) {
+      env.OMB_BOT_ID = caller.botId ?? "";
+      env.OMB_THREAD_ID = caller.threadId;
+      names.push("OMB_BOT_ID", "OMB_THREAD_ID");
+    }
     appServerArgs.push(
       "-c", `${prefix}.command=${JSON.stringify(server.command)}`,
       "-c", `${prefix}.args=${JSON.stringify(server.args)}`,
@@ -555,12 +565,14 @@ function mountMcpServer(
   }
   // The owner listed these tools as safe to run without a card.
   for (const tool of server.autoApprove ?? []) {
-    appServerArgs.push("-c", `${prefix}.tools.${tool}.approval_mode="auto"`);
+    appServerArgs.push("-c", `${prefix}.tools.${tool}.approval_mode="approve"`);
   }
   // Harness-owned servers are pre-quieted; a user-configured server keeps
   // codex's on-request policy so its tool calls become approval cards.
+  // "approve", not "auto": codex 0.16x reads "auto" as "ask unless the tool
+  // is annotated read-only", so every open_tab or desk_card call became a card.
   if (preApproved) {
-    appServerArgs.push("-c", `${prefix}.default_tools_approval_mode="auto"`);
+    appServerArgs.push("-c", `${prefix}.default_tools_approval_mode="approve"`);
   }
 }
 
@@ -848,7 +860,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
             noteSkippedSseServer(name);
             continue;
           }
-          mountMcpServer(appServerArgs, env, name, server, false, turn.member);
+          mountMcpServer(appServerArgs, env, name, server, false, turn.member, { botId: turn.botId, threadId });
         }
         if (turn.integrations?.phone) {
           const bridge = turn.integrations.phone;
@@ -858,7 +870,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
             "-c", `${prefix}.command=${JSON.stringify(bridge.command)}`,
             "-c", `${prefix}.args=${JSON.stringify(bridge.args)}`,
             "-c", `${prefix}.env_vars=${JSON.stringify(Object.keys(bridge.env))}`,
-            "-c", `${prefix}.default_tools_approval_mode="auto"`,
+            "-c", `${prefix}.default_tools_approval_mode="approve"`,
           );
         }
         if (turn.integrations?.sandbox) {
@@ -869,7 +881,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
             "-c", `${prefix}.command=${JSON.stringify(bridge.command)}`,
             "-c", `${prefix}.args=${JSON.stringify(bridge.args)}`,
             "-c", `${prefix}.env_vars=${JSON.stringify(Object.keys(bridge.env))}`,
-            "-c", `${prefix}.default_tools_approval_mode="auto"`,
+            "-c", `${prefix}.default_tools_approval_mode="approve"`,
           );
         }
 

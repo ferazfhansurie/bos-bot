@@ -7,7 +7,7 @@ describe("owner-reviewed WhatsApp grants", () => {
   const account = "60111111111@c.us";
   it("pins a reply grant to the verified account and explicit chats with no automatic widening", () => {
     expect(whatsappPermissionGrant(account, choice({ chatIds: ["60222222222@c.us", "60222222222@c.us", "123456@lid"], outreach: true })))
-      .toEqual({ accountId: account, chatIds: ["60222222222@c.us", "123456@lid"], outreach: true, autoDispatch: false });
+      .toEqual({ accountId: account, chatIds: ["60222222222@c.us", "123456@lid"], outreach: true, autoDispatch: false, draft: false });
     expect(whatsappPermissionGrant(account, choice({ chatIds: ["60123456789-1234567890@g.us"] })))
       .toMatchObject({ chatIds: ["60123456789-1234567890@g.us"], outreach: false, autoDispatch: false });
   });
@@ -15,7 +15,9 @@ describe("owner-reviewed WhatsApp grants", () => {
     expect(whatsappPermissionGrant(account, choice({ reading: "all", replying: false, chatIds: ["123456@lid"], outreach: true, autoDispatch: true })))
       .toEqual({ accountId: account, chatIds: [], outreach: false, autoDispatch: false, readAll: true });
     expect(whatsappPermissionGrant(account, choice({ reading: "all", chatIds: ["123456@lid"], autoDispatch: true })))
-      .toEqual({ accountId: account, chatIds: ["123456@lid"], outreach: false, autoDispatch: true, readAll: true });
+      .toEqual({ accountId: account, chatIds: ["123456@lid"], outreach: false, autoDispatch: true, draft: false, readAll: true });
+    expect(whatsappPermissionGrant(account, choice({ chatIds: ["123456@lid"], autoDispatch: true, draft: true }))).toMatchObject({ autoDispatch: true, draft: true });
+    expect(whatsappPermissionGrant(account, choice({ chatIds: ["123456@lid"], autoDispatch: false, draft: true }))).toMatchObject({ autoDispatch: false, draft: false });
   });
   it("chosen chats with replies off reads only those chats and can never send", () => {
     expect(whatsappPermissionGrant(account, choice({ replying: false, chatIds: ["123456@lid"], outreach: true, autoDispatch: true })))
@@ -44,6 +46,7 @@ describe("reading a saved policy back into the controls", () => {
     expect(whatsappAccessChoice({ accountId, chatIds: ["123456@lid"], autoDispatch: false })).toMatchObject({ reading: "chosen", replying: true });
     expect(whatsappAccessChoice({ accountId, chatIds: [], autoDispatch: false })).toMatchObject({ reading: "off", replying: false });
     expect(whatsappAccessChoice({ accountId, chatIds: null, autoDispatch: true })).toMatchObject({ reading: "all", replying: true });
+    expect(whatsappAccessChoice({ accountId, chatIds: ["123456@lid"], autoDispatch: true, draft: true })).toMatchObject({ autoDispatch: true, draft: true });
   });
   it("round-trips every grant", () => {
     for (const c of [choice({ reading: "all", replying: false }), choice({ replying: false, chatIds: ["123456@lid"] }), choice({ chatIds: ["123456@lid"], outreach: true }), choice({ reading: "all", chatIds: ["123456@lid"], autoDispatch: true })]) {

@@ -6,8 +6,10 @@ import { createParser } from "@openuidev/lang-core";
 import { Renderer, type ActionEvent } from "@openuidev/react-lang";
 import { Component, useCallback, useEffect, useMemo, type ReactNode } from "react";
 import { library } from "./library";
+import { v3Library } from "./library-v3";
 import "./components/theme.css";
 import "./components/components.css";
+import "./components/cards.css";
 
 export type SmartUiTheme = "light" | "dark";
 
@@ -23,6 +25,8 @@ export interface SmartUiProps {
   /** Shown when the block can't be drawn (also told via onFail). */
   fallback: ReactNode;
   onFail?: () => void;
+  /** bos bot 3.0: draw with the card library (Person, Approval, …). Off parses exactly as the base library. */
+  cards?: boolean;
 }
 
 /** "label: value" lines for a Form's fields, so a bot reads what was typed. */
@@ -53,10 +57,11 @@ export function smartUiKey(code: string): string {
 }
 
 const parser = createParser(library.toJSONSchema(), "Col");
+const v3Parser = createParser(v3Library.toJSONSchema(), "Col");
 
-/** Whether code draws anything: a root component after parsing. */
-export function drawable(code: string): boolean {
-  try { return Boolean(parser.parse(code).root); } catch { return false; }
+/** Whether code draws anything: a root component after parsing (with the cards when `cards`). */
+export function drawable(code: string, cards = false): boolean {
+  try { return Boolean((cards ? v3Parser : parser).parse(code).root); } catch { return false; }
 }
 
 const safeUrl = (url: unknown) => (typeof url === "string" && /^https?:\/\//i.test(url) ? url : null);
@@ -73,9 +78,9 @@ function Failed({ fallback, onFail }: { fallback: ReactNode; onFail?: () => void
   return <>{fallback}</>;
 }
 
-export function SmartUi({ code, streaming, theme, initialState, onState, onAssistant, onOpenUrl, fallback, onFail }: SmartUiProps) {
+export function SmartUi({ code, streaming, theme, initialState, onState, onAssistant, onOpenUrl, fallback, onFail, cards = false }: SmartUiProps) {
   // while streaming, nothing to draw yet just means the root hasn't arrived
-  const failed = useMemo(() => !streaming && !drawable(code), [code, streaming]);
+  const failed = useMemo(() => !streaming && !drawable(code, cards), [code, streaming, cards]);
   const onAction = useCallback((event: ActionEvent) => {
     if (event.type === "open_url") {
       const url = safeUrl(event.params.url);
@@ -93,7 +98,7 @@ export function SmartUi({ code, streaming, theme, initialState, onState, onAssis
       <div className="bos-openui" data-theme={theme} dir="ltr">
         <Renderer
           response={code}
-          library={library}
+          library={cards ? v3Library : library}
           isStreaming={streaming}
           initialState={initialState}
           onStateUpdate={onState}

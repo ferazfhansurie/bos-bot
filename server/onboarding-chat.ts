@@ -44,6 +44,7 @@ const onboardingChatEventSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("first-task"), prompt: z.string().max(20_000) }).strict(),
   z.object({
     type: z.literal("prepared"),
+    intro: z.enum(["read", "told"]).optional(),
     profile: z.array(z.object({ label: z.string().trim().min(1).max(40), value: z.string().max(600) }).strict()).max(12),
     team: z.array(z.object({ name: z.string().trim().min(1).max(40), job: z.string().trim().min(1).max(240) }).strict()).max(8),
     firstJob: z.object({ title: z.string().trim().min(1).max(80), prompt: z.string().trim().min(1).max(4000) }).strict().optional(),

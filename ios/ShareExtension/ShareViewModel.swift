@@ -641,7 +641,7 @@ final class ShareViewModel: ObservableObject {
         from fleet: Fleet,
         imageCapableInstances: Set<String>
     ) -> [ShareDestination] {
-        let botByID = Dictionary(uniqueKeysWithValues: fleet.bots.map { ($0.id, $0) })
+        let botByID = Dictionary(fleet.bots.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         let bots = fleet.bots
             .filter { $0.hidden != true }
             .map { bot in

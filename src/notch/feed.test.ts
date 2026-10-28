@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { ActivityEntry } from "@/lib/activity-feed";
 import type { InboxItem } from "@/lib/inbox";
 import { askKey, buildNotchSnapshot, momentFor, momentPreview, notchAsk, type NotchInputs } from "./feed";
+import { parseActivityEntry } from "@/lib/activity-feed";
 
 const prefs = { approval: true, question: true, sound: "default" as const };
 const key = (botId: string, threadId: string) => `${botId}\u0000${threadId}`;
@@ -153,5 +154,37 @@ describe("momentPreview", () => {
     const preview = momentPreview(moment, bot([{ role: "assistant", kind: "text", text: "word ".repeat(80) }]));
     expect(preview.length).toBeLessThanOrEqual(140);
     expect(preview.endsWith("…")).toBe(true);
+  });
+});
+
+describe("job clock, step and plan", () => {
+  it("carries the server's step, plan and job clock onto a working row", () => {
+    const activity = new Map([[key("cash", "t1"), { ...entry("cash", "t1", "tool", 9_000), jobSince: 1_000, step: "reading retry.ts", stepIndex: 3, stepCount: 5 }]]);
+    const [row] = buildNotchSnapshot(inputs({ bots: [bot("cash")], activity })).working;
+    expect(row).toMatchObject({ jobSince: 1_000, step: "reading retry.ts", plan: { index: 3, count: 5 } });
+  });
+
+  it("keeps the plan and step off a row that needs the person", () => {
+    const activity = new Map([[key("cash", "t1"), { ...entry("cash", "t1", "waiting"), jobSince: 1, step: "reading x", stepIndex: 1, stepCount: 2 }]]);
+    const [row] = buildNotchSnapshot(inputs({ bots: [bot("cash")], activity })).working;
+    expect(row.step).toBeUndefined();
+    expect(row.plan).toBeUndefined();
+  });
+
+  it("parses the new fields and drops a broken plan", () => {
+    expect(parseActivityEntry({ botId: "a", threadId: "t", state: "tool", since: 2, jobSince: 1, step: " running tests ", stepIndex: 2, stepCount: 4 }))
+      .toMatchObject({ jobSince: 1, step: "running tests", stepIndex: 2, stepCount: 4 });
+    expect(parseActivityEntry({ botId: "a", threadId: "t", state: "tool", since: 2, stepIndex: 1, stepCount: 1 })?.stepCount).toBeUndefined();
+  });
+
+  it("hands the menu bar clock the most urgent working bot", () => {
+    const activity = new Map([
+      [key("cash", "t1"), { ...entry("cash", "t1", "tool", 9_000), jobSince: 1_000, stepIndex: 3, stepCount: 5 }],
+      [key("bos", "t2"), entry("bos", "t2", "thinking", 20_000)],
+    ]);
+    const snap = buildNotchSnapshot(inputs({ bots: [bot("cash"), bot("bos")], activity }));
+    expect(snap.clock).toMatchObject({ botId: "cash", threadId: "t1", needsYou: false, start: 1_000, plan: { index: 3, count: 5 }, more: 1 });
+    expect(snap.clock?.color).toMatch(/^#[0-9a-f]{6}$/i);
+    expect(buildNotchSnapshot(inputs({ bots: [bot("cash")] })).clock).toBeNull();
   });
 });

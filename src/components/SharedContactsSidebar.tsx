@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { Check, ChevronRight, ClipboardCopy, Copy, MessageCircle, Pin, PinOff, UserPlus } from "lucide-react";
 import { api, useStore } from "@/state/store";
 import { cn } from "@/lib/cn";
+import { t } from "@/lib/i18n";
 import type { SidebarDensity } from "@/lib/sidebar-preferences";
 import type { ReactNode } from "react";
 import { readSessionState } from "@/lib/session";
@@ -16,7 +17,7 @@ export interface LocalConversationRow { id: string; at: number; pinned?: boolean
 
 /** Remote people and person rooms share the conversation list with local bots.
  * Bots on a linked Mac arrive through the bot list itself, never here. */
-export function SharedContactsSidebar({ compact = false, placement = "people", localRows = [] }: { compact?: boolean; placement?: "people" | "unified"; localRows?: LocalConversationRow[]; density?: SidebarDensity }) {
+export function SharedContactsSidebar({ compact = false, placement = "people", localRows = [], roomsBelow = false }: { compact?: boolean; placement?: "people" | "unified"; localRows?: LocalConversationRow[]; density?: SidebarDensity; roomsBelow?: boolean }) {
   const { state, dispatch } = useStore();
   const [selfId, setSelfId] = useState<string | null>(null);
   // everyone the roster knows (room faces and names), and the people worth a row
@@ -181,8 +182,17 @@ export function SharedContactsSidebar({ compact = false, placement = "people", l
       </button> })),
     ];
     entries.sort((a, b) => Number(Boolean(b.pinned)) - Number(Boolean(a.pinned)) || b.at - a.at || a.id.localeCompare(b.id));
+    // 3.0: bots first, rooms in their own run below them
+    const botEntries = roomsBelow ? entries.filter(entry => entry.id.startsWith("bot:")) : entries;
+    const roomEntries = roomsBelow ? entries.filter(entry => !entry.id.startsWith("bot:")) : [];
     return <section aria-label="Chats" className="px-1 pt-1.5">
-      {entries.map(entry => <div key={entry.id}>{entry.element}</div>)}
+      {botEntries.map(entry => <div key={entry.id}>{entry.element}</div>)}
+      {roomEntries.length > 0 && <>
+        {compact
+          ? <div aria-hidden="true" className="mx-auto my-2 h-px w-6 bg-hairline/60" />
+          : <div data-testid="sidebar-rooms-heading" className="mt-3 flex h-9 items-center px-2 text-[12px] font-semibold uppercase tracking-[0.04em] text-ink-secondary">{t("v3.sidebar.rooms", { count: roomEntries.length })}</div>}
+        {roomEntries.map(entry => <div key={entry.id}>{entry.element}</div>)}
+      </>}
       {personEntries.length > 0 && <>
         {compact
           ? <div aria-hidden="true" className="mx-auto my-2 h-px w-6 bg-hairline/60" />

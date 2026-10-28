@@ -154,3 +154,35 @@ test('full access rides each call to the browser authorizer and the tab holder',
   await call(true); await call(false);
   assert.deepEqual(asks, [true, false], 'a downgrade mid-turn applies on the next call');
 });
+
+test('upload checks the file input, asks for upload and sets the files over CDP', async () => {
+  const f = guestFixture();
+  await f.call('agent_browser_open', { url: 'https://example.com' });
+  const guest = f.guests.get(2); let set = null, isFile = true;
+  guest.debugger.sendCommand = async (method, params) => {
+    guest.sent.push(method);
+    if (method === 'DOM.getDocument') return { root: { nodeId: 1 } };
+    if (method === 'DOM.querySelector') return { nodeId: 2 };
+    if (method === 'DOM.describeNode') return { node: { backendNodeId: 5 } };
+    if (method === 'DOM.resolveNode') return { object: { objectId: 'o' } };
+    if (method === 'DOM.setFileInputFiles') { set = params; return {}; }
+    if (method === 'Runtime.callFunctionOn') {
+      const fn = params.functionDeclaration;
+      if (fn.includes("type!=='file'") && !isFile) return { exceptionDetails: { exception: { description: 'Error: That element is not a file input. Try the selector input[type=file].' } } };
+      if (fn.includes('this.files')) return { result: { value: set ? set.files.length : 0 } };
+      if (fn.includes('this.multiple')) return { result: { value: false } };
+      return { result: { value: true } };
+    }
+    return {};
+  };
+  await assert.rejects(f.call('agent_browser_upload', { selector: 'input[type=file]', files: ['/Users/x/.ssh/id_ed25519'] }), /cannot be uploaded/);
+  await assert.rejects(f.call('agent_browser_upload', { selector: 'input[type=file]', files: ['/no/such/file.png'] }), /No file/);
+  await assert.rejects(f.call('agent_browser_upload', { selector: 'input[type=file]', files: ['/etc/hosts', '/etc/hosts'] }), /one file/);
+  isFile = false;
+  await assert.rejects(f.call('agent_browser_upload', { selector: 'button', files: ['/etc/hosts'] }), /not a file input/);
+  assert.equal(set, null);
+  isFile = true;
+  const r = await f.call('agent_browser_upload', { selector: 'input[type=file]', files: ['/etc/hosts'] });
+  assert.match(r.content[0].text, /Attached 1 file/);
+  assert.deepEqual(set, { files: ['/etc/hosts'], backendNodeId: 5 });
+});

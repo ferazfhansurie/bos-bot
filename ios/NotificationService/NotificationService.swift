@@ -8,7 +8,7 @@ final class NotificationService: UNNotificationServiceExtension {
 
     override func didReceive(_ request: UNNotificationRequest, withContentHandler contentHandler: @escaping (UNNotificationContent) -> Void) {
         completion = contentHandler
-        let content = Self.withBotCategory(Self.withVoiceCategory(request.content))
+        let content = Self.withBotCategory(Self.withAnswerCategory(Self.withVoiceCategory(request.content)))
         fallback = content
         // the sender's face in the mood of what it said, when the app drew it
         let mood = NotificationMood.glyph(kind: (content.userInfo["type"] as? String) ?? (content.userInfo["kind"] as? String),
@@ -52,6 +52,18 @@ final class NotificationService: UNNotificationServiceExtension {
         guard content.categoryIdentifier != category,
               let mutable = content.mutableCopy() as? UNMutableNotificationContent else { return content }
         mutable.categoryIdentifier = category
+        return mutable
+    }
+
+    /// bos bot 3.0: a Mac with the labs switch on marks a tool approval the
+    /// phone may answer, and it gets Allow (behind Face ID) and Deny on the
+    /// banner. A push without the mark stays a plain bot push.
+    private static func withAnswerCategory(_ content: UNNotificationContent) -> UNNotificationContent {
+        guard content.categoryIdentifier.isEmpty,
+              content.userInfo["answer"] as? String == "permission",
+              content.userInfo["requestId"] is String, content.userInfo["threadId"] is String,
+              let mutable = content.mutableCopy() as? UNMutableNotificationContent else { return content }
+        mutable.categoryIdentifier = BotNotificationCategory.answerPermission
         return mutable
     }
 

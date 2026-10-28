@@ -436,7 +436,7 @@ function ExportPanel({ render, rendering, onRender, onCancel, onClose, botId, vi
   return (
     <>
       <div className="fixed inset-0 z-40" onPointerDown={onClose} />
-      <div className="absolute right-0 top-10 z-50 flex w-[300px] flex-col gap-3 rounded-xl bg-menu p-3 shadow-[0_12px_36px_rgba(0,0,0,.45)] ring-1 ring-ink/10 animate-pop-in">
+      <div data-popover className="absolute right-0 top-10 z-50 flex w-[300px] flex-col gap-3 rounded-xl bg-menu p-3 shadow-[0_12px_36px_rgba(0,0,0,.45)] ring-1 ring-ink/10 animate-pop-in">
         <div className="flex items-center justify-between">
           <span className="text-[13px] font-medium text-ink">Export</span>
           <span className="text-[11px] tabular-nums text-ink-secondary">{spec}</span>

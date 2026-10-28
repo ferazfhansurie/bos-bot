@@ -15,6 +15,7 @@ import { formatCallDuration } from "@/lib/voice-call/protocol";
 import {
   dismissRealtimeCall,
   setCallPopoverHidden,
+  prewarmRealtimeCall,
   startRealtimeCall,
   useCallPopoverHidden,
   useRealtimeCall,
@@ -85,6 +86,8 @@ export function RealtimeCallButton({ bot }: { bot: Bot }) {
     <button
       type="button"
       onClick={() => startRealtimeCall(bot.id)}
+      onPointerEnter={() => prewarmRealtimeCall(bot.id)}
+      onFocus={() => prewarmRealtimeCall(bot.id)}
       aria-label={label}
       title={label}
       data-voice-call-start

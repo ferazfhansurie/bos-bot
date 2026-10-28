@@ -19,11 +19,12 @@
  *
  * Made with Blob Studio.
  */
+import { DOUBLE_GAP_MS, nextBlink } from "@/lib/alive-eyes"
 import React, { useEffect, useId, useMemo, useRef } from 'react'
 
 import { MASCOT_BODIES } from "../../shared/mascot-bodies"
 import type { GlyphFaceParts } from "@/lib/glyph-face"
-import { GlyphAccent, GlyphEyes } from "./GlyphFace"
+import { GlyphAccent, GlyphEyes, glyphBodyMotion, glyphSkipsBlink } from "./GlyphFace"
 import { gesturePose, IDLE_POSE, mixPose, morphBodyPath, type MascotGesture } from "../../shared/mascot-choreography"
 import {
   EXPRESSIONS,
@@ -1154,6 +1155,8 @@ export interface CursorAvatarProps {
   /** Let states like alerting replace the mascot with a symbol. */
   glyphs?: boolean
   autoBlink?: boolean
+  /** Blink half as often: the person is typing and it pays attention. */
+  blinkSlow?: boolean
   autoExpression?: boolean
   paused?: boolean
   /** Silhouette to wear. Defaults to the baked-in mascot silhouette. */
@@ -1170,6 +1173,9 @@ export interface CursorAvatarProps {
    * mouth. Its coordinates are the silhouette's own (inside `fit`); the eyes
    * ride the face pose and blink, the accent rides the body. */
   glyphFace?: GlyphFaceParts
+  /** Drawn on the body in the silhouette's own coordinates (inside `fit`),
+   * riding its squash and hop: what the bot wears. */
+  overlay?: React.ReactNode
 }
 
 export interface CursorAvatarHandle {
@@ -1196,6 +1202,7 @@ export const CursorAvatar = React.forwardRef<CursorAvatarHandle, CursorAvatarPro
       effects = true,
       glyphs = true,
       autoBlink = true,
+      blinkSlow = false,
       autoExpression = true,
       paused = false,
       silhouette = DEFAULT_SILHOUETTE,
@@ -1206,6 +1213,7 @@ export const CursorAvatar = React.forwardRef<CursorAvatarHandle, CursorAvatarPro
       style,
       choreography,
       glyphFace,
+      overlay,
     },
     ref
   ) {
@@ -1341,19 +1349,24 @@ export const CursorAvatar = React.forwardRef<CursorAvatarHandle, CursorAvatarPro
       return () => clearTimeout(timer)
     }, [state, autoExpression, expression, paused])
 
+    const skipBlink = glyphSkipsBlink(glyphFace)
     useEffect(() => {
       const cadence = BLINK[state]
-      if (!autoBlink || !cadence || paused) return
+      if (!autoBlink || !cadence || paused || skipBlink) return
       let timer: ReturnType<typeof setTimeout>
+      let second: ReturnType<typeof setTimeout> | undefined
+      // random inside the cadence, now and then a double; never a fixed loop
       const tick = () => {
+        const next = nextBlink(cadence, { slow: blinkSlow })
         timer = setTimeout(() => {
           engine.current.blinkStart = performance.now()
+          if (next.double) second = setTimeout(() => { engine.current.blinkStart = performance.now() }, DOUBLE_GAP_MS)
           tick()
-        }, cadence[0] + Math.random() * (cadence[1] - cadence[0]))
+        }, next.delayMs)
       }
       tick()
-      return () => clearTimeout(timer)
-    }, [state, autoBlink, paused])
+      return () => { clearTimeout(timer); clearTimeout(second) }
+    }, [state, autoBlink, blinkSlow, paused, skipBlink])
 
     useEffect(() => {
       let frame = 0
@@ -1423,6 +1436,12 @@ export const CursorAvatar = React.forwardRef<CursorAvatarHandle, CursorAvatarPro
             const at = { x: 50 + choreography.faceX * (1 - m) * .5, y: 46 + choreography.faceY * (1 - m) }
             const fy = choreography.gesture === 'waiting' ? 1 / Math.max(.3, pose.sy) : 1
             poseTransform = `translate(${at.x.toFixed(2)} ${at.y.toFixed(2)}) scale(${pose.face.toFixed(4)} ${(pose.face * fy).toFixed(4)}) translate(${-rest.x} ${-rest.y})`
+          }
+          // a caller-aimed gaze slides the glyph eyes too; without one the
+          // transform is exactly what it was
+          if (p.gaze) {
+            const look = `translate(${(clamp(p.gaze.x ?? 0, -1, 1) * 7).toFixed(2)} ${(clamp(p.gaze.y ?? 0, -1, 1) * 5).toFixed(2)})`
+            poseTransform = poseTransform ? `${look} ${poseTransform}` : look
           }
           if (poseTransform) glyphPose.current.setAttribute('transform', poseTransform)
           else glyphPose.current.removeAttribute('transform')
@@ -1552,6 +1571,8 @@ export const CursorAvatar = React.forwardRef<CursorAvatarHandle, CursorAvatarPro
       }
     }, [choreography ? paused : false])
 
+    // a paused face (off screen, hidden window) stops its CSS motion too
+    const glyphAnimated = (motionStrength > 0 || Boolean(choreography && !choreography.reduced)) && !paused
     const paint = `url(#${uid}-grad)`
     const paintRef = useRef(paint)
     paintRef.current = paint
@@ -1567,7 +1588,7 @@ export const CursorAvatar = React.forwardRef<CursorAvatarHandle, CursorAvatarPro
         height={dimension}
         className={className}
         // the glyph accent floats off the body, past the view box
-        style={glyphFace ? { overflow: 'visible', ...style } : style}
+        style={glyphFace || overlay ? { overflow: 'visible', ...style } : style}
         role={label ? 'img' : undefined}
         aria-label={label ?? undefined}
         aria-hidden={label ? undefined : true}
@@ -1592,13 +1613,15 @@ export const CursorAvatar = React.forwardRef<CursorAvatarHandle, CursorAvatarPro
               same motion but is not faded with them, since it replaces them. */}
           {choreography && <g ref={previewSides} fill={gradient[0]}><path opacity="0"/><path opacity="0"/></g>}
           <g ref={bodyGroup}>
+          {/* the face's body motion (a hop on done); a CSS transform, so it sits inside the loop's group */}
+          <g {...glyphBodyMotion(glyphFace, glyphAnimated)}>
           <g ref={bodyContent}>
           {choreography ? <g transform={silhouette.fit || undefined}><path ref={previewPath} d={choreography.path} fill={gradient[0]} /></g> : <g transform={silhouette.fit || undefined} dangerouslySetInnerHTML={{ __html: body }} /> }
           <g clipPath={`url(#${uid}-clip)`}>
             {glyphFace && (
               <g transform={silhouette.fit || undefined}>
                 <g ref={glyphPose}>
-                  <GlyphEyes parts={glyphFace} animated={motionStrength > 0 || Boolean(choreography && !choreography.reduced)} blinkRef={glyphBlink} />
+                  <GlyphEyes parts={glyphFace} animated={glyphAnimated} blinkRef={glyphBlink} />
                 </g>
               </g>
             )}
@@ -1617,12 +1640,14 @@ export const CursorAvatar = React.forwardRef<CursorAvatarHandle, CursorAvatarPro
             </g>
           </g>
           </g>
+          {overlay && <g transform={silhouette.fit || undefined}>{overlay}</g>}
           {glyphFace && (
             <g transform={silhouette.fit || undefined}>
-              <GlyphAccent parts={glyphFace} animated={motionStrength > 0 || Boolean(choreography && !choreography.reduced)} />
+              <GlyphAccent parts={glyphFace} animated={glyphAnimated} />
             </g>
           )}
           <g ref={glyphLayer} style={{ opacity: 0 }} />
+          </g>
           </g>
           <g ref={confettiLayer} />
         </g>

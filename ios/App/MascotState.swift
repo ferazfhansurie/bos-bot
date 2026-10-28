@@ -21,7 +21,7 @@ extension MausState {
         switch self {
         case .thinking: return .thinking
         case .searching: return .searching
-        case .working: return .working
+        case .working, .reading, .writing: return .working
         case .listening: return .waiting
         case .celebrate: return .finished
         default: return .idle
@@ -45,10 +45,21 @@ extension MausState {
     /// `ActivityFeedState.mascotActivity`). Failed and stopped settle to the
     /// idle face: still, never looping.
     static func forFeed(_ entry: ActivityFeedEntry) -> MausState {
-        face(for: entry.mascotActivity)
+        tool(face(for: entry.mascotActivity), entry.toolName)
+    }
+
+    /// A working or searching face sharpened by the tool in flight, the
+    /// desktop's tool poses: reading a file reads, editing one writes.
+    static func tool(_ face: MausState, _ toolName: String?) -> MausState {
+        guard face == .working || face == .searching, let toolName, !toolName.isEmpty else { return face }
+        return MausState(rawValue: MascotActivityChoreography.toolFace(toolName).rawValue) ?? face
     }
 
     static func forBot(_ bot: Bot, last: Message?) -> MausState {
+        tool(forBotActivity(bot, last: last), last?.tool?.name)
+    }
+
+    private static func forBotActivity(_ bot: Bot, last: Message?) -> MausState {
         face(for: MascotActivityChoreography.activity(runtime: bot.tasks?.first { $0.threadId == bot.threadId }?.activity, busy: bot.currentTaskBusy == true,
             waitingOnTeammate: bot.waitingOnTeammate == true,
             pendingRequest: last?.card?.isPending == true || last?.secret?.isPending == true,

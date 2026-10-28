@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { GLYPH_FACES, GLYPH_LAYOUT, GLYPH_PATHS, GLYPH_STROKE } from "../../shared/glyph-faces";
+import { GLYPH_FACES, GLYPH_LAYOUT, GLYPH_PATHS, GLYPH_STROKE, MAUS_COLORS } from "../../shared/glyph-faces";
 import { ACCENT_FALLBACK, glyphAccentColor, glyphFaceMarkup, glyphFaceParts } from "./glyph-face";
+
+const MAUS_GREEN = MAUS_COLORS.green;
 
 const numbers = (transform: string) => transform.match(/-?[\d.]+/g)!.map(Number);
 const closeTo = (actual: number[], expected: number[]) =>
@@ -53,7 +55,28 @@ describe("glyphFaceParts", () => {
 
   it("writes standalone markup for the notification icon", () => {
     const markup = glyphFaceMarkup(parts({ state: "idle" }));
-    expect(markup.split(GLYPH_PATHS.dash).length - 1).toBe(2);
+    expect(markup.split(GLYPH_PATHS.dot).length - 1).toBe(2);
     expect(markup).toContain('stroke="#000000"');
+  });
+
+  it("draws heavy dots at rest and every part of a layered eye", () => {
+    const idle = parts({ state: "idle" });
+    expect(idle.eyes.map(eye => eye.id)).toEqual(["dot", "dot"]);
+    expect(idle.eyes[0].width).toBeCloseTo(GLYPH_STROKE * 3.2);
+    expect(idle.gaze).toEqual([0, 0]);
+    const drowsy = parts({ state: "drowsy" });
+    expect(drowsy.eyeParts.map(eye => eye.map(m => m.id))).toEqual([["dot", "lowLid"], ["dot", "lowLid"]]);
+    expect(drowsy.eyeParts[0][0].transform).toBe(drowsy.eyeParts[0][1].transform);
+    expect(drowsy.gaze[1]).toBeGreaterThan(0);
+  });
+
+  it("paints a cheek blush in the colour opposite the eyes", () => {
+    expect(parts({ state: "shy", color: "green" }).accentColor).toBe("rgba(255,255,255,0.55)");
+    expect(parts({ state: "shy", color: "purple" }).accentColor).toBe("rgba(0,0,0,0.55)");
+    expect(parts({ state: "happy", color: "green" }).accentColor).toBe(MAUS_GREEN);
+  });
+
+  it("carries the face's motion", () => {
+    expect(parts({ state: "thinking" }).motion).toEqual(GLYPH_FACES.thinking.motion);
   });
 });

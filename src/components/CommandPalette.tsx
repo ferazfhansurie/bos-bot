@@ -13,10 +13,11 @@ import {
   Puzzle,
   Search,
   Settings,
+  Sun,
   Users,
   type LucideIcon,
 } from "lucide-react";
-import { api, openNotificationTarget, useStore, visibleMessages, visibleNotificationThread, type Action, type AppState, type Bot, type Group } from "@/state/store";
+import { api, openNotificationTarget, useStore, visibleMessages, visibleNotificationThread, type Action, type AppState, type Bot, type Group, type Task } from "@/state/store";
 import { fetchInbox, type InboxItem } from "@/lib/inbox";
 import { roomMemberBots } from "@/lib/room-members";
 import {
@@ -28,12 +29,15 @@ import {
   type Ranked,
 } from "@/lib/palette-rank";
 import { cn } from "@/lib/cn";
+import { useV3 } from "@/lib/v3";
+import { setHomeOpen } from "@/lib/v3-home";
 import { t } from "@/lib/i18n";
 import { lastNonReceipt } from "@/lib/receipts";
 import type { SearchHit } from "@/lib/search-hit";
 import { landOnSearchHit } from "@/lib/focus-message";
 import { botAvatarProfile } from "../../shared/bot-avatar";
 import { BotAvatar, PersonPhoto } from "./Avatar";
+import { V3Empty } from "./v3/Empty";
 import { shortcutLabel } from "./ShortcutHint";
 import { terminalAvailable } from "@/lib/terminal";
 import { WORKSPACE_COMMANDS, runWorkspaceCommand } from "@/lib/workspace-commands";
@@ -41,6 +45,7 @@ import { WORKSPACE_COMMANDS, runWorkspaceCommand } from "@/lib/workspace-command
 // enough to cover "the last few things I was in" without pushing the full
 // lists below the fold
 const RECENT_LIMIT = 6;
+const THREAD_LIMIT = 8;
 const AVATAR = 22;
 
 /** The thread to open next: pending approvals and questions first, then
@@ -83,7 +88,10 @@ type PaletteEntry =
   | { kind: "bot"; bot: Bot; match: PaletteMatch | null }
   | { kind: "room"; group: Group; match: PaletteMatch | null }
   | { kind: "action"; action: PaletteAction; match: PaletteMatch | null }
-  | { kind: "message"; hit: SearchHit };
+  | { kind: "message"; hit: SearchHit }
+  // 3.0: a thread inside a bot, and the typed text sent to the open bot
+  | { kind: "thread"; bot: Bot; task: Task; match: PaletteMatch | null }
+  | { kind: "ask"; bot: Bot; text: string };
 
 interface Section {
   id: string;
@@ -157,6 +165,7 @@ function Status({ waiting, working, unread, current }: { waiting?: boolean; work
 export function CommandPalette({ onOpenChange }: { onOpenChange?: (open: boolean) => void }) {
   const { state, dispatch } = useStore();
   const [open, setOpen] = useState(false);
+  const v3 = useV3();
   const [query, setQuery] = useState("");
   const [messageHits, setMessageHits] = useState<SearchHit[]>([]);
   const [searching, setSearching] = useState(false);
@@ -244,6 +253,7 @@ export function CommandPalette({ onOpenChange }: { onOpenChange?: (open: boolean
   if (!open) return null;
 
   const currentId = state.activeView === "chat" ? state.selectedId : null;
+  const askBot = v3 && currentId ? state.bots.find((b) => b.id === currentId && !b.hidden) : undefined;
   const visibleBots = state.bots.filter((b) => !b.hidden);
   const membersOf = (group: Group) => roomMemberBots(group, state.bots);
 
@@ -256,6 +266,7 @@ export function CommandPalette({ onOpenChange }: { onOpenChange?: (open: boolean
     { id: "team-map", label: t("sidebar.nav.teamMap"), keywords: "org chart graph", icon: Network, run: () => dispatch({ type: "showTeamMap" }) },
     { id: "apps", label: t("sidebar.nav.connectedApps"), keywords: "plugins integrations mcp", icon: Puzzle, run: () => dispatch({ type: "togglePlugins", open: true }) },
     { id: "next-needing-you", label: t("attention.next"), keywords: "approval question unread waiting inbox next", icon: BellRing, hint: shortcutLabel("next-needing-you"), run: () => void openNextThreadNeedingYou(dispatch, state) },
+    ...(v3 ? [{ id: "today", label: t("v3.sidebar.today"), keywords: "home board overview needs you", icon: Sun, run: () => setHomeOpen(true) }] : []),
     { id: "shortcuts", label: "Keyboard shortcuts", keywords: "keys hotkeys help", icon: Keyboard, hint: shortcutLabel("shortcuts-cheat-sheet"), run: () => dispatch({ type: "toggleShortcuts", open: true }) },
     // the thread workspace's own list, the same one its keys run from
     ...(terminalAvailable() ? WORKSPACE_COMMANDS.filter((command) => command.id !== "workspace-browser" || window.ogb?.primaryBrowser).map((command): PaletteAction => ({
@@ -293,10 +304,16 @@ export function CommandPalette({ onOpenChange }: { onOpenChange?: (open: boolean
     const rooms = rankMatches(state.groups.filter((g) => !g.dm), q, (g) => ({ name: g.name }));
     const dms = rankMatches(state.groups.filter((g) => g.dm), q, (g) => ({ name: g.name }));
     const acts = rankMatches(actions, q, (a) => ({ name: a.label, title: a.keywords }));
+    const threads = v3 ? rankMatches(
+      visibleBots.flatMap((bot) => (bot.tasks ?? []).filter((task) => !task.routineRunId && !task.archivedAt && task.title.trim()).map((task) => ({ bot, task }))),
+      q,
+      ({ bot, task }) => ({ name: task.title, title: bot.name }),
+    ).slice(0, THREAD_LIMIT) : [];
     const ranked = [
       { tier: bestTier(bots), section: { id: "bots", label: t("sidebar.section.bots"), entries: bots.map(botEntry) } },
       { tier: bestTier(rooms), section: { id: "rooms", label: t("sidebar.section.channels"), entries: rooms.map(roomEntry) } },
       { tier: bestTier(dms), section: { id: "dms", label: t("sidebar.section.botChats"), entries: dms.map(roomEntry) } },
+      { tier: bestTier(threads), section: { id: "threads", label: t("v3.palette.threads"), entries: threads.map(({ item, match }): PaletteEntry => ({ kind: "thread", bot: item.bot, task: item.task, match })) } },
       {
         tier: bestTier(acts),
         section: { id: "actions", label: "Actions", entries: acts.map(({ item, match }): PaletteEntry => ({ kind: "action", action: item, match })) },
@@ -308,6 +325,9 @@ export function CommandPalette({ onOpenChange }: { onOpenChange?: (open: boolean
     ranked.sort((a, b) => a.tier - b.tier);
     sections = [
       ...ranked.map((r) => r.section),
+      // 3.0: what you typed can go straight to the open bot; first when
+      // nothing else matched, so ↵ sends it
+      ...(askBot ? [{ id: "ask", label: t("v3.palette.ask"), entries: [{ kind: "ask", bot: askBot, text: query.trim() } as PaletteEntry] }] : []),
       { id: "messages", label: "Messages", entries: messageHits.map((hit): PaletteEntry => ({ kind: "message", hit })) },
     ];
   }
@@ -327,6 +347,12 @@ export function CommandPalette({ onOpenChange }: { onOpenChange?: (open: boolean
       }
     } else if (entry.kind === "action") {
       entry.action.run();
+    } else if (entry.kind === "thread") {
+      setHomeOpen(false);
+      dispatch({ type: "switchTask", botId: entry.bot.id, threadId: entry.task.threadId });
+    } else if (entry.kind === "ask") {
+      setHomeOpen(false);
+      dispatch({ type: "send", botId: entry.bot.id, text: entry.text, threadId: entry.bot.threadId });
     } else {
       dispatch({ type: "select", id: entry.kind === "bot" ? entry.bot.id : entry.group.id });
     }
@@ -433,6 +459,39 @@ export function CommandPalette({ onOpenChange }: { onOpenChange?: (open: boolean
         </>,
       );
     }
+    if (entry.kind === "thread") {
+      const { bot, task, match } = entry;
+      return row(
+        entry,
+        index,
+        <>
+          <BotAvatar bot={bot} size={AVATAR} animated={false} />
+          <span className="flex min-w-0 flex-1 items-baseline gap-2">
+            <span className="min-w-0 max-w-full shrink-0 truncate text-[13.5px] text-ink">
+              <Highlighted text={task.title} match={match} field="name" />
+            </span>
+            <span className="min-w-0 truncate text-[12.5px] text-ink-secondary">
+              <Highlighted text={bot.name} match={match} field="title" />
+            </span>
+          </span>
+          <Status waiting={task.activity === "waiting-on-you"} working={Boolean(task.busy) && "Working"} unread={task.unread} current={bot.id === currentId && task.threadId === bot.threadId} />
+        </>,
+      );
+    }
+    if (entry.kind === "ask") {
+      const { bot, text } = entry;
+      return row(
+        entry,
+        index,
+        <>
+          <BotAvatar bot={bot} size={AVATAR} animated={false} />
+          <span className="min-w-0 flex-1 truncate text-[13.5px] text-ink">
+            {t("v3.palette.askBot", { name: bot.name })} <span className="text-ink-secondary">“{text}”</span>
+          </span>
+          <kbd className="shrink-0 rounded border border-hairline/50 px-1.5 py-0.5 font-sans text-[11px] leading-none text-ink-secondary">↵</kbd>
+        </>,
+      );
+    }
     if (entry.kind === "action") {
       const { action, match } = entry;
       const Icon = action.icon;
@@ -493,6 +552,7 @@ export function CommandPalette({ onOpenChange }: { onOpenChange?: (open: boolean
         role="dialog"
         aria-modal="true"
         aria-label="Command palette"
+        data-popover
         className="flex max-h-[min(520px,72vh)] w-full max-w-[600px] flex-col overflow-hidden rounded-xl border border-hairline/50 bg-card shadow-2xl shadow-black/60 motion-safe:animate-pop-in"
       >
         <div className="flex items-center gap-3 border-b border-hairline/40 px-4 py-3">
@@ -501,7 +561,7 @@ export function CommandPalette({ onOpenChange }: { onOpenChange?: (open: boolean
             autoFocus
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder="Search bots, group chats, messages…"
+            placeholder={askBot ? t("v3.palette.placeholder", { name: askBot.name }) : "Search bots, group chats, messages…"}
             role="combobox"
             aria-expanded="true"
             aria-controls={listId}
@@ -511,11 +571,14 @@ export function CommandPalette({ onOpenChange }: { onOpenChange?: (open: boolean
           />
         </div>
         <div id={listId} role="listbox" aria-label="Results" className="min-h-0 flex-1 overflow-y-auto p-1.5">
-          {sections.length === 0 && (
+          {sections.length === 0 && (v3 ? (
+            <V3Empty size={40} text={q ? t("v3.empty.paletteNoMatch", { query: query.trim() }) : t("v3.empty.paletteNothing")}
+              action={q ? { label: t("v3.empty.clearSearch"), onClick: () => setQuery("") } : undefined} />
+          ) : (
             <div className="px-3 py-8 text-center text-[13px] text-ink-secondary">
               {q ? `Nothing matches “${query.trim()}”` : "Nothing to switch to yet"}
             </div>
-          )}
+          ))}
           {sections.map((section, sectionIndex) => (
             <div key={section.id} role="group" aria-labelledby={`${idBase}-${section.id}`}>
               <div
@@ -577,5 +640,9 @@ function entryId(entry: PaletteEntry): string {
       return entry.action.id;
     case "message":
       return `${entry.hit.threadId}:${entry.hit.messageId}`;
+    case "thread":
+      return `thread:${entry.task.threadId}`;
+    case "ask":
+      return "ask";
   }
 }

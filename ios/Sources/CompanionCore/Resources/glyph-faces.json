@@ -1,73 +1,1162 @@
 {
-  "version": 1,
+  "version": 2,
   "stroke": 3.2,
   "tiltDeg": -12,
   "viewBox": 24,
   "states": [
     "idle",
+    "glance",
+    "listening",
+    "noticed",
+    "drowsy",
+    "asleep",
     "thinking",
     "searching",
+    "reading",
+    "writing",
     "working",
+    "focused",
+    "sending",
     "waiting",
     "finished",
+    "nailed-it",
     "happy",
+    "love",
+    "excited",
+    "surprised",
+    "confused",
+    "skeptical",
+    "determined",
+    "sad",
+    "scared",
+    "shy",
+    "wink",
+    "dizzy",
     "failed",
-    "asleep"
+    "waking",
+    "yawn",
+    "curious",
+    "proud",
+    "laughing",
+    "mind-blown",
+    "celebrate",
+    "nervous",
+    "bored",
+    "voice",
+    "calling",
+    "handing-off",
+    "waiting-mate",
+    "ka-ching"
   ],
   "faces": {
     "idle": {
-      "left": "dash",
-      "right": "dash",
+      "left": "dot",
+      "right": "dot",
       "accent": null,
-      "anchor": null
+      "anchor": null,
+      "leftParts": [
+        {
+          "glyph": "dot",
+          "weight": 3.2
+        }
+      ],
+      "rightParts": [
+        {
+          "glyph": "dot",
+          "weight": 3.2
+        }
+      ],
+      "gaze": [
+        0,
+        0
+      ],
+      "motion": {}
     },
-    "thinking": {
-      "left": "caret",
-      "right": "caret",
-      "accent": "query",
-      "anchor": "left"
-    },
-    "searching": {
-      "left": "ring",
-      "right": "ring",
-      "accent": "dots",
-      "anchor": "top-right"
-    },
-    "working": {
-      "left": "plus",
-      "right": "plus",
-      "accent": "code",
-      "anchor": "top-right"
-    },
-    "waiting": {
-      "left": "ring",
-      "right": "ring",
-      "accent": "bang",
-      "anchor": "left"
-    },
-    "finished": {
-      "left": "gt",
-      "right": "lt",
-      "accent": "spark",
-      "anchor": "split"
-    },
-    "happy": {
-      "left": "star",
-      "right": "star",
-      "accent": "heart",
-      "anchor": "top-right"
-    },
-    "failed": {
-      "left": "cross",
-      "right": "cross",
+    "glance": {
+      "left": "dot",
+      "right": "dot",
       "accent": null,
-      "anchor": null
+      "anchor": null,
+      "leftParts": [
+        {
+          "glyph": "dot",
+          "weight": 3.2
+        }
+      ],
+      "rightParts": [
+        {
+          "glyph": "dot",
+          "weight": 3.2
+        }
+      ],
+      "gaze": [
+        0,
+        0
+      ],
+      "motion": {
+        "eyes": "look"
+      }
+    },
+    "listening": {
+      "left": "dot",
+      "right": "dot",
+      "accent": null,
+      "anchor": null,
+      "leftParts": [
+        {
+          "glyph": "dot",
+          "weight": 3.2
+        }
+      ],
+      "rightParts": [
+        {
+          "glyph": "dot",
+          "weight": 3.2
+        }
+      ],
+      "gaze": [
+        0,
+        0
+      ],
+      "motion": {
+        "eyes": "lean"
+      }
+    },
+    "noticed": {
+      "left": "dot",
+      "right": "dot",
+      "accent": null,
+      "anchor": null,
+      "leftParts": [
+        {
+          "glyph": "dot",
+          "weight": 3.2
+        }
+      ],
+      "rightParts": [
+        {
+          "glyph": "dot",
+          "weight": 3.2
+        }
+      ],
+      "gaze": [
+        0.078,
+        -0.047
+      ],
+      "motion": {}
+    },
+    "drowsy": {
+      "left": "dot",
+      "right": "dot",
+      "accent": null,
+      "anchor": null,
+      "leftParts": [
+        {
+          "glyph": "dot",
+          "weight": 2.4
+        },
+        {
+          "glyph": "lowLid",
+          "weight": 1
+        }
+      ],
+      "rightParts": [
+        {
+          "glyph": "dot",
+          "weight": 2.4
+        },
+        {
+          "glyph": "lowLid",
+          "weight": 1
+        }
+      ],
+      "gaze": [
+        0,
+        0.031
+      ],
+      "motion": {
+        "eyes": "slow"
+      }
     },
     "asleep": {
       "left": "lid",
       "right": "lid",
       "accent": "zz",
-      "anchor": "top-right"
+      "anchor": "top-right",
+      "leftParts": [
+        {
+          "glyph": "lid",
+          "weight": 1
+        }
+      ],
+      "rightParts": [
+        {
+          "glyph": "lid",
+          "weight": 1
+        }
+      ],
+      "gaze": [
+        0,
+        0
+      ],
+      "motion": {
+        "eyes": "breathe",
+        "accent": "float",
+        "body": "squish"
+      }
+    },
+    "thinking": {
+      "left": "dot",
+      "right": "dot",
+      "accent": "query",
+      "anchor": "left",
+      "leftParts": [
+        {
+          "glyph": "dot",
+          "weight": 3.2
+        }
+      ],
+      "rightParts": [
+        {
+          "glyph": "dot",
+          "weight": 3.2
+        }
+      ],
+      "gaze": [
+        0.063,
+        -0.078
+      ],
+      "motion": {
+        "eyes": "drift"
+      }
+    },
+    "searching": {
+      "left": "ringS",
+      "right": "ringS",
+      "accent": "dots",
+      "anchor": "top-right",
+      "leftParts": [
+        {
+          "glyph": "ringS",
+          "weight": 1
+        }
+      ],
+      "rightParts": [
+        {
+          "glyph": "ringS",
+          "weight": 1
+        }
+      ],
+      "gaze": [
+        0,
+        0
+      ],
+      "motion": {
+        "eyes": "scan"
+      }
+    },
+    "reading": {
+      "left": "dot",
+      "right": "dot",
+      "accent": "page",
+      "anchor": "top-right",
+      "leftParts": [
+        {
+          "glyph": "dot",
+          "weight": 2.3
+        }
+      ],
+      "rightParts": [
+        {
+          "glyph": "dot",
+          "weight": 2.3
+        }
+      ],
+      "gaze": [
+        0,
+        0
+      ],
+      "motion": {
+        "eyes": "read"
+      }
+    },
+    "writing": {
+      "left": "dot",
+      "right": "dot",
+      "accent": "pencil",
+      "anchor": "below",
+      "leftParts": [
+        {
+          "glyph": "dot",
+          "weight": 3.2
+        }
+      ],
+      "rightParts": [
+        {
+          "glyph": "dot",
+          "weight": 3.2
+        }
+      ],
+      "gaze": [
+        0.016,
+        0.063
+      ],
+      "motion": {
+        "eyes": "bob"
+      }
+    },
+    "working": {
+      "left": "plus",
+      "right": "plus",
+      "accent": "code",
+      "anchor": "top-right",
+      "leftParts": [
+        {
+          "glyph": "plus",
+          "weight": 1
+        }
+      ],
+      "rightParts": [
+        {
+          "glyph": "plus",
+          "weight": 1
+        }
+      ],
+      "gaze": [
+        0,
+        0
+      ],
+      "motion": {}
+    },
+    "focused": {
+      "left": "dot",
+      "right": "dot",
+      "accent": "bolt",
+      "anchor": "top-right",
+      "leftParts": [
+        {
+          "glyph": "dot",
+          "weight": 2.3
+        }
+      ],
+      "rightParts": [
+        {
+          "glyph": "dot",
+          "weight": 2.3
+        }
+      ],
+      "gaze": [
+        0,
+        0
+      ],
+      "motion": {}
+    },
+    "sending": {
+      "left": "dot",
+      "right": "dot",
+      "accent": "plane",
+      "anchor": "top-right",
+      "leftParts": [
+        {
+          "glyph": "dot",
+          "weight": 3.2
+        }
+      ],
+      "rightParts": [
+        {
+          "glyph": "dot",
+          "weight": 3.2
+        }
+      ],
+      "gaze": [
+        0.047,
+        -0.031
+      ],
+      "motion": {
+        "accent": "fly"
+      }
+    },
+    "waiting": {
+      "left": "ring",
+      "right": "ring",
+      "accent": "bang",
+      "anchor": "left",
+      "leftParts": [
+        {
+          "glyph": "ring",
+          "weight": 1
+        }
+      ],
+      "rightParts": [
+        {
+          "glyph": "ring",
+          "weight": 1
+        }
+      ],
+      "gaze": [
+        0,
+        0
+      ],
+      "motion": {
+        "eyes": "pulse"
+      }
+    },
+    "finished": {
+      "left": "gt",
+      "right": "lt",
+      "accent": "spark",
+      "anchor": "split",
+      "leftParts": [
+        {
+          "glyph": "gt",
+          "weight": 1
+        }
+      ],
+      "rightParts": [
+        {
+          "glyph": "lt",
+          "weight": 1
+        }
+      ],
+      "gaze": [
+        0,
+        0
+      ],
+      "motion": {
+        "body": "hop"
+      }
+    },
+    "nailed-it": {
+      "left": "arc",
+      "right": "arc",
+      "accent": "check",
+      "anchor": "top-right",
+      "leftParts": [
+        {
+          "glyph": "arc",
+          "weight": 1
+        }
+      ],
+      "rightParts": [
+        {
+          "glyph": "arc",
+          "weight": 1
+        }
+      ],
+      "gaze": [
+        0,
+        0
+      ],
+      "motion": {
+        "body": "hop"
+      }
+    },
+    "happy": {
+      "left": "arc",
+      "right": "arc",
+      "accent": "heart",
+      "anchor": "top-right",
+      "leftParts": [
+        {
+          "glyph": "arc",
+          "weight": 1
+        }
+      ],
+      "rightParts": [
+        {
+          "glyph": "arc",
+          "weight": 1
+        }
+      ],
+      "gaze": [
+        0,
+        0
+      ],
+      "motion": {
+        "accent": "float"
+      }
+    },
+    "love": {
+      "left": "heart",
+      "right": "heart",
+      "accent": null,
+      "anchor": null,
+      "leftParts": [
+        {
+          "glyph": "heart",
+          "weight": 0.9
+        }
+      ],
+      "rightParts": [
+        {
+          "glyph": "heart",
+          "weight": 0.9
+        }
+      ],
+      "gaze": [
+        0,
+        0
+      ],
+      "motion": {
+        "eyes": "beat"
+      }
+    },
+    "excited": {
+      "left": "star",
+      "right": "star",
+      "accent": "spark",
+      "anchor": "split",
+      "leftParts": [
+        {
+          "glyph": "star",
+          "weight": 1
+        }
+      ],
+      "rightParts": [
+        {
+          "glyph": "star",
+          "weight": 1
+        }
+      ],
+      "gaze": [
+        0,
+        0
+      ],
+      "motion": {
+        "eyes": "twinkle",
+        "body": "hop"
+      }
+    },
+    "surprised": {
+      "left": "ring",
+      "right": "ring",
+      "accent": null,
+      "anchor": null,
+      "leftParts": [
+        {
+          "glyph": "ring",
+          "weight": 1.1
+        }
+      ],
+      "rightParts": [
+        {
+          "glyph": "ring",
+          "weight": 1.1
+        }
+      ],
+      "gaze": [
+        0,
+        -0.016
+      ],
+      "motion": {
+        "eyes": "pop"
+      }
+    },
+    "confused": {
+      "left": "dot",
+      "right": "ringS",
+      "accent": "query",
+      "anchor": "top-right",
+      "leftParts": [
+        {
+          "glyph": "dot",
+          "weight": 3.2
+        }
+      ],
+      "rightParts": [
+        {
+          "glyph": "ringS",
+          "weight": 1
+        }
+      ],
+      "gaze": [
+        0.031,
+        0
+      ],
+      "motion": {}
+    },
+    "skeptical": {
+      "left": "dot",
+      "right": "dash",
+      "accent": null,
+      "anchor": null,
+      "leftParts": [
+        {
+          "glyph": "dot",
+          "weight": 3.2
+        },
+        {
+          "glyph": "browUp",
+          "weight": 1
+        }
+      ],
+      "rightParts": [
+        {
+          "glyph": "dash",
+          "weight": 1
+        }
+      ],
+      "gaze": [
+        0,
+        0
+      ],
+      "motion": {}
+    },
+    "determined": {
+      "left": "dot",
+      "right": "dot",
+      "accent": null,
+      "anchor": null,
+      "leftParts": [
+        {
+          "glyph": "dot",
+          "weight": 3.2
+        },
+        {
+          "glyph": "browAngryL",
+          "weight": 1
+        }
+      ],
+      "rightParts": [
+        {
+          "glyph": "dot",
+          "weight": 3.2
+        },
+        {
+          "glyph": "browAngryR",
+          "weight": 1
+        }
+      ],
+      "gaze": [
+        0,
+        0.016
+      ],
+      "motion": {}
+    },
+    "sad": {
+      "left": "dot",
+      "right": "dot",
+      "accent": "tear",
+      "anchor": "left",
+      "leftParts": [
+        {
+          "glyph": "dot",
+          "weight": 3.2
+        },
+        {
+          "glyph": "browSadL",
+          "weight": 1
+        }
+      ],
+      "rightParts": [
+        {
+          "glyph": "dot",
+          "weight": 3.2
+        },
+        {
+          "glyph": "browSadR",
+          "weight": 1
+        }
+      ],
+      "gaze": [
+        0,
+        0.047
+      ],
+      "motion": {}
+    },
+    "scared": {
+      "left": "dot",
+      "right": "dot",
+      "accent": null,
+      "anchor": null,
+      "leftParts": [
+        {
+          "glyph": "dot",
+          "weight": 2.3
+        },
+        {
+          "glyph": "browSadL",
+          "weight": 1
+        }
+      ],
+      "rightParts": [
+        {
+          "glyph": "dot",
+          "weight": 2.3
+        },
+        {
+          "glyph": "browSadR",
+          "weight": 1
+        }
+      ],
+      "gaze": [
+        0,
+        0
+      ],
+      "motion": {
+        "eyes": "shake"
+      }
+    },
+    "shy": {
+      "left": "dot",
+      "right": "dot",
+      "accent": "blush",
+      "anchor": "cheek",
+      "leftParts": [
+        {
+          "glyph": "dot",
+          "weight": 3.2
+        }
+      ],
+      "rightParts": [
+        {
+          "glyph": "dot",
+          "weight": 3.2
+        }
+      ],
+      "gaze": [
+        -0.078,
+        0.047
+      ],
+      "motion": {}
+    },
+    "wink": {
+      "left": "dot",
+      "right": "arc",
+      "accent": "spark",
+      "anchor": "split",
+      "leftParts": [
+        {
+          "glyph": "dot",
+          "weight": 3.2
+        }
+      ],
+      "rightParts": [
+        {
+          "glyph": "arc",
+          "weight": 1
+        }
+      ],
+      "gaze": [
+        0,
+        0
+      ],
+      "motion": {}
+    },
+    "dizzy": {
+      "left": "spiral",
+      "right": "spiral",
+      "accent": null,
+      "anchor": null,
+      "leftParts": [
+        {
+          "glyph": "spiral",
+          "weight": 1
+        }
+      ],
+      "rightParts": [
+        {
+          "glyph": "spiral",
+          "weight": 1
+        }
+      ],
+      "gaze": [
+        0,
+        0
+      ],
+      "motion": {
+        "eyes": "spin"
+      }
+    },
+    "failed": {
+      "left": "cross",
+      "right": "cross",
+      "accent": null,
+      "anchor": null,
+      "leftParts": [
+        {
+          "glyph": "cross",
+          "weight": 1
+        }
+      ],
+      "rightParts": [
+        {
+          "glyph": "cross",
+          "weight": 1
+        }
+      ],
+      "gaze": [
+        0,
+        0
+      ],
+      "motion": {
+        "eyes": "shake"
+      }
+    },
+    "waking": {
+      "left": "ring",
+      "right": "ring",
+      "accent": "bang",
+      "anchor": "top-right",
+      "leftParts": [
+        {
+          "glyph": "ring",
+          "weight": 1.1
+        }
+      ],
+      "rightParts": [
+        {
+          "glyph": "ring",
+          "weight": 1.1
+        }
+      ],
+      "gaze": [
+        0,
+        -0.031
+      ],
+      "motion": {
+        "eyes": "pop",
+        "body": "hop"
+      }
+    },
+    "yawn": {
+      "left": "lid",
+      "right": "lid",
+      "accent": null,
+      "anchor": null,
+      "leftParts": [
+        {
+          "glyph": "lid",
+          "weight": 1
+        }
+      ],
+      "rightParts": [
+        {
+          "glyph": "lid",
+          "weight": 1
+        }
+      ],
+      "gaze": [
+        0,
+        -0.016
+      ],
+      "motion": {
+        "eyes": "slow",
+        "body": "stretch"
+      }
+    },
+    "curious": {
+      "left": "dot",
+      "right": "dot",
+      "accent": null,
+      "anchor": null,
+      "leftParts": [
+        {
+          "glyph": "dot",
+          "weight": 3.2
+        }
+      ],
+      "rightParts": [
+        {
+          "glyph": "dot",
+          "weight": 4.2
+        }
+      ],
+      "gaze": [
+        0.047,
+        -0.031
+      ],
+      "motion": {
+        "eyes": "tilt"
+      }
+    },
+    "proud": {
+      "left": "arc",
+      "right": "arc",
+      "accent": "spark",
+      "anchor": "split",
+      "leftParts": [
+        {
+          "glyph": "arc",
+          "weight": 1
+        },
+        {
+          "glyph": "browUp",
+          "weight": 1
+        }
+      ],
+      "rightParts": [
+        {
+          "glyph": "arc",
+          "weight": 1
+        },
+        {
+          "glyph": "browUp",
+          "weight": 1
+        }
+      ],
+      "gaze": [
+        0,
+        0
+      ],
+      "motion": {}
+    },
+    "laughing": {
+      "left": "gt",
+      "right": "lt",
+      "accent": null,
+      "anchor": null,
+      "leftParts": [
+        {
+          "glyph": "gt",
+          "weight": 1
+        }
+      ],
+      "rightParts": [
+        {
+          "glyph": "lt",
+          "weight": 1
+        }
+      ],
+      "gaze": [
+        0,
+        0
+      ],
+      "motion": {
+        "eyes": "giggle",
+        "body": "giggle"
+      }
+    },
+    "mind-blown": {
+      "left": "ring",
+      "right": "ring",
+      "accent": "burst",
+      "anchor": "top-right",
+      "leftParts": [
+        {
+          "glyph": "ring",
+          "weight": 1.2
+        }
+      ],
+      "rightParts": [
+        {
+          "glyph": "ring",
+          "weight": 1.2
+        }
+      ],
+      "gaze": [
+        0,
+        -0.016
+      ],
+      "motion": {
+        "eyes": "pop",
+        "accent": "burst"
+      }
+    },
+    "celebrate": {
+      "left": "star",
+      "right": "star",
+      "accent": "confetti",
+      "anchor": "split",
+      "leftParts": [
+        {
+          "glyph": "star",
+          "weight": 1
+        }
+      ],
+      "rightParts": [
+        {
+          "glyph": "star",
+          "weight": 1
+        }
+      ],
+      "gaze": [
+        0,
+        0
+      ],
+      "motion": {
+        "eyes": "twinkle",
+        "accent": "float",
+        "body": "hop"
+      }
+    },
+    "nervous": {
+      "left": "dot",
+      "right": "dot",
+      "accent": "sweat",
+      "anchor": "left",
+      "leftParts": [
+        {
+          "glyph": "dot",
+          "weight": 2.3
+        }
+      ],
+      "rightParts": [
+        {
+          "glyph": "dot",
+          "weight": 2.3
+        }
+      ],
+      "gaze": [
+        -0.031,
+        0
+      ],
+      "motion": {
+        "eyes": "shake"
+      }
+    },
+    "bored": {
+      "left": "dash",
+      "right": "dash",
+      "accent": null,
+      "anchor": null,
+      "leftParts": [
+        {
+          "glyph": "dash",
+          "weight": 1
+        }
+      ],
+      "rightParts": [
+        {
+          "glyph": "dash",
+          "weight": 1
+        }
+      ],
+      "gaze": [
+        -0.078,
+        0.016
+      ],
+      "motion": {
+        "eyes": "look"
+      }
+    },
+    "voice": {
+      "left": "dot",
+      "right": "dot",
+      "accent": "wave",
+      "anchor": "top-right",
+      "leftParts": [
+        {
+          "glyph": "dot",
+          "weight": 3.2
+        }
+      ],
+      "rightParts": [
+        {
+          "glyph": "dot",
+          "weight": 3.2
+        }
+      ],
+      "gaze": [
+        0.031,
+        0
+      ],
+      "motion": {
+        "eyes": "lean",
+        "accent": "pulse"
+      }
+    },
+    "calling": {
+      "left": "ring",
+      "right": "ring",
+      "accent": "phone",
+      "anchor": "top-right",
+      "leftParts": [
+        {
+          "glyph": "ring",
+          "weight": 1
+        }
+      ],
+      "rightParts": [
+        {
+          "glyph": "ring",
+          "weight": 1
+        }
+      ],
+      "gaze": [
+        0,
+        0
+      ],
+      "motion": {
+        "eyes": "pulse",
+        "accent": "ring"
+      }
+    },
+    "handing-off": {
+      "left": "dot",
+      "right": "dot",
+      "accent": "arrow",
+      "anchor": "below",
+      "leftParts": [
+        {
+          "glyph": "dot",
+          "weight": 3.2
+        }
+      ],
+      "rightParts": [
+        {
+          "glyph": "dot",
+          "weight": 3.2
+        }
+      ],
+      "gaze": [
+        0.094,
+        0.016
+      ],
+      "motion": {
+        "accent": "slide"
+      }
+    },
+    "waiting-mate": {
+      "left": "dot",
+      "right": "dot",
+      "accent": "dots",
+      "anchor": "top-right",
+      "leftParts": [
+        {
+          "glyph": "dot",
+          "weight": 3.2
+        }
+      ],
+      "rightParts": [
+        {
+          "glyph": "dot",
+          "weight": 3.2
+        }
+      ],
+      "gaze": [
+        0.094,
+        0.031
+      ],
+      "motion": {
+        "body": "tap"
+      }
+    },
+    "ka-ching": {
+      "left": "dollar",
+      "right": "dollar",
+      "accent": "coin",
+      "anchor": "top-right",
+      "leftParts": [
+        {
+          "glyph": "dollar",
+          "weight": 1
+        }
+      ],
+      "rightParts": [
+        {
+          "glyph": "dollar",
+          "weight": 1
+        }
+      ],
+      "gaze": [
+        0,
+        0
+      ],
+      "motion": {
+        "accent": "float",
+        "body": "hop"
+      }
     }
   },
   "paths": {
@@ -86,7 +1175,32 @@
     "heart": "M12 20C12 20 3.5 15 3.5 9.2C3.5 6.4 5.6 4.4 8.1 4.4C9.9 4.4 11.3 5.4 12 6.9C12.7 5.4 14.1 4.4 15.9 4.4C18.4 4.4 20.5 6.4 20.5 9.2C20.5 15 12 20 12 20Z",
     "spark": "M2.9 9.4C2.1 9 2 7.9 2.8 7.3M16.6 20.4C17.4 20.8 17.5 21.9 16.7 22.5",
     "lid": "M5 10C7.2 16.5 16.8 16.5 19 10",
-    "zz": "M3 4.5L9 4.5L3 10.5L9 10.5M13 12.5L19 12.5L13 18.5L19 18.5"
+    "zz": "M3 4.5L9 4.5L3 10.5L9 10.5M13 12.5L19 12.5L13 18.5L19 18.5",
+    "dot": "M12 11.9L12 12.1",
+    "ringS": "M12 7.5C14.5 7.5 16.5 9.5 16.5 12C16.5 14.5 14.5 16.5 12 16.5C9.5 16.5 7.5 14.5 7.5 12C7.5 9.5 9.5 7.5 12 7.5Z",
+    "arc": "M5.5 15C7.5 8.5 16.5 8.5 18.5 15",
+    "spiral": "M12 12C12 10.6 13.9 10.6 13.9 12C13.9 14.3 10.1 14.3 10.1 12C10.1 8.6 15.9 8.6 15.9 12C15.9 16.3 8.1 16.3 8.1 12C8.1 7 17.8 6.8 18.6 11",
+    "dollar": "M16 7.6C15.1 6.2 13.7 5.6 12 5.6C9.8 5.6 8.3 6.7 8.3 8.4C8.3 12.4 16 11 16 15.3C16 17.2 14.3 18.4 12 18.4C10.2 18.4 8.7 17.7 7.8 16.3M12 3.2L12 20.8",
+    "lowLid": "M5 9.5L19 9.5",
+    "browAngryL": "M5 -3L17 1.5",
+    "browAngryR": "M19 -3L7 1.5",
+    "browSadL": "M5 1.5L17 -3",
+    "browSadR": "M19 1.5L7 -3",
+    "browUp": "M6 0C9 -2.8 15 -2.8 18 0",
+    "page": "M7 3.5L14 3.5L18 7.5L18 20.5L7 20.5Z M10 11L15 11M10 15L15 15",
+    "pencil": "M5 19L6.2 14.8L15.8 5.2L18.8 8.2L9.2 17.8Z",
+    "plane": "M3 11.5L21 4L15.5 20L11.5 13.5Z M11.5 13.5L21 4",
+    "check": "M4.5 12.5L9.5 17.5L19.5 6.5",
+    "tear": "M12 5C12 5 8 11 8 14.2C8 16.4 9.8 18.2 12 18.2C14.2 18.2 16 16.4 16 14.2C16 11 12 5 12 5Z",
+    "blush": "M5 15L8 10M10.5 15L13.5 10M16 15L19 10",
+    "coin": "M12 4C16.4 4 20 7.6 20 12C20 16.4 16.4 20 12 20C7.6 20 4 16.4 4 12C4 7.6 7.6 4 12 4Z M12 8L12 16",
+    "bolt": "M13.5 3L6 13.5L11.5 13.5L10.5 21L18 10.5L12.5 10.5Z",
+    "wave": "M5 9C6.5 10.5 6.5 13.5 5 15M9.5 6.5C12.5 9.5 12.5 14.5 9.5 17.5M14 4C18.5 8.5 18.5 15.5 14 20",
+    "phone": "M7 4L10 4L11.5 8L9.5 9.5C10.5 11.8 12.2 13.5 14.5 14.5L16 12.5L20 14L20 17C20 18.7 18.7 20 17 20C10.4 20 4 13.6 4 7C4 5.3 5.3 4 7 4Z",
+    "arrow": "M4 12L19 12M14 7L19 12L14 17",
+    "burst": "M12 2L12 6M12 18L12 22M2 12L6 12M18 12L22 12M5 5L7.8 7.8M16.2 16.2L19 19M19 5L16.2 7.8M7.8 16.2L5 19",
+    "confetti": "M4 6L6 4M18 4L20 6.5M3 16L5.5 15M19 17L21 19M10 3L10.5 5.5M14 20L13 22",
+    "sweat": "M12 5C12 5 9.5 9 9.5 11C9.5 12.4 10.6 13.5 12 13.5C13.4 13.5 14.5 12.4 14.5 11C14.5 9 12 5 12 5Z"
   },
   "layout": {
     "eyeBox": 0.4,
@@ -110,11 +1224,135 @@
         "y": 0,
         "box": 1.5,
         "stroke": 1.4
+      },
+      "cheek": {
+        "x": -0.02,
+        "y": 0.3,
+        "box": 0.42,
+        "stroke": 2.2,
+        "onBodyAlpha": 0.55
+      },
+      "below": {
+        "x": 0.12,
+        "y": 0.66,
+        "box": 0.36,
+        "stroke": 3.2
       }
     },
     "accentMinSize": 24,
     "minStrokePx": 1.5
   },
+  "expressions": {
+    "idle": "idle",
+    "glance": "glance",
+    "listening": "listening",
+    "noticed": "noticed",
+    "drowsy": "drowsy",
+    "asleep": "asleep",
+    "thinking": "thinking",
+    "searching": "searching",
+    "reading": "reading",
+    "writing": "writing",
+    "working": "working",
+    "focused": "focused",
+    "sending": "sending",
+    "waiting": "waiting",
+    "finished": "finished",
+    "nailed-it": "nailed-it",
+    "happy": "happy",
+    "love": "love",
+    "excited": "excited",
+    "surprised": "surprised",
+    "confused": "confused",
+    "skeptical": "skeptical",
+    "determined": "determined",
+    "sad": "sad",
+    "scared": "scared",
+    "shy": "shy",
+    "wink": "wink",
+    "dizzy": "dizzy",
+    "failed": "failed",
+    "waking": "waking",
+    "yawn": "yawn",
+    "curious": "curious",
+    "proud": "proud",
+    "laughing": "laughing",
+    "mind-blown": "mind-blown",
+    "celebrate": "celebrate",
+    "nervous": "nervous",
+    "bored": "bored",
+    "voice": "voice",
+    "calling": "calling",
+    "handing-off": "handing-off",
+    "waiting-mate": "waiting-mate",
+    "ka-ching": "ka-ching",
+    "browsing": "searching",
+    "rest": "idle",
+    "needs-you": "waiting",
+    "done": "finished",
+    "nailed": "nailed-it",
+    "mind blown": "mind-blown",
+    "handoff": "handing-off",
+    "kaching": "ka-ching",
+    "waking-up": "waking",
+    "sleeping": "asleep",
+    "spawning": "noticed",
+    "humming": "idle",
+    "suspicious": "skeptical",
+    "angry": "determined",
+    "playful": "wink",
+    "orbit": "searching",
+    "radar": "searching",
+    "progress": "working",
+    "loading": "working",
+    "dictating": "voice",
+    "receiving": "reading",
+    "uploading": "sending",
+    "notifying": "waiting",
+    "alerting": "waiting",
+    "dragging": "working",
+    "bouncing": "happy",
+    "powering-down": "drowsy",
+    "deadpan": "idle",
+    "friendly": "happy",
+    "sleepy": "drowsy",
+    "worried": "nervous",
+    "mischievous": "wink",
+    "none": "idle",
+    "arrive": "noticed",
+    "switch": "glance",
+    "customize": "happy",
+    "alert": "waiting",
+    "launch": "working",
+    "success": "finished",
+    "blink": "idle",
+    "surprise": "surprised",
+    "failure": "failed",
+    "pending": "waiting",
+    "thanked": "happy",
+    "stopped": "sad",
+    "error": "failed",
+    "dead": "failed",
+    "ringing": "calling",
+    "speaking": "voice"
+  },
+  "liveStates": [
+    "thinking",
+    "searching",
+    "reading",
+    "writing",
+    "working",
+    "focused",
+    "sending",
+    "confused",
+    "skeptical",
+    "determined",
+    "nervous",
+    "voice",
+    "calling",
+    "handing-off",
+    "waiting-mate"
+  ],
   "palette": {
     "green": "#009957",
     "blue": "#377FE6",

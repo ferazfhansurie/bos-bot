@@ -362,4 +362,163 @@ describe("connector MCP bridge", () => {
     expect(received).toBe(false);
   });
 });
+
+// 3.0 cards ride OMB_V3_CARDS. Each case runs the bridge with the flag off and
+// on against the same fixtures, so "off" is pinned to exactly today's output.
+describe("connector MCP bridge: v3 cards", () => {
+  const extra: Server[] = [];
+  afterEach(async () => {
+    await Promise.all(extra.splice(0).map((item) => new Promise<void>((resolve) => item.close(() => resolve()))));
+  });
+  async function serve(handler: RequestListener) {
+    const item = createServer(handler);
+    item.listen(0, "127.0.0.1");
+    await once(item, "listening");
+    extra.push(item);
+    const address = item.address();
+    if (!address || typeof address === "string") throw new Error("test server did not bind");
+    return `http://127.0.0.1:${address.port}`;
+  }
+  const manageSchema = { type: "object", properties: { toolkits: { type: "array" } }, required: ["toolkits"], additionalProperties: false };
+  const upstreamTools = [
+    { name: "COMPOSIO_MANAGE_CONNECTIONS", inputSchema: manageSchema, annotations: { destructiveHint: true } },
+    { name: "COMPOSIO_MULTI_EXECUTE_TOOL", inputSchema: { type: "object" } },
+  ];
+  /** Fake Composio relay: answers tools/list, records tools/call bodies and
+   * replies to them with the given result. */
+  async function fakeUpstream(callResult: unknown = { content: [{ type: "text", text: "ok" }] }) {
+    const calls: any[] = [];
+    const url = await serve((request, response) => {
+      let body = "";
+      request.on("data", (chunk) => { body += chunk; });
+      request.on("end", () => {
+        const parsed = JSON.parse(body);
+        response.writeHead(200, { "content-type": "application/json" });
+        if (parsed.method === "tools/list") return response.end(JSON.stringify({ jsonrpc: "2.0", id: parsed.id, result: { tools: upstreamTools } }));
+        calls.push(parsed);
+        response.end(JSON.stringify({ jsonrpc: "2.0", id: parsed.id, result: callResult }));
+      });
+    });
+    return { url, calls };
+  }
+  async function fakeHarness() {
+    const cards: any[] = [];
+    const url = await serve((request, response) => {
+      let body = "";
+      request.on("data", (chunk) => { body += chunk; });
+      request.on("end", () => {
+        if (request.url === "/api/internal/connectors/request") cards.push(JSON.parse(body));
+        response.writeHead(200, { "content-type": "application/json" });
+        response.end("{}");
+      });
+    });
+    return { url, cards };
+  }
+  async function run(v3: boolean, env: Record<string, string>, messages: Record<string, unknown>[]) {
+    const lines = start({ OMB_CONNECTOR_TOKEN: "bridge-secret", OMB_BOT_ID: "bot-1", OMB_THREAD_ID: "thread-1", ...env, ...(v3 ? { OMB_V3_CARDS: "1" } : {}) });
+    const replies: Record<string, any>[] = [];
+    for (const message of messages) {
+      child!.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", ...message })}\n`);
+      replies.push(await nextJson(lines));
+    }
+    child!.kill("SIGKILL");
+    child = null;
+    return replies;
+  }
+
+  it("tools/list: off is byte-for-byte today's list, on adds a reason to MANAGE_CONNECTIONS only", async () => {
+    const upstream = await fakeUpstream();
+    const harness = await fakeHarness();
+    const env = { OMB_CONNECTOR_UPSTREAM_URL: upstream.url, OMB_HARNESS_URL: harness.url, OMB_WHATSAPP_NATIVE: "1" };
+    const [off] = await run(false, env, [{ id: 1, method: "tools/list" }]);
+    const [on] = await run(true, env, [{ id: 1, method: "tools/list" }]);
+    const names = (reply: any) => reply.result.tools.map((tool: any) => tool.name);
+    expect(names(off)).toEqual(["COMPOSIO_MANAGE_CONNECTIONS", "COMPOSIO_MULTI_EXECUTE_TOOL", "BOS_WHATSAPP_LIST_CHATS", "BOS_WHATSAPP_LIST_MESSAGES", "BOS_WHATSAPP_GET_ACCOUNT", "BOS_WHATSAPP_SYNC_HISTORY"]);
+    expect(off.result.tools[0].inputSchema).toEqual(manageSchema);
+    expect(names(on)).toEqual(names(off));
+    expect(on.result.tools[0].inputSchema.properties.reason).toMatchObject({ type: "string" });
+    expect(on.result.tools[0].inputSchema.required).toEqual(["toolkits"]);
+    // everything except that one property is identical
+    const stripped = structuredClone(on);
+    delete stripped.result.tools[0].inputSchema.properties.reason;
+    expect(stripped).toEqual(off);
+  });
+
+  it("tools/list with only native WhatsApp: off has no connect tool, on lists a local one", async () => {
+    const env = { OMB_WHATSAPP_NATIVE: "1" };
+    const [off] = await run(false, env, [{ id: 1, method: "tools/list" }]);
+    const [on] = await run(true, env, [{ id: 1, method: "tools/list" }]);
+    expect(off.result.tools.map((tool: any) => tool.name)).not.toContain("COMPOSIO_MANAGE_CONNECTIONS");
+    expect(on.result.tools.map((tool: any) => tool.name)).toEqual(["COMPOSIO_MANAGE_CONNECTIONS", ...off.result.tools.map((tool: any) => tool.name)]);
+    expect(on.result.tools[0].annotations).toMatchObject({ readOnlyHint: true, destructiveHint: false });
+  });
+
+  it("whatsapp: off is still filtered to the Plugins answer, on becomes a chat card", async () => {
+    const call = { id: 2, method: "tools/call", params: { name: "COMPOSIO_MANAGE_CONNECTIONS", arguments: { toolkits: ["WHATSAPP"], reason: "so i can catch you up on chats" } } };
+    const offHarness = await fakeHarness();
+    const [off] = await run(false, { OMB_HARNESS_URL: offHarness.url, OMB_WHATSAPP_NATIVE: "1" }, [call]);
+    expect(off.result.content[0].text).toMatch(/Plugins/);
+    expect(offHarness.cards).toEqual([]);
+
+    const onHarness = await fakeHarness();
+    const [on] = await run(true, { OMB_HARNESS_URL: onHarness.url, OMB_WHATSAPP_NATIVE: "1" }, [call]);
+    expect(on.result.content[0].text).toMatch(/secure connection card for whatsapp/i);
+    expect(onHarness.cards).toHaveLength(1);
+    expect(onHarness.cards[0]).toMatchObject({ botId: "bot-1", threadId: "thread-1", items: [{ slug: "whatsapp", reason: "so i can catch you up on chats" }] });
+  });
+
+  it("reason: carried per toolkit in v3, never sent with the flag off", async () => {
+    const call = { id: 3, method: "tools/call", params: { name: "COMPOSIO_MANAGE_CONNECTIONS", arguments: {
+      reason: "  so i can draft\n those 4 replies ",
+      toolkits: [{ name: "gmail", action: "add" }, { name: "slack", action: "add", reason: "to read #sales" }],
+    } } };
+    const offHarness = await fakeHarness();
+    await run(false, { OMB_HARNESS_URL: offHarness.url }, [call]);
+    expect(offHarness.cards[0].items).toEqual([{ slug: "gmail" }, { slug: "slack" }]);
+    const onHarness = await fakeHarness();
+    await run(true, { OMB_HARNESS_URL: onHarness.url }, [call]);
+    expect(onHarness.cards[0].items).toEqual([{ slug: "gmail", reason: "so i can draft those 4 replies" }, { slug: "slack", reason: "to read #sales" }]);
+  });
+
+  it("reason is stripped before a non-add MANAGE_CONNECTIONS call reaches Composio", async () => {
+    const upstream = await fakeUpstream();
+    const harness = await fakeHarness();
+    await run(true, { OMB_CONNECTOR_UPSTREAM_URL: upstream.url, OMB_HARNESS_URL: harness.url }, [
+      { id: 4, method: "tools/call", params: { name: "COMPOSIO_MANAGE_CONNECTIONS", arguments: { toolkits: [{ name: "gmail", action: "list" }], reason: "x" } } },
+    ]);
+    expect(upstream.calls[0].params.arguments).toEqual({ toolkits: [{ name: "gmail", action: "list" }] });
+  });
+
+  const expired = { content: [{ type: "text", text: JSON.stringify({ successful: true, data: { results: [
+    { tool_slug: "GMAIL_FETCH_EMAILS", index: 0, response: { successful: false, data: {}, error: "('invalid_grant: Token has been expired or revoked.', {'error': 'invalid_grant'})" } },
+  ] }, error: null }) }] };
+  const execute = (id: number) => ({ id, method: "tools/call", params: { name: "COMPOSIO_MULTI_EXECUTE_TOOL", arguments: { tools: [{ tool_slug: "GMAIL_FETCH_EMAILS", arguments: {} }] } } });
+
+  it("reconnect: an expired sign-in raises one card per app in v3, nothing with the flag off", async () => {
+    const offUpstream = await fakeUpstream(expired);
+    const offHarness = await fakeHarness();
+    const [off] = await run(false, { OMB_CONNECTOR_UPSTREAM_URL: offUpstream.url, OMB_HARNESS_URL: offHarness.url }, [execute(5)]);
+    expect(off.result).toEqual(expired);
+    expect(offHarness.cards).toEqual([]);
+
+    const upstream = await fakeUpstream(expired);
+    const harness = await fakeHarness();
+    const [first, second] = await run(true, { OMB_CONNECTOR_UPSTREAM_URL: upstream.url, OMB_HARNESS_URL: harness.url }, [execute(5), execute(6)]);
+    expect(harness.cards).toHaveLength(1);
+    expect(harness.cards[0]).toMatchObject({ botId: "bot-1", threadId: "thread-1", items: [{ slug: "gmail", reconnect: true }] });
+    expect(harness.cards[0].resumeKey).toMatch(/^[\w-]{8,100}$/);
+    expect(first.result.content[0]).toEqual(expired.content[0]);
+    expect(first.result.content.at(-1).text).toMatch(/gmail sign-in expired/);
+    expect(second.result.content.at(-1).text).toMatch(/gmail sign-in expired/);
+  });
+
+  it("reconnect: an ordinary tool error is relayed untouched in v3", async () => {
+    const failed = { content: [{ type: "text", text: JSON.stringify({ successful: false, data: {}, error: "429 Client Error: Too Many Requests" }) }], isError: true };
+    const upstream = await fakeUpstream(failed);
+    const harness = await fakeHarness();
+    const [reply] = await run(true, { OMB_CONNECTOR_UPSTREAM_URL: upstream.url, OMB_HARNESS_URL: harness.url }, [execute(7)]);
+    expect(reply.result).toEqual(failed);
+    expect(harness.cards).toEqual([]);
+  });
+});
 // branding compatibility (electron/branding-compat.json): environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

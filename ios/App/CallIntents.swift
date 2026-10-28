@@ -10,6 +10,7 @@ import AppIntents
 import Combine
 import CompanionCore
 import Foundation
+import Intents
 import SwiftUI
 
 @MainActor
@@ -59,7 +60,20 @@ final class CallIntentRouter {
             pending = (botId, name)
             return
         }
+        // Mint while the bot is found and the screen comes up; the dial
+        // picks the prewarm up (v3 computers only).
+        session.prewarmDefaultVoiceCall(botId: botId, name: name)
         Task { await session.callFromShortcut(botId: botId, name: name) }
+    }
+
+    /// The bot an INStartCallIntent names: Recents carries the CallKit
+    /// handle (the bot's name), Siri the spoken contact.
+    static func callTarget(_ activity: NSUserActivity) -> String? {
+        guard let intent = activity.interaction?.intent as? INStartCallIntent,
+              let contact = intent.contacts?.first else { return nil }
+        let name = contact.personHandle?.value ?? contact.displayName
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
     }
 
     /// `bosbot://call?bot=<name or id>` and `bosbot://thread?bot=…&thread=…`.
@@ -76,6 +90,13 @@ final class CallIntentRouter {
             return true
         case "call":
             guard let bot = value("bot"), !bot.isEmpty else { return true }
+            // "Call me" on a done live card: the same call-back a done push
+            // makes, opening with the result
+            if let session, let result = value("result"),
+               let target = NotificationTarget(botId: bot, threadId: value("thread")) {
+                Task { await session.handleVoice(.callBack(target, result: result)) }
+                return true
+            }
             call(botId: bot, name: bot)
             return true
         case "thread":

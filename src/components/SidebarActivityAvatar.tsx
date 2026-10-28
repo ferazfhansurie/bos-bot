@@ -4,13 +4,14 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { Bot } from "@/state/store";
 import {
-  activityFeed, botActivityState, gestureForActivity, isActiveActivity, useActivityFeed,
+  activityFeed, botActivityState, isActiveActivity, useActivityFeed,
   type ActivityFeed, type ActivityState,
 } from "@/lib/activity-feed";
+import { derivePresence, gestureForPresence } from "../../shared/mascot-presence";
 import { GESTURE_TIMING, type MascotGesture } from "../../shared/mascot-choreography";
 import { ActivityMascot } from "./ActivityMascot";
 
-export function useBotActivity(bot: Pick<Bot, "id" | "threadId" | "activity" | "busy" | "tasks">, feed: ActivityFeed = activityFeed): { state: ActivityState; gesture: MascotGesture } {
+export function useBotActivity(bot: Pick<Bot, "id" | "threadId" | "activity" | "busy" | "tasks">, feed: ActivityFeed = activityFeed): { state: ActivityState; gesture: MascotGesture; finishing: boolean } {
   useActivityFeed(feed);
   const tasks = bot.tasks ?? [{ threadId: bot.threadId, activity: bot.activity, busy: bot.busy }];
   const state = botActivityState(feed.forBot(bot.id), tasks);
@@ -26,7 +27,7 @@ export function useBotActivity(bot: Pick<Bot, "id" | "threadId" | "activity" | "
     const timer = setTimeout(() => setFinishing(false), GESTURE_TIMING.finished[0]);
     return () => clearTimeout(timer);
   }, [active, state]);
-  return { state, gesture: active ? gestureForActivity(state) : finishing ? "finished" : "idle" };
+  return { state, finishing, gesture: gestureForPresence(derivePresence({ surface: "sidebar", feed: state, finishing })) };
 }
 
 export function SidebarActivityAvatar({ bot, gesture, size, children }: {

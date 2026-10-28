@@ -10,6 +10,7 @@
 // nothing in particular is startling on a row you pass over constantly.
 import { useEffect, useId, useRef, useState } from "react";
 import { cn } from "@/lib/cn";
+import { Glass } from "./Glass";
 
 export interface SidebarMenuItem {
   key: string;
@@ -150,7 +151,7 @@ export function SidebarPopoverMenu({
       </button>
 
       {open && (
-        <div
+        <Glass
           id={menuId}
           role="menu"
           aria-label={ariaLabel}
@@ -197,7 +198,7 @@ export function SidebarPopoverMenu({
               </button>
             </div>
           ))}
-        </div>
+        </Glass>
       )}
     </div>
   );

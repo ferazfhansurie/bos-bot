@@ -235,6 +235,7 @@ export function QuestionCard({
               <button
                 type="button"
                 onClick={submit}
+                data-v3-nod="question"
                 disabled={!complete}
                 aria-label={questions.length > 1 ? t("question.submitAll") : t("question.submit")}
                 title={questions.length > 1 ? t("question.submitAll") : t("question.submit")}

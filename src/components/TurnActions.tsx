@@ -1,3 +1,4 @@
+import { resolveMausColor } from "../../shared/glyph-faces";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { Check, Copy, Share, ThumbsDown, ThumbsUp } from "lucide-react";
@@ -184,7 +185,14 @@ export function TurnActionRow({
 /** Firaz's one change to chatgpt: who is talking, beside the first line of
  * each bot reply — avatar plus name, slack-style, in 1:1s and rooms. */
 /** A person in a shared chat gets their face, not a mascot. */
-export function SpeakerHeader({ bot, name, person }: { bot: Pick<Bot, "name" | "color"> & Partial<Bot>; name: string; person?: { avatar?: string | null } }) {
+export function SpeakerHeader({ bot, name, person, faceless }: { bot: Pick<Bot, "name" | "color"> & Partial<Bot>; name: string; person?: { avatar?: string | null }; faceless?: boolean }) {
+  if (faceless && !person) {
+    return (
+      <div data-testid="speaker-header" className="flex min-w-0 items-center">
+        <span className="truncate text-[14px] leading-5 font-semibold" style={{ color: resolveMausColor(bot.color) }}>{name}</span>
+      </div>
+    );
+  }
   return (
     <div data-testid="speaker-header" className="flex min-w-0 items-center gap-2">
       {person ? <GroupMark members={[{ id: name, name, kind: "person", avatar: person.avatar }]} size={22} /> : <BotAvatar bot={bot} size={22} animated={false} />}

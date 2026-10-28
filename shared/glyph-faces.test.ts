@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 import { CURSOR_STATES } from "../src/components/CursorAvatar";
 import { MAUS_MOTIONS } from "../src/lib/mascot";
 import {
-  GLYPH_FACES, GLYPH_FACE_STATES, GLYPH_IDS, GLYPH_LAYOUT, GLYPH_PATHS, GLYPH_STROKE, GLYPH_TILT_DEG,
+  GLYPH_BROWS, GLYPH_FACES, GLYPH_FACE_STATES, GLYPH_IDS, GLYPH_LAYOUT, GLYPH_PATHS, GLYPH_STROKE, GLYPH_TILT_DEG,
   MAUS_COLORS, MAUS_COLOR_NAMES, glyphFacesDocument, glyphFacesJson, glyphInk, glyphStateFor, normalizeMausColor, resolveMausColor,
 } from "./glyph-faces";
 import { MASCOT_EYE_IDS, MASCOT_EYE_STYLES, botMascotEyes, mascotEyesSchema } from "./mascot-eyes";
@@ -61,25 +61,39 @@ describe("glyph faces json", () => {
 });
 
 describe("glyph face table", () => {
-  it("matches the plan's state table", () => {
-    expect(GLYPH_FACES).toEqual({
-      idle: { left: "dash", right: "dash", accent: null, anchor: null },
-      thinking: { left: "caret", right: "caret", accent: "query", anchor: "left" },
-      searching: { left: "ring", right: "ring", accent: "dots", anchor: "top-right" },
-      working: { left: "plus", right: "plus", accent: "code", anchor: "top-right" },
-      waiting: { left: "ring", right: "ring", accent: "bang", anchor: "left" },
-      finished: { left: "gt", right: "lt", accent: "spark", anchor: "split" },
-      happy: { left: "star", right: "star", accent: "heart", anchor: "top-right" },
-      failed: { left: "cross", right: "cross", accent: null, anchor: null },
-      asleep: { left: "lid", right: "lid", accent: "zz", anchor: "top-right" },
-    });
+  it("matches the B sharp-dots sheet", () => {
+    const dot = { glyph: "dot", weight: 3.2 };
+    expect(GLYPH_FACES.idle).toMatchObject({ left: "dot", right: "dot", leftParts: [dot], rightParts: [dot], accent: null, anchor: null, gaze: [0, 0] });
+    expect(GLYPH_FACES.thinking).toMatchObject({ left: "dot", right: "dot", accent: "query", anchor: "left" });
+    expect(GLYPH_FACES.thinking.gaze[1]).toBeLessThan(0);
+    expect(GLYPH_FACES.searching).toMatchObject({ accent: "dots", anchor: "top-right" });
+    expect(GLYPH_FACES.working).toMatchObject({ left: "plus", right: "plus", accent: "code", anchor: "top-right" });
+    expect(GLYPH_FACES.waiting).toMatchObject({ left: "ring", right: "ring", accent: "bang", anchor: "left" });
+    expect(GLYPH_FACES.finished).toMatchObject({ left: "gt", right: "lt", accent: "spark", anchor: "split" });
+    expect(GLYPH_FACES.shy).toMatchObject({ accent: "blush", anchor: "cheek" });
+    expect(GLYPH_FACES["ka-ching"]).toMatchObject({ left: "dollar", right: "dollar", accent: "coin" });
+    // the old "- -" rest and "^ ^" thinking eyes are gone from every face
+    for (const state of GLYPH_FACE_STATES) for (const part of [...GLYPH_FACES[state].leftParts, ...GLYPH_FACES[state].rightParts]) {
+      expect(part.glyph, state).not.toBe("caret");
+    }
+    expect(GLYPH_FACE_STATES).toHaveLength(43);
     expect(Object.keys(GLYPH_FACES).sort()).toEqual([...GLYPH_FACE_STATES].sort());
+  });
+
+  it("left/right name the first eye part, so older readers still draw a shape", () => {
+    for (const state of GLYPH_FACE_STATES) {
+      const face = GLYPH_FACES[state];
+      expect(face.leftParts[0].glyph, state).toBe(face.left);
+      expect(face.rightParts[0].glyph, state).toBe(face.right);
+      for (const part of [...face.leftParts, ...face.rightParts]) expect(part.weight, state).toBeGreaterThan(0);
+    }
   });
 
   it("every state's glyphs exist and accents come with an anchor", () => {
     for (const state of GLYPH_FACE_STATES) {
       const face = GLYPH_FACES[state];
-      for (const id of [face.left, face.right, face.accent]) if (id !== null) expect(GLYPH_PATHS[id], `${state}: ${id}`).toBeTypeOf("string");
+      const ids = [...face.leftParts, ...face.rightParts].map((part) => part.glyph);
+      for (const id of [...ids, face.accent]) if (id !== null) expect(GLYPH_PATHS[id], `${state}: ${id}`).toBeTypeOf("string");
       expect(face.accent === null, state).toBe(face.anchor === null);
       if (face.anchor) expect(GLYPH_LAYOUT.accent[face.anchor], state).toBeDefined();
     }
@@ -93,18 +107,21 @@ describe("glyph face table", () => {
       for (const [x, y] of points) {
         expect(x, `${id} x`).toBeGreaterThanOrEqual(0);
         expect(x, `${id} x`).toBeLessThanOrEqual(24);
-        expect(y, `${id} y`).toBeGreaterThanOrEqual(0);
+        // brows sit above the eye, up to 4 units over the box
+        expect(y, `${id} y`).toBeGreaterThanOrEqual((GLYPH_BROWS as readonly string[]).includes(id) ? -4 : 0);
         expect(y, `${id} y`).toBeLessThanOrEqual(24);
       }
     }
   });
 
-  it("eye glyphs keep their GLYPH_STROKE inside the box", () => {
-    const eyes = new Set(GLYPH_FACE_STATES.flatMap((state) => [GLYPH_FACES[state].left, GLYPH_FACES[state].right]));
-    const half = GLYPH_STROKE / 2;
-    for (const id of eyes) for (const [x, y] of parsePath(GLYPH_PATHS[id]).points) {
-      expect(Math.min(x, y), id).toBeGreaterThanOrEqual(half);
-      expect(Math.max(x, y), id).toBeLessThanOrEqual(24 - half);
+  it("eye parts keep their stroke inside the box (brows may rise above it)", () => {
+    for (const state of GLYPH_FACE_STATES) for (const part of [...GLYPH_FACES[state].leftParts, ...GLYPH_FACES[state].rightParts]) {
+      const half = (GLYPH_STROKE * part.weight) / 2;
+      const brow = (GLYPH_BROWS as readonly string[]).includes(part.glyph);
+      for (const [x, y] of parsePath(GLYPH_PATHS[part.glyph]).points) {
+        const edge = brow ? Math.min(x, 24 - x) : Math.min(x, y, 24 - x, 24 - y);
+        expect(edge + 0.001, `${state}: ${part.glyph}`).toBeGreaterThanOrEqual(half);
+      }
     }
   });
 });
@@ -131,12 +148,20 @@ describe("glyphStateFor", () => {
     expect(glyphStateFor("working")).toBe("working");
     expect(glyphStateFor("waiting")).toBe("waiting");
     expect(glyphStateFor("finished")).toBe("finished");
-    expect(glyphStateFor("celebrate")).toBe("finished");
+    expect(glyphStateFor("celebrate")).toBe("celebrate");
+    expect(glyphStateFor("done")).toBe("finished");
+    expect(glyphStateFor("rest")).toBe("idle");
+    expect(glyphStateFor("needs-you")).toBe("waiting");
+    expect(glyphStateFor("browsing")).toBe("searching");
+    expect(glyphStateFor("reading")).toBe("reading");
+    expect(glyphStateFor("writing")).toBe("writing");
+    expect(glyphStateFor("sleepy")).toBe("drowsy");
+    expect(glyphStateFor("worried")).toBe("nervous");
     expect(glyphStateFor("success")).toBe("finished");
     expect(glyphStateFor("happy")).toBe("happy");
     expect(glyphStateFor("friendly")).toBe("happy");
     expect(glyphStateFor("failure")).toBe("failed");
-    expect(glyphStateFor("focused")).toBe("working");
+    expect(glyphStateFor("focused")).toBe("focused");
     expect(glyphStateFor("deadpan")).toBe("idle");
   });
 

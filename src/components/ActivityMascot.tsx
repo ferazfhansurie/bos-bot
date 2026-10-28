@@ -7,12 +7,13 @@ import { BotAvatar, resolveBotAvatarOutcome, type BotAvatarProps } from "./Avata
 import { glyphFaceParts } from "@/lib/glyph-face";
 import { botAvatarProfile } from "../../shared/bot-avatar";
 import { flatMascotBody } from "../../shared/flat-mascot-bodies";
-import { glyphStateFor, resolveMausColor } from "../../shared/glyph-faces";
+import { resolveMausColor, type GlyphFaceState } from "../../shared/glyph-faces";
 import { botMascotEyes } from "../../shared/mascot-eyes";
-import type { MascotGesture } from "../../shared/mascot-choreography";
+import { MascotAccessories } from "./MascotAccessories";
+import { GESTURE_FACE_STATE, type MascotGesture } from "../../shared/mascot-choreography";
 
 const FACES: Record<MascotGesture, CursorState> = {
-  idle: "idle", thinking: "thinking", searching: "searching", working: "working", waiting: "curious", finished: "happy",
+  idle: "idle", thinking: "thinking", searching: "searching", reading: "searching", browsing: "searching", writing: "working", working: "working", waiting: "curious", finished: "happy",
 };
 
 function useReducedMotion(): boolean {
@@ -27,10 +28,16 @@ function useReducedMotion(): boolean {
   return reduced;
 }
 
-export function ActivityMascot({ bot, gesture, size = 36 }: {
+export function ActivityMascot({ bot, gesture, size = 36, gaze, face, blinkSlow }: {
   bot: BotAvatarProps["bot"];
   gesture: MascotGesture;
   size?: number;
+  /** 3.0: a stable object the caller mutates (x, y in -1..1); read every frame */
+  gaze?: { x?: number; y?: number };
+  /** 3.0: a glyph face that overrides the gesture's own (a reaction) */
+  face?: GlyphFaceState;
+  /** 3.0: the person is typing; blink half as often */
+  blinkSlow?: boolean;
 }) {
   const host = useRef<HTMLSpanElement>(null);
   const [visible, setVisible] = useState(true);
@@ -75,7 +82,7 @@ export function ActivityMascot({ bot, gesture, size = 36 }: {
   // same anchor the ring eyes use, nudged to the body's middle
   const glyphFace = botMascotEyes(bot.mascotEyes) === "glyph"
     ? glyphFaceParts({
-      state: glyphStateFor(gesture),
+      state: face ?? GESTURE_FACE_STATE[gesture],
       color,
       centre: [50 + body.faceX * .5, 50 + body.faceY],
       diameter: 80,
@@ -97,10 +104,13 @@ export function ActivityMascot({ bot, gesture, size = 36 }: {
         motion={0}
         lookAround={0}
         autoBlink={running}
+        blinkSlow={blinkSlow}
         autoExpression={false}
         paused={!running}
         choreography={choreography}
         glyphFace={glyphFace}
+        overlay={bot.mascotAccessories ? <MascotAccessories accessories={bot.mascotAccessories} bodyId={bot.mascotBody} color={color} centre={[50 + body.faceX * .5, 50 + body.faceY]} /> : undefined}
+        gaze={gaze}
       />
     </span>
   );

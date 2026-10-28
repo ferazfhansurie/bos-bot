@@ -1,6 +1,6 @@
 // The phone webview's renderer: one ```chart, ```stats or ```openui block,
 // drawn with the same components the desktop chat uses. Native calls
-// window.bosSmartUI.render({ lang, code, streaming, theme, states }) and
+// window.bosSmartUI.render({ lang, code, streaming, theme, states, cards, v3 }) and
 // listens on the "bosSmartUI" bridge (webkit message handler on ios,
 // BosSmartUI.post on android) for ready, height, state, assistant, openUrl
 // and failed. No network: the page's CSP allows inline code and data: only.
@@ -19,6 +19,13 @@ export interface EmbedPayload {
   theme?: SmartUiTheme;
   /** The message's uiState: saved values for each of its blocks, by key. */
   states?: Record<string, Record<string, unknown>>;
+  /** bos bot 3.0 cards (Person, Approval, …). The webview can't see the
+   * desktop flag and the bot only writes cards while it is on, so they draw
+   * unless native sends false. */
+  cards?: boolean;
+  /** bos bot 3.0 is on: the card polish scoped to :root[data-v3] applies,
+   * so blocks look like the desktop's. */
+  v3?: boolean;
 }
 
 type Outbound =
@@ -48,7 +55,7 @@ function Preparing() {
 }
 
 function Block({ payload }: { payload: EmbedPayload }) {
-  const { code, streaming = false, theme = "light", states } = payload;
+  const { code, streaming = false, theme = "light", states, cards = true } = payload;
   const lang = payload.lang.toLowerCase();
   if (lang === "chart" || lang === "stats") {
     const chart = lang === "chart" ? parseChartSpec(code) : null;
@@ -69,6 +76,7 @@ function Block({ payload }: { payload: EmbedPayload }) {
       onOpenUrl={(url) => post({ type: "openUrl", url })}
       fallback={null}
       onFail={() => post({ type: "failed" })}
+      cards={cards}
     />
   );
 }
@@ -79,7 +87,10 @@ function App() {
   useLayoutEffect(() => {
     (window as unknown as { bosSmartUI: { render(p: EmbedPayload): void } }).bosSmartUI = {
       render(next) {
-        document.documentElement.dataset.theme = next.theme === "dark" ? "dark" : "light";
+        const root = document.documentElement;
+        root.dataset.theme = next.theme === "dark" ? "dark" : "light";
+        if (next.v3) root.dataset.v3 = "";
+        else delete root.dataset.v3;
         setPayload(next);
       },
     };

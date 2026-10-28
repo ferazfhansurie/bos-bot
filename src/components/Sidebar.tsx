@@ -1,6 +1,18 @@
 import { startResizeDrag } from "@/lib/resize-drag";
 import { Skeleton } from "./Skeleton";
+import { Glass } from "./Glass";
 import { CompactBotThreads } from "./CompactBotThreads";
+import { useV3, v3Enabled } from "@/lib/v3";
+import { showUndo } from "@/lib/v3-undo";
+import { useNeedsYou, withLinkedWaiting } from "@/lib/v3-needs-you";
+import { V3FixIt } from "./V3FixIt";
+import { botStalled } from "@/lib/v3-fix-it";
+import { jobRefreshKey } from "@/lib/job-inbox";
+import { faceHere, travelName, useStage } from "@/lib/v3-stage";
+import { EmptySeat } from "./v3/Alive";
+import { LOOK_UP } from "@/lib/alive-eyes";
+import { setHomeOpen, useHomeOpen } from "@/lib/v3-home";
+import { resolveMausColor } from "../../shared/glyph-faces";
 import { useRailThreads } from "./RailThreads";
 import { botAvatarProfile } from "../../shared/bot-avatar";
 import { track } from "@/lib/analytics";
@@ -11,6 +23,8 @@ import { createPortal } from "react-dom";
 import {
   Archive,
   BellDot,
+  BellOff,
+  Bell,
   Bot as BotIcon,
   CalendarDays,
   Check,
@@ -35,6 +49,7 @@ import {
   Users,
   X,
 } from "lucide-react";
+import { requestNotificationPermission } from "@/lib/notify";
 import { api, useStore, visibleMessages, currentTaskBot, type AppState, type Bot, type Group } from "@/state/store";
 import { peerLine } from "@/lib/peer-message";
 
@@ -45,6 +60,7 @@ import { SPLIT_DRAG_TYPE, threadPaneId } from "@/lib/split-view";
 import { useSplitView } from "./SplitViewContext";
 import { lastNonReceipt } from "@/lib/receipts";
 import { t } from "@/lib/i18n";
+import { TodayRow } from "./TodayRing";
 import type { LocaleKey } from "@/locales";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { WorkingDots } from "./WorkingIndicator";
@@ -115,6 +131,7 @@ import { SidebarUpdateButton, useSidebarUpdate } from "./SidebarUpdate";
 import { SidebarSectionHeader } from "./SidebarSectionHeader";
 import { useShowThreads } from "@/lib/thread-preferences";
 import { SidebarActivityAvatar, useBotActivity } from "./SidebarActivityAvatar";
+import { derivePresence, gestureForPresence } from "../../shared/mascot-presence";
 import { useActivityFeed, withLiveActivity } from "@/lib/activity-feed";
 import { roomSenderName, useMultiplayerMe } from "@/lib/room-sender";
 import { SidebarActiveThreads, crossBotAttentionThreads, sidebarBotActivityTasks } from "./SidebarBotActivity";
@@ -369,7 +386,7 @@ function RoomContextMenu({
   const top = Math.min(menu.y, window.innerHeight - 204);
   const left = Math.min(menu.x, window.innerWidth - 240);
   return createPortal(
-    <div
+    <div data-popover
       data-room-menu
       data-sidebar
       style={{ top, left }}
@@ -705,7 +722,7 @@ function SectionPicker({
   const left = Math.min(anchor.x, window.innerWidth - 260);
 
   return (
-    <div
+    <div data-popover
       data-section-picker
       style={{ top, left }}
       className="fixed z-40 w-[236px] overflow-hidden rounded-xl border border-hairline/50 bg-menu py-2 shadow-2xl shadow-black/60"
@@ -875,6 +892,29 @@ export function BotContextMenu({
     </button>
   );
   const divider = (key: string) => <div key={key} className="mx-2 my-1 border-t border-hairline/40" />;
+  // The owner's per-bot mute. Same switch as Voice & alerts → Notifications:
+  // a muted bot still alerts for approvals and questions (server/notify.ts).
+  const muted = bot.notifications === false;
+  const setNotifications = (notifications: boolean) => {
+    if (remoteClient) {
+      void api(`/api/bots/${bot.id}/profile`, { method: "PATCH", body: JSON.stringify({ notifications }) })
+        .then(({ bot: updated }) => dispatch({ type: "botPatched", bot: updated }))
+        .catch((cause) => dispatch({ type: "error", message: cause instanceof Error ? cause.message : String(cause) }));
+    } else {
+      if (notifications) void requestNotificationPermission();
+      dispatch({ type: "updateBot", botId: bot.id, patch: { notifications } });
+    }
+  };
+  const muteItem = item(
+    muted ? <Bell size={16} className="text-ink-secondary" /> : <BellOff size={16} className="text-ink-secondary" />,
+    muted ? t("sidebar.bot.unmute") : t("sidebar.bot.mute"),
+    () => {
+      setNotifications(muted);
+      // 3.0: the menu closes, so say what changed and offer it back
+      if (v3Enabled()) showUndo(t(muted ? "v3.undo.unmuted" : "v3.undo.muted", { name: bot.name }), { undo: () => setNotifications(!muted) });
+    },
+    { hint: muted ? undefined : t("sidebar.bot.muteHint") },
+  );
 
   return createPortal(
     <div
@@ -925,6 +965,7 @@ export function BotContextMenu({
           onClose();
           onMoveToSection(bot.id);
         }),
+        muteItem,
         item(<Pencil size={16} className="text-ink-secondary" />, t("rename.aria"), () => requestBotRename(bot.id)),
         item(<Settings2 size={16} className="text-ink-secondary" />, t("sidebar.bot.editProfile"), () => {
           dispatch({ type: "select", id: bot.id });
@@ -955,6 +996,7 @@ export function BotContextMenu({
         item(<BellDot size={16} className="text-ink-secondary" />, t("sidebar.bot.markUnread"), () =>
           dispatch({ type: "markUnread", botId: bot.id }),
         ),
+        muteItem,
         item(<CircleCheck size={16} className="text-ink-secondary" />, t("task.done"), () =>
           dispatch({ type: "updateTask", botId: bot.id, threadId: bot.threadId, patch: { archivedAt: Date.now() } }),
           { disabled: Boolean(bot.busy) || bot.activity === "working" },
@@ -1259,7 +1301,23 @@ export function BotListItem({
   const mascotMotion = selected && state.mascotMotion?.botId === bot.id ? state.mascotMotion : null;
   const live = useBotActivity(bot);
   const iconOnly = density === "icons";
-  const expanded = showThreads && !iconOnly && selected;
+  const v3 = useV3();
+  // 3.0: while the bot is out working (island, a tab, pointing) its row
+  // keeps an empty seat; back home it wears a done dot until you look
+  const stage = useStage(bot.id);
+  // one face on screen: out working, standing above an empty thread, or
+  // walking home above the page, the row holds an empty seat
+  const outWorking = v3 && !faceHere(stage, "sidebar");
+  const doneDot = v3 && stage.done && !outWorking;
+  // 3.0: hovering the seat makes the bot look up at you
+  const [lookUp, setLookUp] = useState(false);
+  // 3.0: with today open no row is the one you're looking at
+  const homeIsOpen = useHomeOpen();
+  const lookSelected = selected && !(v3 && homeIsOpen);
+  // 3.0: any bot's threads fold open under its row, not only the selected one's
+  const [folded, setFolded] = useState(false);
+  const foldable = v3 && showThreads && !iconOnly && !selected && (bot.tasks ?? []).some((task) => !task.routineRunId && !task.archivedAt);
+  const expanded = showThreads && !iconOnly && (selected || (foldable && folded));
   // icons density: the bot's threads slide out beside its avatar instead
   const rail = useRailThreads(bot, showThreads && iconOnly && !deleting && !renaming);
   useEffect(() => {
@@ -1280,36 +1338,66 @@ export function BotListItem({
     // Chief of Staff is called out by the crown label below, not by tinting
     // the whole row — an accent border + fill read as "selected" even when
     // another bot was active.
-    selected ? "bg-raised/70" : "hover:bg-raised/40",
+    lookSelected ? (v3 ? "" : "bg-raised/70") : "hover:bg-raised/40",
   );
+  // 3.0: the selected row takes the bot's own colour
+  const rowStyle = v3 && lookSelected ? { backgroundColor: `color-mix(in srgb, ${resolveMausColor(bot.color)} 16%, transparent)` } : undefined;
   const activityTasks = sidebarBotActivityTasks(bot, state.pendingQueued);
   const waiting = live.state === "waiting" || bot.activity === "waiting-on-you" || activityTasks.some((task) => task.activity === "waiting-on-you");
-  const working = !waiting && (live.gesture !== "idle" && live.gesture !== "finished" || Boolean(bot.busy) || activityTasks.some((task) => task.busy || task.activity === "working"));
+  // 3.0: a bot whose run could not start never reads as busy
+  const stalled = v3 && !waiting && botStalled(bot);
+  const working = !waiting && !stalled && (live.gesture !== "idle" && live.gesture !== "finished" || Boolean(bot.busy) || activityTasks.some((task) => task.busy || task.activity === "working"));
   const failed = live.state === "failed";
+  // one presence for the row: the live gesture while anything moves, else
+  // the resting face (asleep when the bot's home is offline)
+  const presence = derivePresence({
+    surface: "sidebar",
+    feed: live.state,
+    finishing: live.finishing,
+    offline: bot.homeLink?.online === false,
+    resting: glyphFaceForBot({ ...bot, messages: visible }),
+  });
   const queued = activityTasks.some((task) => task.queued);
   const unread = bot.unread || activityTasks.some((task) => task.unread);
   const body = (
     <>
       {/* flex, not inline: an inline wrapper adds a baseline gap under the
           avatar and makes the row taller than before the presence dot */}
-      <span className="relative flex shrink-0">
-        <SidebarActivityAvatar bot={bot} gesture={live.gesture} size={avatarSize}>
+      <span className="relative flex shrink-0" style={v3 ? travelName(stage, "sidebar") : undefined} data-v3-seat={v3 ? bot.id : undefined}
+        onPointerEnter={v3 ? () => setLookUp(true) : undefined} onPointerLeave={v3 ? () => setLookUp(false) : undefined}>
+        {outWorking ? (
+          <span
+            data-testid="v3-out-working"
+            title={t("v3.sidebar.outWorking", { name: bot.name })}
+            aria-label={t("v3.sidebar.outWorking", { name: bot.name })}
+            className="flex items-center justify-center"
+            style={{ width: avatarSize, height: avatarSize }}
+          >
+            <EmptySeat bot={bot} size={32} />
+          </span>
+        ) : (
+        <SidebarActivityAvatar bot={bot} gesture={gestureForPresence(presence)} size={avatarSize}>
         <span className={cn("flex", working && "bot-morph")}>
         <BotAvatar
           bot={bot}
           state={stateForBot({ ...bot, messages: visible })}
-          face={bot.homeLink?.online === false ? "asleep" : failed ? "failed" : glyphFaceForBot({ ...bot, messages: visible })}
+          face={presence.state}
           size={avatarSize}
+          gaze={lookUp && !outWorking ? LOOK_UP : undefined}
+          autoBlink={v3}
           motion={mascotMotion?.kind ?? "none"}
           motionKey={mascotMotion?.nonce ?? 0}
           // Motion means something is happening. A resting bot holds a resting
           // pose — N idle rows bobbing at display rate was most of the app's
           // visible-idle CPU (states are keyword-derived, so "working" can be
           // decorative; busy/unread/motion are the real signals).
-          animated={Boolean(bot.busy) || Boolean(bot.unread) || (mascotMotion?.kind ?? "none") !== "none"}
+          animated={Boolean(bot.busy) || Boolean(bot.unread) || (mascotMotion?.kind ?? "none") !== "none" || lookUp}
         />
         </span>
         </SidebarActivityAvatar>
+        )}
+        {doneDot && !working && !waiting && <span data-testid="v3-done-dot" role="status" aria-label={t("v3.island.done")} title={t("v3.island.done")}
+          className={cn("absolute -right-0.5 -bottom-0.5 rounded-full border-2 border-panel bg-accent", iconOnly ? "size-3" : "size-2.5")} />}
         {working && (
           // presence dot: green while the bot is working, ringed in the row's
           // ground so it reads on both a photo and the mascot. Also the only
@@ -1324,9 +1412,11 @@ export function BotListItem({
         )}
         {waiting && <span data-testid="waiting-dot" role="status" aria-label={t("sidebar.preview.waiting")} title={t("sidebar.preview.waiting")}
           className={cn("absolute -right-0.5 -bottom-0.5 rounded-full border-2 border-panel bg-warning", iconOnly ? "size-3" : "size-2.5")} />}
-        {!waiting && !working && queued && <span data-testid="queued-dot" role="status" aria-label={t("task.queued")} title={t("task.queued")}
+        {!waiting && !working && !stalled && queued && <span data-testid="queued-dot" role="status" aria-label={t("task.queued")} title={t("task.queued")}
           className={cn("absolute -right-0.5 -bottom-0.5 rounded-full border-2 border-panel bg-ink-secondary", iconOnly ? "size-3" : "size-2.5")} />}
-        {!waiting && !working && !queued && failed && <span data-testid="failed-dot" role="status" aria-label={t("inspector.run.failed")} title={t("inspector.run.failed")}
+        {stalled && <span data-testid="stalled-dot" role="status" aria-label={t("v3.sidebar.stalled")} title={t("v3.sidebar.stalled")}
+          className={cn("absolute -right-0.5 -bottom-0.5 flex items-center justify-center rounded-full border-2 border-panel bg-danger text-[8px] font-bold leading-none text-white", iconOnly ? "size-3.5" : "size-3")}>!</span>}
+        {!waiting && !working && !queued && !stalled && failed && <span data-testid="failed-dot" role="status" aria-label={t("inspector.run.failed")} title={t("inspector.run.failed")}
           className={cn("absolute -right-0.5 -bottom-0.5 rounded-full border-2 border-panel bg-danger", iconOnly ? "size-3" : "size-2.5")} />}
       </span>
       <div className={cn("min-w-0 flex-1", iconOnly && "hidden")}>
@@ -1357,6 +1447,15 @@ export function BotListItem({
               className="truncate"
               inputClassName="w-full rounded bg-inset px-1 py-0.5 text-[14px] font-semibold"
             />}
+            {foldable && !renaming && <button type="button" aria-expanded={folded}
+              aria-label={t(folded ? "v3.sidebar.hideThreads" : "v3.sidebar.showThreads", { name: bot.name })}
+              onClick={(event) => { event.stopPropagation(); setFolded((open) => !open); }}
+              onKeyDown={(event) => event.stopPropagation()}
+              className={cn("flex size-5 shrink-0 items-center justify-center rounded text-ink-secondary outline-none hover:bg-raised hover:text-ink focus-visible:opacity-100 focus-visible:ring-1 focus-visible:ring-hairline",
+                !folded && "opacity-0 group-hover:opacity-100")}>
+              <ChevronRight size={12} className={cn("transition-transform motion-reduce:transition-none", folded && "rotate-90")} />
+            </button>}
+            {bot.notifications === false && !bot.remote && !renaming && <BellOff size={12} className="shrink-0 text-ink-secondary" role="img" aria-label={t("sidebar.bot.muted")} />}
           </span>
           {expanded && unread && <span className="size-1.5 shrink-0 rounded-full bg-accent" aria-label={t("task.unreadMany")} />}
         </div>
@@ -1383,7 +1482,7 @@ export function BotListItem({
                   <span className="sr-only">{t("sidebar.preview.working")}</span>
                 </span>
               ) : (
-                <span className="truncate">{waiting ? t("sidebar.preview.waiting") : queued ? t("task.queued") : preview(bot)}</span>
+                <span className={cn("truncate", stalled && "text-danger")}>{waiting ? t("sidebar.preview.waiting") : stalled ? t("v3.sidebar.stalled") : queued ? t("task.queued") : preview(bot)}</span>
               )}
             </span>
           )}
@@ -1420,7 +1519,7 @@ export function BotListItem({
           !renaming && iconOnly
             ? deleting
               ? t("sidebar.bot.deletingAria", { name: bot.name })
-              : `${bot.name}${waiting ? ` · ${t("sidebar.preview.waiting")}` : working ? ` · ${t("chat.activity.working")}` : queued ? ` · ${t("task.queued")}` : ""}${unread ? ` · ${t("task.unread")}` : ""}`
+              : `${bot.name}${waiting ? ` · ${t("sidebar.preview.waiting")}` : stalled ? ` · ${t("v3.sidebar.stalled")}` : working ? ` · ${t("chat.activity.working")}` : queued ? ` · ${t("task.queued")}` : ""}${unread ? ` · ${t("task.unread")}` : ""}`
             : undefined
         }
         aria-busy={deleting || undefined}
@@ -1440,6 +1539,7 @@ export function BotListItem({
         }}
         onContextMenu={onContextMenu}
         className={rowClass}
+        style={rowStyle}
       >
         {body}
       </div>
@@ -1461,7 +1561,7 @@ export function BotListItem({
     {/* Keep folder expansion state mounted while the preference is off. The
         hidden list omits its children, including any thread-menu portals. */}
     {rail.flyout}
-    {expanded && <CompactBotThreads key={bot.id} bot={bot} />}
+    {expanded && <CompactBotThreads key={bot.id} bot={bot} active={lookSelected} />}
     {showThreads && creatingProject && <BotProjectDialog bot={bot} onClose={() => setCreatingProject(false)} />}
     </>
   );
@@ -1684,6 +1784,8 @@ function ArchivedBotsPanel({
 
 export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void }) {
   const { state, dispatch } = useStore();
+  const v3 = useV3();
+  const homeIsOpen = useHomeOpen();
   const showThreads = useShowThreads();
   const remoteClient = window.ogb?.remoteClient?.active === true;
   const pendingUpdate = useSidebarUpdate();
@@ -1721,6 +1823,14 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
   const [query, setQuery] = useState("");
   const [searchOpen, setSearchOpen] = useState(false);
   const [statusFilter, setStatusFilter] = useState<"all" | "unread" | "waiting" | "running">("all");
+  // 3.0: "needs you" is only what is the person's to do (approvals,
+  // questions, connect cards, stuck jobs), never a bot that is just working
+  const localNeedsYou = useNeedsYou(v3, v3 ? jobRefreshKey(state) : "", (threadId) =>
+    state.groups.find((group) => group.threadId === threadId || group.tasks?.some((task) => task.threadId === threadId))?.id);
+  const needsYou = v3 ? withLinkedWaiting(localNeedsYou, state.bots) : localNeedsYou;
+  const needsYouCleared = v3 && needsYou.loaded && needsYou.count === 0 && statusFilter === "waiting";
+  // everything handled: the filter steps aside rather than showing an empty list
+  useEffect(() => { if (needsYouCleared) setStatusFilter("all"); }, [needsYouCleared]);
   const [savedDensity, setDensityState] = useState<SidebarDensity>(() => loadSidebarDensity());
   const [sidebarWidth, setSidebarWidth] = useState(() => loadSidebarWidth());
   const [windowWidth, setWindowWidth] = useState(() => (typeof window === "undefined" ? 1440 : window.innerWidth));
@@ -1899,7 +2009,10 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
   // Archive and delete share one pending confirmation at a time.
   const requestArchive = (bot: Bot) => {
     const current = currentArchivableBot(state.bots, bot.id);
-    if (current) setConfirm({ kind: "archive", bot: current });
+    if (!current) return;
+    // 3.0: archive is undoable (the snackbar below), so it needs no confirm
+    if (v3Enabled()) void archiveBot(current);
+    else setConfirm({ kind: "archive", bot: current });
   };
 
   const archiveBot = async ({ id }: Pick<Bot, "id">) => {
@@ -1969,7 +2082,8 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
   const waitingThreadIds = new Set([...state.bots, ...state.groups].flatMap(owner => (owner.tasks ?? []).filter(task => task.state === "waiting-on-you").map(task => task.threadId)));
   const matchingBots = dedupeHomeBots(state.bots)
     .filter((b) => !b.hidden)
-    .filter((b) => matchesStatus(b.unread, b.tasks?.some(task => task.state === "running") ?? (Boolean(b.busy) && !waitingThreadIds.has(b.threadId)), b.tasks?.some(task => waitingThreadIds.has(task.threadId)) ?? waitingThreadIds.has(b.threadId)))
+    .filter((b) => matchesStatus(b.unread, b.tasks?.some(task => task.state === "running") ?? (Boolean(b.busy) && !waitingThreadIds.has(b.threadId)),
+      v3 ? needsYou.botIds.has(b.id) : b.tasks?.some(task => waitingThreadIds.has(task.threadId)) ?? waitingThreadIds.has(b.threadId)))
     .filter(
       (b) =>
         !q ||
@@ -1979,7 +2093,7 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
         b.tasks?.some((task) => !task.routineRunId && task.title.toLowerCase().includes(q)) ||
         b.projects?.some((folder) => folder.name.toLowerCase().includes(q)),
     );
-  const visibleGroups = state.groups.filter((g) => matchesStatus(g.unread, g.tasks?.some(task => task.state === "running") ?? (Boolean(g.busyBotId || g.activeBotIds?.length) && !waitingThreadIds.has(g.threadId)), waitingThreadIds.has(g.threadId))).filter((g) => !q || g.name.toLowerCase().includes(q) || g.tasks?.some((task) => task.title.toLowerCase().includes(q)));
+  const visibleGroups = state.groups.filter((g) => matchesStatus(g.unread, g.tasks?.some(task => task.state === "running") ?? (Boolean(g.busyBotId || g.activeBotIds?.length) && !waitingThreadIds.has(g.threadId)), v3 ? needsYou.groupIds.has(g.id) : waitingThreadIds.has(g.threadId))).filter((g) => !q || g.name.toLowerCase().includes(q) || g.tasks?.some((task) => task.title.toLowerCase().includes(q)));
   const {
     unsectionedChief,
     pinnedBots,
@@ -2109,14 +2223,23 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
   const pendingBotUndo = teamFeedback?.restoreBot;
 
   return (
-    <aside
+    // Glass, but docked and solid: a backdrop-filter here would make the
+    // sidebar the containing block for its fixed overlays (see the translate
+    // note below), and nothing scrolls behind it to bend anyway.
+    <Glass
+      as="aside"
+      fallback="solid"
+      refraction={0}
+      floating={false}
       ref={sidebarRef}
       tabIndex={-1}
       aria-label={t("sidebar.aria")}
       data-native-view-overlay
       data-sidebar
       className={cn(
-        "relative flex h-full shrink-0 flex-col border-r border-hairline/40 bg-panel",
+        "relative flex h-full shrink-0 flex-col bg-panel",
+        // 3.0: a panel inset from the window edge, not a column flush with it
+        v3 ? "max-md:border-r max-md:border-hairline/40 md:my-2 md:ml-2 md:h-[calc(100%-1rem)] md:rounded-[20px] md:border md:border-hairline/40" : "border-r border-hairline/40",
         snapAnimating && "transition-[width] duration-200 ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none",
         // Below md only: the sidebar leaves the flow and slides in over the chat.
         // Scoped with max-md: rather than cancelled with md: on purpose — Tailwind
@@ -2184,7 +2307,7 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
           {plusOpen && (
             <>
               <div className="fixed inset-0 z-30" onMouseDown={() => setPlusOpen(false)} />
-              <div className={cn(
+              <div data-popover className={cn(
                 "absolute top-full z-40 mt-1 w-52 overflow-hidden rounded-xl border border-hairline/50 bg-menu py-1.5 shadow-2xl shadow-black/60",
                 density === "icons" ? "left-0" : "right-0",
               )}>
@@ -2274,13 +2397,40 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
       )}
 
       {/* Bot list */}
-      <div className="flex-1 overflow-y-auto px-2">
+      <div className="flex-1 overflow-y-auto px-2" onClickCapture={v3 && homeIsOpen ? (event) => {
+        // re-picking the bot that's already selected doesn't navigate, so
+        // the home board would stay up; any row click leaves it
+        const target = event.target instanceof Element ? event.target : null;
+        if (!target || target.closest("[aria-expanded],[aria-haspopup],[data-v3-head],input")) return;
+        if (target.closest('button,[role="button"]')) setHomeOpen(false);
+      } : undefined}>
+        {v3 && !q && state.rosterLoaded && (density === "icons" ? (
+          <div className="mt-1.5"><TodayRow compact selected={homeIsOpen} onOpen={() => setHomeOpen(true)} /></div>
+        ) : (
+          <div className="pt-1">
+            <TodayRow compact={false} selected={homeIsOpen} onOpen={() => setHomeOpen(true)} />
+            {(needsYou.count > 0 || statusFilter === "waiting") && (
+              <div data-v3-head className="flex items-center gap-1.5 px-1 pb-1">
+                <button type="button" data-testid="sidebar-needs-you" aria-pressed={statusFilter === "waiting"} onClick={() => {
+                  if (statusFilter !== "waiting") track("card_clicked", { card: "needs_you", count: needsYou.count });
+                  setStatusFilter((filter) => filter === "waiting" ? "all" : "waiting");
+                }}
+                  className={cn("flex h-8 items-center gap-1.5 rounded-full px-3 text-[13px] font-medium outline-none focus-visible:ring-1 focus-visible:ring-hairline",
+                    statusFilter === "waiting" ? "bg-warning/20 text-ink" : "text-ink-secondary hover:bg-raised/40 hover:text-ink")}>
+                  <span className="size-1.5 rounded-full bg-warning" aria-hidden="true" />
+                  {t("v3.sidebar.needsYou", { count: needsYou.count })}
+                </button>
+              </div>
+            )}
+          </div>
+        ))}
+        {v3 && !q && state.rosterLoaded && density !== "icons" && <V3FixIt reconnects={needsYou.reconnects} onOpen={() => setHomeOpen(false)} />}
         {!state.rosterLoaded && <div role="status" aria-label="Loading chats" className="space-y-3 px-2 py-4">{[0,1,2,3,4].map(i => <Skeleton key={i} className="h-10 w-full rounded-xl" />)}</div>}
         <div className="flex flex-col gap-0.5">
           {matchingBots.length === 0 && visibleGroups.length === 0 && q && q.length < MIN_QUERY && (
             <div className="px-3 py-6 text-center text-[13px] text-ink-secondary">{t("sidebar.noMatch", { query })}</div>
           )}
-          {!q && <SharedContactsSidebar compact={density === "icons"} placement="unified" localRows={recentLocalRows} density={density} />}
+          {!q && <SharedContactsSidebar compact={density === "icons"} placement="unified" localRows={recentLocalRows} density={density} roomsBelow={v3} />}
           {q && unsectionedChief && (
             <div className="mb-1.5">
               <BotListItem
@@ -2572,7 +2722,7 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
           </div>,
           document.body,
         )}
-    </aside>
+    </Glass>
   );
 }
 // branding compatibility (electron/branding-compat.json): peer-http: HTTP authentication headers, discovery and domain verification still interoperate with 1.9.1

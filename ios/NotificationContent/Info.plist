@@ -30,6 +30,7 @@
 				<string>OPENMAUS_UPDATE</string>
 				<string>OPENMAUS_APPROVAL</string>
 				<string>VOICE_WORK_DONE</string>
+				<string>BOS_ANSWER_PERMISSION</string>
 			</array>
 			<key>UNNotificationExtensionInitialContentSizeRatio</key>
 			<real>0.35999999999999999</real>

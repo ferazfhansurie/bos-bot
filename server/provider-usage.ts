@@ -17,6 +17,10 @@ export type ProviderUsage = {
   fiveHour?: Window;
   sevenDay: Window;
   status: "available" | "unavailable";
+  /** When these numbers were read from the provider, ms since epoch. */
+  checkedAt?: number;
+  /** The latest read failed or was skipped; these are the last good numbers. */
+  stale?: boolean;
 };
 const percentage = (value: unknown): number | null => {
   if (typeof value !== "number" || !Number.isFinite(value)) return null;
@@ -92,35 +96,88 @@ export async function readClaudeUsageToken(dir: string, selectedDirectory: strin
   return valid[0]?.accessToken ?? valid[0]?.access_token ?? null;
 }
 
-async function requestJson(url: string, headers: Record<string, string>): Promise<any> {
+type Fetched = { data: any; retryAfterMs: number | null };
+async function requestJson(url: string, headers: Record<string, string>): Promise<Fetched> {
   try {
     const response = await fetch(url, { headers, signal: AbortSignal.timeout(5000) });
-    return response.ok ? await response.json() : null;
-  } catch { return null; }
+    if (response.ok) return { data: await response.json(), retryAfterMs: null };
+    const seconds = Number(response.headers.get("retry-after"));
+    return { data: null, retryAfterMs: response.status === 429 ? (Number.isFinite(seconds) && seconds > 0 ? seconds * 1000 : 5 * 60_000) : null };
+  } catch { return { data: null, retryAfterMs: null }; }
 }
 
-let cache: { at: number; key: string; rows: ProviderUsage[] } | null = null;
+// Anthropic rate-limits /api/oauth/usage per token and locks it out for up to
+// an hour when polled too often, and the numbers move slowly. So each account
+// is read at most every FRESH_MS, a 429 is honoured, a failure waits
+// FAILURE_MS, and the last good reading keeps showing (marked stale) instead
+// of "Unavailable". Bot turns ask for usage constantly, so they all share this.
+export const FRESH_MS = 5 * 60_000;
+const FAILURE_MS = 2 * 60_000;
+const MAX_BACKOFF_MS = 60 * 60_000;
+type Slot = { good: ProviderUsage | null; last: ProviderUsage | null; nextAt: number; inflight: Promise<ProviderUsage> | null };
+const slots = new Map<string, Slot>();
+
+/** A stale window whose reset has passed has started over; don't keep its old percentage. */
+function ageWindow(window: Window | undefined, now: number): Window | undefined {
+  if (!window || window.resetsAt === null || window.resetsAt * 1000 > now) return window;
+  return { usedPercent: window.usedPercent === null ? null : 0, resetsAt: null };
+}
+function stale(good: ProviderUsage, now: number): ProviderUsage {
+  return { ...good, stale: true, fiveHour: ageWindow(good.fiveHour, now), sevenDay: ageWindow(good.sevenDay, now)! };
+}
+
+export type UsageReader = () => Promise<{ row: ProviderUsage; retryAfterMs: number | null }>;
+export async function cachedUsage(key: string, read: UsageReader, now: () => number = Date.now): Promise<ProviderUsage> {
+  const slot = slots.get(key) ?? { good: null, last: null, nextAt: 0, inflight: null };
+  slots.set(key, slot);
+  if (slot.inflight) return slot.inflight;
+  if (now() < slot.nextAt && slot.good) return slot.good.stale ? stale(slot.good, now()) : slot.good;
+  if (now() < slot.nextAt && slot.last) return slot.last;
+  slot.inflight = (async () => {
+    try {
+      const result = await read().catch(() => null);
+      if (result?.row.status === "available") {
+        slot.good = slot.last = { ...result.row, checkedAt: now(), stale: false };
+        slot.nextAt = now() + FRESH_MS;
+        return slot.good;
+      }
+      slot.nextAt = now() + Math.min(MAX_BACKOFF_MS, result?.retryAfterMs ?? FAILURE_MS);
+      if (slot.good) {
+        slot.good = { ...slot.good, stale: true };
+        return stale(slot.good, now());
+      }
+      if (!result) throw new Error("usage read failed");
+      slot.last = result.row;
+      return result.row;
+    } finally { slot.inflight = null; }
+  })();
+  return slot.inflight;
+}
+/** Test hook. */
+export function resetUsageCache(): void { slots.clear(); }
+
 export async function providerUsage(instances: InstanceConfigMap): Promise<ProviderUsage[]> {
   const accounts = Object.entries(instances).filter(([, entry]) => entry.driver === "claudeAgent" || entry.driver === "codex");
-  const key = accounts.map(([id, entry]) => `${id}:${entry.driver}:${entry.driver === "claudeAgent" ? accountDirectory(entry) : ""}`).join("|");
-  if (cache && cache.key === key && Date.now() - cache.at < 30_000) return cache.rows;
-  const rows = await Promise.all(accounts.map(async ([id, entry]): Promise<ProviderUsage> => {
+  return Promise.all(accounts.map(([id, entry]): Promise<ProviderUsage> => {
     if (entry.driver === "claudeAgent") {
-      const token = await readClaudeUsageToken(accountDirectory(entry), configuredAccountDirectory(entry));
-      const data = token ? await requestJson("https://api.anthropic.com/api/oauth/usage", {
-        Authorization: `Bearer ${token}`, "anthropic-beta": "oauth-2025-04-20", "User-Agent": "claude-code/2.0.32",
-      }) : null;
-      return { ...mapClaudeUsage(entry.displayName ?? id, data), instanceId: id };
+      const dir = accountDirectory(entry);
+      return cachedUsage(`claude:${id}:${dir}`, async () => {
+        const token = await readClaudeUsageToken(dir, configuredAccountDirectory(entry));
+        const fetched = token ? await requestJson("https://api.anthropic.com/api/oauth/usage", {
+          Authorization: `Bearer ${token}`, "anthropic-beta": "oauth-2025-04-20", "User-Agent": "claude-code/2.0.32",
+        }) : { data: null, retryAfterMs: null };
+        return { row: { ...mapClaudeUsage(entry.displayName ?? id, fetched.data), instanceId: id }, retryAfterMs: fetched.retryAfterMs };
+      });
     }
     const codexHome = entry.environment?.CODEX_HOME ?? process.env.CODEX_HOME ?? join(homedir(), ".codex");
-    const auth = await readJson(join(codexHome, "auth.json"));
-    const token = auth?.tokens?.access_token;
-    const account = auth?.tokens?.account_id;
-    const data = token && account ? await requestJson("https://chatgpt.com/backend-api/wham/usage", {
-      Authorization: `Bearer ${token}`, "ChatGPT-Account-ID": account,
-    }) : null;
-    return { ...mapCodexUsage(entry.displayName ?? id, data), instanceId: id };
+    return cachedUsage(`codex:${id}:${codexHome}`, async () => {
+      const auth = await readJson(join(codexHome, "auth.json"));
+      const token = auth?.tokens?.access_token;
+      const account = auth?.tokens?.account_id;
+      const fetched = token && account ? await requestJson("https://chatgpt.com/backend-api/wham/usage", {
+        Authorization: `Bearer ${token}`, "ChatGPT-Account-ID": account,
+      }) : { data: null, retryAfterMs: null };
+      return { row: { ...mapCodexUsage(entry.displayName ?? id, fetched.data), instanceId: id }, retryAfterMs: fetched.retryAfterMs };
+    });
   }));
-  cache = { at: Date.now(), key, rows };
-  return rows;
 }

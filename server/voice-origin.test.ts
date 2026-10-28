@@ -103,4 +103,12 @@ describe("the voice done push", () => {
     expect(ownerPushTarget(done)).toEqual({ kind: "done", botId: "bot-1", threadId: "thread-1", senderId: "bot:bot-1", senderName: "bos finished", messageId: "m" });
     expect(ownerPushTarget({ kind: "digest", botId: "", botName: "", threadId: "", title: "Today", body: "x" })).toEqual({ kind: "digest" });
   });
+
+  it("marks a tool approval answerable only when asked to (bos bot 3.0)", () => {
+    const ask = buildNotification("approval", quiet, "thread-1", "Bash: git push", { requestId: "r1", messageId: "m" })!;
+    expect(ownerPushTarget(ask)).not.toHaveProperty("answer");
+    expect(ownerPushTarget(ask, { answerable: true })).toMatchObject({ answer: "permission", requestId: "r1" });
+    const question = buildNotification("question", quiet, "thread-1", "which file?", { requestId: "r2" })!;
+    expect(ownerPushTarget(question, { answerable: true })).not.toHaveProperty("answer");
+  });
 });

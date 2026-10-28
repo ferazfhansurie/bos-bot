@@ -17,6 +17,12 @@ export interface NotchBot {
   state: ActivityState;
   /** when the bot entered this state, epoch ms */
   since: number;
+  /** when the whole job began: the clock the notch and menu bar show */
+  jobSince?: number;
+  /** what it is doing right now, in plain words */
+  step?: string;
+  /** "3/5" while working from a plan */
+  plan?: { index: number; count: number };
 }
 
 export interface NotchAsk {
@@ -60,6 +66,22 @@ export interface NotchSnapshot {
   bots: Record<string, Pick<NotchBot, "id" | "name" | "color" | "body">>;
   asks: NotchAsk[];
   moments: NotchMoment[];
+  /** the menu bar clock; null when nobody is working */
+  clock?: NotchClock | null;
+}
+
+export interface NotchClock {
+  botId: string;
+  threadId: string;
+  name: string;
+  /** "#RRGGBB" */
+  color: string;
+  needsYou: boolean;
+  /** when the job began, epoch ms */
+  start: number;
+  plan?: { index: number; count: number };
+  /** other bots working too */
+  more: number;
 }
 
 export type NotchAnswer = { behavior: "allow" | "deny" } | { option: string } | { text: string };

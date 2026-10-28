@@ -128,7 +128,7 @@ export function RemoteAgentSettingsPanel({ bot }: { bot: Bot }) {
               <div>
                 <div className="text-[15px] font-medium text-ink">Notifications</div>
                 <div className="mt-0.5 text-[12px] leading-relaxed text-ink-secondary">
-                  Enable completion and attention notifications for this agent on the host and paired clients.
+                  Banners and phone pushes for this agent on the host and paired clients. Off mutes it; approvals and questions still come through.
                 </div>
               </div>
             </div>

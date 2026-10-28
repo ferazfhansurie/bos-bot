@@ -111,3 +111,51 @@ describe("app store", () => {
     expect(JSON.parse(readFileSync(join(root("bot-1"), `${app.id}.json`), "utf8")).data.c.r0.n).toBe(-1);
   });
 });
+
+describe("installed mini apps", () => {
+  const manifest = { id: "crm", name: "CRM", version: "1.0.0", icon: "users", permissions: [], collections: { contacts: "name, stage" } };
+
+  it("installs a page beside its data, private to the bot folder", () => {
+    const { store, dir, root } = fixture();
+    const app = store.install("bot-1", { manifest, html: "<h1>crm</h1>", source: "https://bosbot.my/a/crm/bos-app.json" }, "owner");
+    expect(app).toMatchObject({ name: "CRM", icon: "users", threadId: "", path: "installed:crm", schema: "contacts: name, stage", installed: { manifestId: "crm", version: "1.0.0", source: "https://bosbot.my/a/crm/bos-app.json", permissions: [] } });
+    const page = join(dir, "bot-1", "apps", `${app.id}.app.html`);
+    expect(readFileSync(page, "utf8")).toBe("<h1>crm</h1>");
+    expect(statSync(page).mode & 0o777).toBe(0o600);
+    // the page file never shows up as an app of its own
+    const reloaded = new AppStore({ root, botIds: () => ["bot-1"] });
+    expect(reloaded.list("bot-1").map(a => a.id)).toEqual([app.id]);
+    expect(reloaded.installedPage(app.id)?.html).toBe("<h1>crm</h1>");
+  });
+
+  it("updates in place and keeps the data", () => {
+    const { store, tick } = fixture();
+    const app = store.install("bot-1", { manifest, html: "v1", source: "s" }, "owner");
+    store.write(app.id, [{ op: "put", collection: "contacts", id: "c1", record: { name: "Ali" } }], "bot:cash");
+    tick(10);
+    const next = store.install("bot-1", { manifest: { ...manifest, version: "1.1.0" }, html: "v2", source: "s" }, "owner");
+    expect(next.id).toBe(app.id);
+    expect(next.installed).toMatchObject({ version: "1.1.0" });
+    expect(store.installedPage(app.id)?.html).toBe("v2");
+    expect(store.record(app.id, "contacts", "c1")).toMatchObject({ name: "Ali" });
+    // another bot gets its own copy
+    expect(store.install("bot-2", { manifest, html: "v1", source: "s" }, "owner").id).not.toBe(app.id);
+    expect(store.installedFor("bot-1", "crm", "s")?.id).toBe(app.id);
+    expect(store.installedFor("bot-1", "notes", "s")).toBeNull();
+  });
+
+  it("refuses a copy, removes the page on delete, and has no page for a written app", () => {
+    const { store, dir } = fixture();
+    const app = store.install("bot-1", { manifest, html: "x", source: "s" }, "owner");
+    expect(() => store.duplicate(app.id, { path: "b.html", name: "copy" }, "owner")).toThrow(/can't be copied/);
+    store.destroy(app.id, "owner");
+    expect(() => statSync(join(dir, "bot-1", "apps", `${app.id}.app.html`))).toThrow();
+    const written = store.ensure("bot-1", { threadId: "t1", path: "a.html", name: "x" }, "owner");
+    expect(store.installedPage(written.id)).toBeNull();
+  });
+
+  it("refuses an oversized page", () => {
+    const { store } = fixture();
+    expect(() => store.install("bot-1", { manifest, html: "x".repeat(2 * 1024 * 1024 + 1), source: "s" }, "owner")).toThrow(/over 2 MB/);
+  });
+});

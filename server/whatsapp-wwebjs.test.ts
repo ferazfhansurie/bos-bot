@@ -85,7 +85,7 @@ vi.mock("whatsapp-web.js", () => ({
   } },
 }));
 
-const { createReadOnlyClient, SYNCED_RESUME_CHECK_MS } = await import("./whatsapp-wwebjs.ts");
+const { createReadOnlyClient, EXPOSE_SETTLE_MS, guardExposeFunction, SYNCED_RESUME_CHECK_MS } = await import("./whatsapp-wwebjs.ts");
 
 function handlers() {
   return {
@@ -219,5 +219,54 @@ describe("createReadOnlyClient resume", () => {
     await started;
     expect(instances[0].pupPage.evaluate).not.toHaveBeenCalled();
     expect(h.onReady).not.toHaveBeenCalled();
+  });
+});
+
+// WhatsApp Web's cross-origin pdf-viewer iframe swaps process while puppeteer
+// installs a binding in it; that frame never answers and exposeFunction never
+// settles, so whatsapp-web.js stalls in attachEventListeners short of `ready`.
+describe("guardExposeFunction", () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  function page(mainFrameHasIt: boolean) {
+    return {
+      exposeFunction: vi.fn((_name: string, _fn: unknown) => new Promise<void>(() => {})),
+      evaluate: vi.fn(async (_fn: unknown) => mainFrameHasIt),
+    };
+  }
+
+  it("carries on once the main frame has the function, even if a frame never answers", async () => {
+    const p = page(true);
+    guardExposeFunction(p);
+    let done = false;
+    void p.exposeFunction("onMessageAckEvent", () => {}).then(() => { done = true; });
+    await vi.advanceTimersByTimeAsync(EXPOSE_SETTLE_MS - 1);
+    expect(done).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(done).toBe(true);
+    expect(String(p.evaluate.mock.calls[0][0])).toContain("puppeteer_onMessageAckEvent");
+  });
+
+  it("keeps waiting while the main frame does not have it yet", async () => {
+    const p = page(false);
+    guardExposeFunction(p);
+    let done = false;
+    void p.exposeFunction("onMessageAckEvent", () => {}).then(() => { done = true; });
+    await vi.advanceTimersByTimeAsync(3 * EXPOSE_SETTLE_MS);
+    expect(done).toBe(false);
+  });
+
+  it("passes a normal expose and its errors straight through, once per page", async () => {
+    const ok = { exposeFunction: vi.fn(async (_name: string, _fn: unknown) => {}), evaluate: vi.fn() };
+    guardExposeFunction(ok);
+    const wrapped = ok.exposeFunction;
+    guardExposeFunction(ok);
+    expect(ok.exposeFunction).toBe(wrapped);
+    await expect(ok.exposeFunction("a", () => {})).resolves.toBeUndefined();
+    const bad = { exposeFunction: vi.fn(async (_name: string, _fn: unknown): Promise<void> => { throw new Error("Target closed"); }), evaluate: vi.fn() };
+    guardExposeFunction(bad);
+    await expect(bad.exposeFunction("a", () => {})).rejects.toThrow("Target closed");
+    expect(ok.evaluate).not.toHaveBeenCalled();
   });
 });

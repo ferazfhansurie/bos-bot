@@ -2,7 +2,7 @@
  * into it. The browser draws this on a blank page; a computer without the
  * browser gets it as its own "newtab" kind. */
 import { Fragment, useState } from "react";
-import { Folders, GitCompare, Globe, LayoutTemplate, MessageCirclePlus, MoreHorizontal, PinOff, Plus, SquareDashed, SquareTerminal } from "lucide-react";
+import { Folders, GitCompare, Globe, LayoutTemplate, MessageCirclePlus, MoreHorizontal, Pencil, PinOff, Plus, SquareDashed, SquareTerminal, Trash2 } from "lucide-react";
 
 import { Menu, anchorOf, type MenuAnchor } from "@/components/workbench/Menu";
 import type { TabIcon } from "@/components/workbench/registry";
@@ -34,7 +34,13 @@ export interface NewTabPins {
 }
 
 /** Apps (pages with their own data) the new tab lists under Blank tab. */
-export interface NewTabApps { apps: { id: string; name: string; icon?: string }[]; open: (id: string) => void }
+export interface NewTabApps {
+  apps: { id: string; name: string; icon?: string }[];
+  open: (id: string) => void;
+  rename?: (id: string, name: string) => Promise<void>;
+  /** Deletes the app and its records; the page file stays in Files. */
+  remove?: (id: string) => Promise<void>;
+}
 
 export function NewTabPage({ onPick, blank = true, changes = false, botBrowser = false, pins, apps, className }: {
   onPick: (tool: NewTabTool) => void;
@@ -51,6 +57,14 @@ export function NewTabPage({ onPick, blank = true, changes = false, botBrowser =
 }) {
   const isMac = mac();
   const [more, setMore] = useState<MenuAnchor | null>(null);
+  const [appMenu, setAppMenu] = useState<{ id: string; anchor: MenuAnchor } | null>(null);
+  const [renaming, setRenaming] = useState<{ id: string; name: string } | null>(null);
+  const saveRename = () => {
+    const next = renaming;
+    setRenaming(null);
+    const was = apps?.apps.find(a => a.id === next?.id)?.name;
+    if (next && next.name.trim() && next.name.trim() !== was) void apps?.rename?.(next.id, next.name.trim()).catch(() => undefined);
+  };
   const [adding, setAdding] = useState<{ anchor: MenuAnchor; choices: NewTabPinned[] | null } | null>(null);
   const choose = (anchor: MenuAnchor) => {
     if (!pins) return;
@@ -89,12 +103,30 @@ export function NewTabPage({ onPick, blank = true, changes = false, botBrowser =
             {tool === "blank" && apps?.apps.slice(0, 12).map(app => {
               const AppIcon = appIcon(app.icon);
               return (
-                <div key={app.id} role="listitem" data-testid="new-tab-app">
-                  <button type="button" onClick={() => apps.open(app.id)} title={app.name}
-                    className="flex h-10 w-full items-center gap-2 rounded-lg bg-ink/[.04] pe-2 ps-2.5 text-left text-[14px] text-ink transition-colors duration-150 ease-out hover:bg-ink/[.078] focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent">
-                    <AppIcon size={16} strokeWidth={1.75} className="shrink-0 text-ink/80" />
-                    <span className="min-w-0 flex-1 truncate">{app.name}</span>
-                  </button>
+                <div key={app.id} role="listitem" className="group/app relative" data-testid="new-tab-app">
+                  {renaming?.id === app.id ? (
+                    <form onSubmit={event => { event.preventDefault(); saveRename(); }}
+                      className="flex h-10 w-full items-center gap-2 rounded-lg bg-ink/[.078] pe-2 ps-2.5 text-[14px] text-ink">
+                      <AppIcon size={16} strokeWidth={1.75} className="shrink-0 text-ink/80" />
+                      <input autoFocus aria-label="App name" maxLength={60} value={renaming.name}
+                        onFocus={event => event.currentTarget.select()} onChange={event => setRenaming({ id: app.id, name: event.target.value })}
+                        onBlur={saveRename} onKeyDown={event => { if (event.key === "Escape") setRenaming(null); }}
+                        className="min-w-0 flex-1 bg-transparent outline-none" />
+                    </form>
+                  ) : (
+                    <button type="button" onClick={() => apps.open(app.id)} title={app.name}
+                      className={cn("flex h-10 w-full items-center gap-2 rounded-lg bg-ink/[.04] ps-2.5 text-left text-[14px] text-ink transition-colors duration-150 ease-out hover:bg-ink/[.078] focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent", apps.rename || apps.remove ? "pe-10" : "pe-2")}>
+                      <AppIcon size={16} strokeWidth={1.75} className="shrink-0 text-ink/80" />
+                      <span className="min-w-0 flex-1 truncate">{app.name}</span>
+                    </button>
+                  )}
+                  {(apps.rename || apps.remove) && renaming?.id !== app.id && (
+                    <button type="button" aria-label={`${app.name} options`} title="Rename or delete"
+                      onClick={event => setAppMenu({ id: app.id, anchor: anchorOf(event.currentTarget) })}
+                      className={cn("absolute end-1.5 top-1/2 flex size-7 -translate-y-1/2 items-center justify-center rounded-md text-ink/60 transition-opacity hover:bg-ink/[.078] hover:text-ink focus-visible:opacity-100 group-hover/app:opacity-100", appMenu?.id === app.id ? "opacity-100" : "opacity-0")}>
+                      <MoreHorizontal size={16} />
+                    </button>
+                  )}
                 </div>
               );
             })}
@@ -126,6 +158,19 @@ export function NewTabPage({ onPick, blank = true, changes = false, botBrowser =
             : adding.choices.length === 0 ? [{ key: "none", label: "No other pages yet. Ask bos to make one.", disabled: true, onSelect: () => undefined }]
             : adding.choices.slice(0, 40).map(choice => ({ key: choice.key, label: choice.title, icon: LayoutTemplate, onSelect: () => pins.pin(choice) }))} />
       )}
+      {appMenu && apps && (() => {
+        const app = apps.apps.find(a => a.id === appMenu.id);
+        if (!app) return null;
+        return (
+          <Menu anchor={appMenu.anchor} align="end" label={`${app.name} options`} width={220} onClose={() => setAppMenu(null)}
+            entries={[
+              ...apps.rename ? [{ key: "rename", label: "Rename", icon: Pencil, onSelect: () => setRenaming({ id: app.id, name: app.name }) }] : [],
+              ...apps.remove ? [{ key: "delete", label: "Delete app and its data", icon: Trash2, danger: true, onSelect: () => {
+                if (window.confirm(`Delete ${app.name} and all its data? The page file stays in Files.`)) void apps.remove?.(app.id).catch(() => undefined);
+              } }] : [],
+            ]} />
+        );
+      })()}
       {more && (
         <Menu anchor={more} align="end" label="Terminal options" width={232} onClose={() => setMore(null)}
           entries={[{ key: "bottom", label: "Open bottom terminal", shortcut: isMac ? "⌘J" : "Ctrl J", onSelect: () => onPick("terminal-bottom") }]} />

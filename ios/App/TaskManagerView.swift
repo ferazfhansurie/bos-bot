@@ -299,7 +299,11 @@ struct TaskManagerView: View {
         }
     }
 
-    @ViewBuilder private func threadButton(_ task: BotTask) -> some View {
+    private func threadButton(_ task: BotTask) -> some View {
+        threadButtonRow(task).modifier(GlassListRow(on: session.state.v3))
+    }
+
+    @ViewBuilder private func threadButtonRow(_ task: BotTask) -> some View {
         if isSelecting {
             let selected = selectedThreadIDs.contains(task.threadId)
             Button {
@@ -600,5 +604,21 @@ struct TaskManagerView: View {
         let reason = session.actionError ?? fallback
         session.actionError = nil
         errorMessage = "Deleted \(deleted) of \(total) threads. \(reason) The remaining selection is kept."
+    }
+}
+
+/// 3.0: a thread in the sheet is its own sheet of glass with air around it,
+/// not a cell in a grouped table. Solid under reduce transparency.
+struct GlassListRow: ViewModifier {
+    let on: Bool
+
+    func body(content: Content) -> some View {
+        if on {
+            content
+                .listRowBackground(Color.clear.glassSheet(cornerRadius: 20).padding(.vertical, 3))
+                .listRowSeparator(.hidden)
+        } else {
+            content
+        }
     }
 }

@@ -44,6 +44,13 @@ export function liveActivityLabel(message?: Message): string {
     return t("chat.activity.thinking");
   }
 
+  return toolLabel(message);
+}
+
+/** What one tool step did, in words, finished or not (the 3.0 thread
+ * worker's trail of done steps). */
+export function toolLabel(message: Message): string {
+  if (!message.tool) return t("chat.activity.working");
   if (message.tool.spoken?.trim()) return sentenceCase(message.tool.spoken);
 
   const toolName = message.tool.name.replace(/^mcp__[^_]+__/, "").split(":", 1)[0] ?? "";

@@ -759,6 +759,15 @@ describe.sequential("Composio Sessions", () => {
     });
   });
 
+  it("v3 only: mounts the bridge for linkable WhatsApp with no Composio key", async () => {
+    const context = { harnessUrl: "http://127.0.0.1:8799", commsToken: "secret", botId: "bot-1", threadId: "thread-1", whatsappLinkable: true };
+    await expect(mcpIntegration({} as AppConfig, context)).resolves.toBeNull();
+    const integration = await mcpIntegration({} as AppConfig, { ...context, v3Cards: true });
+    expect(integration?.env).toMatchObject({ OMB_V3_CARDS: "1", OMB_BOT_ID: "bot-1" });
+    expect(integration?.env).not.toHaveProperty("OMB_CONNECTOR_UPSTREAM_URL");
+    expect(integration?.env).not.toHaveProperty("OMB_WHATSAPP_NATIVE");
+  });
+
   it("reports connection state, creates auth links and revokes disconnects", async () => {
     const cfg: AppConfig = {
       composio: { apiKey: "ak_test", userId: "bosbot_existing", sessionId: "trs_test" },

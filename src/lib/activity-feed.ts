@@ -6,13 +6,19 @@
  * the collapsed activity list and tests all ask the same question. */
 import { useSyncExternalStore } from "react";
 import type { MascotGesture } from "../../shared/mascot-choreography";
+import { FEED_GESTURE, feedActivityFor, type FeedActivity } from "../../shared/mascot-presence";
 import type { Task } from "@/state/store";
 
 export const ACTIVITY_FEED_PATH = "/api/activity";
 export const ACTIVITY_FRAME_KIND = "activity";
 
-export type ActivityState = "idle" | "thinking" | "tool" | "typing" | "waiting" | "failed" | "stopped";
-export interface ActivityEntry { botId: string; threadId: string; roomId?: string | null; state: ActivityState; since: number }
+export type ActivityState = FeedActivity;
+export interface ActivityEntry {
+  botId: string; threadId: string; roomId?: string | null; state: ActivityState; since: number;
+  /** busy threads, from newer servers: when the whole job began, what it is
+   * doing in plain words, and the plan's step in progress with its size */
+  jobSince?: number; step?: string; stepIndex?: number; stepCount?: number;
+}
 
 const STATES = new Set<ActivityState>(["idle", "thinking", "tool", "typing", "waiting", "failed", "stopped"]);
 const key = (botId: string, threadId: string) => `${botId}\u0000${threadId}`;
@@ -29,6 +35,10 @@ export function parseActivityEntry(raw: unknown): ActivityEntry | null {
     botId: value.botId, threadId: value.threadId, state: state as ActivityState,
     since: Number.isFinite(since) ? since : 0,
     roomId: typeof value.roomId === "string" ? value.roomId : null,
+    ...(typeof value.jobSince === "number" && Number.isFinite(value.jobSince) ? { jobSince: value.jobSince } : {}),
+    ...(typeof value.step === "string" && value.step.trim() ? { step: value.step.trim().slice(0, 48) } : {}),
+    ...(Number.isInteger(value.stepIndex) && Number.isInteger(value.stepCount) && (value.stepCount as number) >= 2
+      ? { stepIndex: value.stepIndex as number, stepCount: value.stepCount as number } : {}),
   };
 }
 
@@ -44,7 +54,8 @@ export function createActivityFeed() {
     const previous = next.get(id);
     // a replayed or reordered frame never rolls a thread back in time
     if (previous && previous.since > entry.since) return false;
-    if (previous && previous.state === entry.state && previous.since === entry.since) return false;
+    if (previous && previous.state === entry.state && previous.since === entry.since && previous.step === entry.step
+      && previous.stepIndex === entry.stepIndex && previous.jobSince === entry.jobSince) return false;
     next.set(id, entry);
     return true;
   };
@@ -99,28 +110,13 @@ export function useActivityFeed(feed: ActivityFeed = activityFeed) {
   return useSyncExternalStore(feed.subscribe, feed.snapshot, feed.snapshot);
 }
 
-const GESTURE: Record<ActivityState, MascotGesture> = {
-  idle: "idle", stopped: "idle", failed: "idle",
-  thinking: "thinking", tool: "working", typing: "searching", waiting: "waiting",
-};
-// waiting needs the person most; then whatever is visibly moving
-const RANK: Record<ActivityState, number> = { waiting: 0, tool: 1, typing: 2, thinking: 3, failed: 4, stopped: 5, idle: 6 };
-
-/** One state for a bot row: the feed when it has an entry, else the
- * harness's task.activity so an older server still shows work. */
+/** One state for a bot row; the ranking lives with the presence model. */
 export function botActivityState(entries: ActivityEntry[], tasks: Array<Pick<Task, "threadId" | "activity" | "busy">>): ActivityState {
-  const states: ActivityState[] = entries.map((entry) => entry.state);
-  const covered = new Set(entries.map((entry) => entry.threadId));
-  for (const task of tasks) {
-    if (covered.has(task.threadId)) continue;
-    if (task.activity === "waiting-on-you") states.push("waiting");
-    else if (task.activity === "working" || task.busy) states.push("thinking");
-  }
-  return states.sort((a, b) => RANK[a] - RANK[b])[0] ?? "idle";
+  return feedActivityFor(entries, tasks);
 }
 
-export const gestureForActivity = (state: ActivityState): MascotGesture => GESTURE[state];
-export const isActiveActivity = (state: ActivityState) => GESTURE[state] !== "idle";
+export const gestureForActivity = (state: ActivityState): MascotGesture => FEED_GESTURE[state];
+export const isActiveActivity = (state: ActivityState) => FEED_GESTURE[state] !== "idle";
 
 /** A thread the feed says is moving reads as working (or waiting) in every
  * sidebar list even before the bot announcement catches up. The feed only

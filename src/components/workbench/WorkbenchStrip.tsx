@@ -16,6 +16,9 @@ import { cn } from "@/lib/cn";
 import { DETACHABLE, TAB_LABEL, type WorkspacePane, type WorkspaceTab } from "@/lib/thread-workspace";
 import { runWorkspaceCommand } from "@/lib/workspace-commands";
 import { useStore } from "@/state/store";
+import { useV3 } from "@/lib/v3";
+import { TabMascot } from "@/components/v3/Alive";
+import { useStage } from "@/lib/v3-stage";
 
 const mac = () => /mac/i.test(globalThis.navigator?.platform ?? "") || globalThis.window?.ogb?.platform === "darwin";
 
@@ -30,7 +33,7 @@ export function StripButton({ label, keys, onClick, pressed, children, className
           pressed && "bg-ink/[.1] text-ink", className)}>
         {children}
       </button>
-      <span role="tooltip" className="pointer-events-none absolute end-0 top-[calc(100%+6px)] z-50 hidden items-center gap-2 whitespace-nowrap rounded-xl border border-ink/[.084] bg-menu px-2.5 py-1.5 text-[13px] text-ink shadow-lg group-hover/tip:flex group-hover/tip:delay-500">
+      <span data-popover role="tooltip" className="pointer-events-none absolute end-0 top-[calc(100%+6px)] z-50 hidden items-center gap-2 whitespace-nowrap rounded-xl border border-ink/[.084] bg-menu px-2.5 py-1.5 text-[13px] text-ink shadow-lg group-hover/tip:flex group-hover/tip:delay-500">
         {label}{keys && <kbd className="rounded-md bg-ink/[.12] px-1.5 font-sans text-[12px] text-ink/80">{keys}</kbd>}
       </span>
     </span>
@@ -53,11 +56,18 @@ interface StripItem {
   hint?: string;
 }
 
-function StripTab({ item, onActivate, onClose, onMenu }: {
+function StripTab({ item, onActivate, onClose, onMenu, botId }: {
   item: StripItem; onActivate: () => void; onClose: () => void; onMenu: (event: React.MouseEvent) => void;
+  /** 3.0: the bot working in this tab, who walks into its header */
+  botId?: string;
 }) {
   const Icon = item.icon;
   const [broken, setBroken] = useState(false);
+  const icon = item.loading
+    ? <Loader2 size={16} className="shrink-0 animate-spin text-ink/60" />
+    : item.favicon && !broken
+      ? <img src={item.favicon} alt="" className="size-4 shrink-0 rounded-[3px]" onError={() => setBroken(true)} />
+      : <Icon size={16} strokeWidth={1.75} className="shrink-0" />;
   return (
     <div role="tab" aria-selected={item.active} tabIndex={0} title={item.hint ?? item.title}
       data-testid="workbench-tab" data-kind={item.page ? "browser-page" : item.tab.kind}
@@ -67,11 +77,7 @@ function StripTab({ item, onActivate, onClose, onMenu }: {
       onMouseDown={(event) => { if (event.button === 1) event.preventDefault(); }}
       className={cn("workbench-tab group relative flex h-8 min-w-[90px] max-w-[240px] flex-1 basis-0 cursor-default select-none items-center gap-2 rounded-[10px] border pe-1 ps-2.5 text-[13px] transition-colors duration-150 ease-out",
         item.active ? "is-active border-ink/[.084] bg-ink/[.1] text-ink shadow-sm" : "border-transparent text-ink/70 hover:bg-ink/[.1] hover:text-ink")}>
-      {item.loading
-        ? <Loader2 size={16} className="shrink-0 animate-spin text-ink/60" />
-        : item.favicon && !broken
-          ? <img src={item.favicon} alt="" className="size-4 shrink-0 rounded-[3px]" onError={() => setBroken(true)} />
-          : <Icon size={16} strokeWidth={1.75} className="shrink-0" />}
+      {botId ? <TabMascot botId={botId} fallback={icon} /> : icon}
       <span className="min-w-0 flex-1 overflow-hidden whitespace-nowrap [mask-image:linear-gradient(to_right,#000_calc(100%-28px),transparent)]">{item.title}</span>
       <button type="button" aria-label={`Close ${item.title}`} onClick={(event) => { event.stopPropagation(); onClose(); }}
         className={cn("workbench-tab-close flex size-6 shrink-0 items-center justify-center rounded-md text-ink/60 hover:bg-ink/[.1] hover:text-ink",
@@ -84,7 +90,9 @@ function StripTab({ item, onActivate, onClose, onMenu }: {
 
 export function WorkbenchStrip({ pane, leading, trailing }: { pane: WorkspacePane; leading?: ReactNode; trailing?: ReactNode }) {
   useTabKinds();
-  const { target, workspace, focusTab, closeTab, moveTab, detach, openTab, git } = useWorkspace();
+  const { target, workspace, focusTab, closeTab, moveTab, detach, openTab, git, botBrowsing } = useWorkspace();
+  const v3 = useV3();
+  const opener = useStage(target?.botId ?? "");
   const { dispatch } = useStore();
   const browser = useBrowserTabs();
   const [menu, setMenu] = useState<{ anchor: MenuAnchor; entries: MenuEntry[] } | null>(null);
@@ -203,7 +211,8 @@ export function WorkbenchStrip({ pane, leading, trailing }: { pane: WorkspacePan
           return (
             <div key={item.key} className="contents">
               {index > 0 && <span aria-hidden className={cn("mx-1 h-3 w-px shrink-0 bg-ink/[.12]", (item.active || previous?.active) && "opacity-0")} />}
-              <StripTab item={item} onActivate={() => activate(item)} onClose={() => closeItem(item)} onMenu={(event) => openMenu(event, item)} />
+              <StripTab item={item} onActivate={() => activate(item)} onClose={() => closeItem(item)} onMenu={(event) => openMenu(event, item)}
+                botId={!v3 ? undefined : item.page ? (item.page.agent === "bot" ? botBrowsing?.botId : undefined) : (opener.opened === item.tab.id ? target?.botId : undefined)} />
             </div>
           );
         })}

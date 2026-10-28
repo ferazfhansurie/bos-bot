@@ -32,6 +32,7 @@ struct ChatView: View {
     /// Present only on a wide window's primary pane with room for a second.
     @Environment(\.openBeside) private var openBeside
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.colorScheme) private var colorScheme
     @Environment(\.scenePhase) private var scenePhase
     /// The draft lives in its own object so a keystroke redraws the
     /// composer, not this whole view and every row of the transcript.
@@ -114,6 +115,19 @@ struct ChatView: View {
     @State private var islandExpanded = false
     @State private var islandVisible = false
     @State private var facePhase: CGFloat = 0
+    /// 3.0: while the bot works here, the composer becomes the bot itself.
+    /// Its beats are `LiveIslandState`; nothing reads it unless v3 is on.
+    @State private var island = LiveIslandState()
+    @Namespace private var islandSpace
+    /// The steer the island is saying "got it" for, briefly.
+    @State private var islandSteerAck: String?
+    @State private var islandSteerSeen = LiveIslandSteer.Seen()
+    /// The card the island's needs-you line was tapped for.
+    @State private var askTarget: String?
+    /// False while the empty thread's mascot is still being sucked up into
+    /// the header: it lands there first, then travels down to the island.
+    @State private var islandMascotReady = true
+    @State private var islandArrival = 0
     /// Whether the reader is at the newest line, and when each room member's
     /// row last pulled the transcript down. A plain object, not state: it
     /// changes on every scroll and every token, and none of that should
@@ -269,6 +283,9 @@ struct ChatView: View {
     /// The tail of activity belonging to the turn in flight.
     private func liveSteps(in messages: [Message]) -> [Message] {
         guard current.busy, (ActivityDetail(rawValue: activityDetail) ?? .reduced) != .hidden else { return [] }
+        // 3.0: the turn's steps stay in the transcript as their run (a tap
+        // still opens them) and the thread worker below says what it is on.
+        if islandEnabled { return [] }
         // Parallel rooms split their activity per member; see memberSteps.
         if case let .room(room) = current, room.activeBotIds != nil { return [] }
         return Array(messages.reversed().prefix { $0.kind == .activity }.reversed())
@@ -319,7 +336,7 @@ struct ChatView: View {
         // instead of re-walking a long transcript three times over.
         let derived = transcriptMemo.value(for: TranscriptMemo.Key(
             revision: session.stateRevision, threadId: threadId,
-            detail: activityDetail, creating: creatingThread
+            detail: activityDetail, creating: creatingThread, worker: islandEnabled
         ), compute: deriveTranscript)
         let visible = derived.value.visible
         let steps = derived.value.steps
@@ -334,6 +351,8 @@ struct ChatView: View {
         let latestAnswerId = current.busy ? nil : transcript.last(where: { $0.role == .bot && $0.kind == .text })?.id
         let versions = derived.value.versions
         let replyTargets = derived.value.replyTargets
+        // 3.0: each mid-turn send's bubble says whether the bot has read it.
+        let steerReads = islandEnabled ? ThreadWorker.steerReads(messages, busy: current.busy) : [:]
         let _ = arrivals.track(threadId: threadId, messages: derived.fresh ? visible.map { ($0.id, $0.at) } : [], now: Date().timeIntervalSince1970)
         // A VStack with the composer as a sibling, rather than a scroll view
         // with `.safeAreaInset`. The inset version sized itself to its
@@ -420,7 +439,8 @@ struct ChatView: View {
                                         openThread: openThread,
                                         onReply: { replyTarget = $0; composerFocused = true },
                                         replyTarget: message.replyToId.flatMap { replyTargets[$0] },
-                                        versions: Self.versions(of: message, in: versions)
+                                        versions: Self.versions(of: message, in: versions),
+                                        steerRead: steerReads[message.id]
                                     )
                                     .equatable()
                                     .arrivalSpring(arrives(message), fromTrailing: message.role == .user && !message.isFromAnotherPerson(selfID: roomSelfID), reduceMotion: reduceMotion)
@@ -472,8 +492,9 @@ struct ChatView: View {
                             // the desktop's TurnPresence: the bot's own face, moving,
                             // leads the reply in progress
                             let face = MausState.forThread(current, in: session.state) ?? .thinking
-                            LiveReplyRow(live: session.liveText.entry(threadId), color: current.color, busy: current.busy,
-                                         lead: liveNeedsLead(transcript) ? AnyView(AssistantLeadLine(chat: current, state: face, animated: true).padding(.top, 10)) : nil) {
+                            // 3.0: only the typed reply; the worker below is the rest
+                            LiveReplyRow(live: session.liveText.entry(threadId), color: current.color, busy: current.busy && !islandEnabled,
+                                         lead: liveNeedsLead(transcript) ? AnyView(AssistantLeadLine(chat: current, state: face, animated: !islandHoldsMascot).padding(.top, 10)) : nil) {
                                 WorkingSteps(
                                     items: liveSteps,
                                     startedAt: Date(timeIntervalSince1970: (liveSteps.first?.at ?? messages.last?.at ?? Date().timeIntervalSince1970 * 1000) / 1000)
@@ -501,7 +522,7 @@ struct ChatView: View {
                                     }
                                 }
                                 if let progress = pending.progress { ProgressView(value: progress).frame(width: 180) }
-                                Text(pending.error ?? pending.status ?? (pending.steering ? "Interrupting…" : "Sending…"))
+                                Text(pending.error ?? pending.status ?? (pending.steering ? (islandEnabled ? "waiting for \(current.name)" : "Interrupting…") : "Sending…"))
                                     .font(.caption).foregroundStyle(.secondary)
                                 if let retry = pending.retry { Button("Retry", action: retry).font(.caption.weight(.semibold)) }
                             }
@@ -509,6 +530,11 @@ struct ChatView: View {
                             .id("pending-send-" + pending.id)
                             .onAppear { jumpToLatest(proxy, lastRow: "pending-send-" + pending.id) }
                         }
+                        if !creatingThread, case let .bot(bot) = current {
+                            PageTabCards(botId: bot.id, threadId: threadId)
+                                .id("page-tabs-" + threadId)
+                        }
+                        threadWorker
                         Color.clear.frame(height: 1).id(Self.bottomId)
                             .modifier(ReportsVisible { visible in
                                 // The geometry callback can miss its last
@@ -520,6 +546,8 @@ struct ChatView: View {
                     .scrollTargetLayout()
                     .environment(\.mentionContext, mentionContext)
                     .environment(\.smartUIThread, smartUIThread)
+                    .environment(\.smartUIV3, session.state.v3)
+                    .environment(\.threadWorkerShows, islandEnabled && islandPhase != .off)
                     .padding(.horizontal, 16)
                     .padding(.vertical, 12)
                     .frame(maxWidth: CompanionLayout.chatWidth, alignment: .leading)
@@ -591,10 +619,46 @@ struct ChatView: View {
                 // when it settles, and the lean toward an open card.
                 .onChange(of: threadId, initial: true) { _, _ in
                     mascot.reset(busy: current.busy, cardOpen: cardWaiting)
+                    island.show(thread: threadId, busy: current.busy)
+                    islandMascotReady = true
                 }
                 .onChange(of: current.busy) { _, busy in
                     if !busy { stoppingThreadId = nil }
                     mascot.busyChanged(busy, mood: settledMood)
+                    islandBusyChanged(busy)
+                }
+                // Send steers by default while it works: when the words
+                // land in the running turn the island says so for a moment.
+                .onChange(of: islandSteerMark, initial: true) { _, next in
+                    let switched = islandSteerSeen.thread != next.thread
+                    guard islandSteerSeen.note(next, working: islandPhase == .working), let id = next.id else {
+                        if switched { islandSteerAck = nil }
+                        return
+                    }
+                    islandSteerAck = id
+                    Task { @MainActor in
+                        try? await Task.sleep(for: .seconds(LiveIslandSteer.holdSeconds))
+                        if islandSteerAck == id { islandSteerAck = nil }
+                    }
+                }
+                // The empty thread's mascot is sucked up into the header on
+                // the first send; the island waits for it to land there.
+                .onChange(of: showsEmptyMascot) { _, empty in
+                    guard !empty, islandEnabled else { return }
+                    islandArrival += 1
+                    let arrival = islandArrival
+                    islandMascotReady = false
+                    Task { @MainActor in
+                        try? await Task.sleep(for: .seconds(0.95))
+                        guard arrival == islandArrival else { return }
+                        withAnimation(V3Motion.travel(reduceMotion: reduceMotion)) { islandMascotReady = true }
+                    }
+                }
+                // The island's needs-you line takes you to the card.
+                .onChange(of: askTarget) { _, id in
+                    guard let id else { return }
+                    withAnimation(reduceMotion ? nil : .snappy) { proxy.scrollTo(id, anchor: .center) }
+                    askTarget = nil
                 }
                 .onChange(of: cardWaiting) { _, open in mascot.cardChanged(open) }
                 .onChange(of: transcript.last?.id) { _, _ in
@@ -708,6 +772,8 @@ struct ChatView: View {
         .onChange(of: selectedThreadWasRemoved) { _, removed in
             if removed { leave() }
         }
+        .onAppear { OpenChats.shared.open(chat.id) }
+        .onDisappear { OpenChats.shared.close(chat.id) }
 #if DEBUG
         .onAppear { Autopilot.chatAppeared?() }
         .onDisappear { Autopilot.chatDisappeared?() }
@@ -933,20 +999,50 @@ struct ChatView: View {
                                   shareFile = ShareFile(url: url)
                               }
                           }
-                      }) {
+                      },
+                      nameColor: headerNameColor,
+                      live: headerLive,
+                      onAsk: islandPhase == .needsYou ? {
+                          Haptics.selection()
+                          askTarget = LiveIslandAsk.pending(in: messages)?.messageId
+                      } : nil) {
+            if headerNameColor != nil {
+                // 3.0 one face on screen: a bot's 1:1 pill is its name. The
+                // face is the island while it works and the big mascot on an
+                // empty thread; this only marks where that mascot flies home.
+                Color.clear.frame(width: 30, height: 30)
+                    .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { mascotDock.avatar = $0 }
+            } else {
             // The activity feed's face for this exact thread, so the header
             // moves while the bot works here; without a feed entry, the
             // still idle face it always had.
-            ThreadHeaderFace(chat: current, size: 30, live: MausState.forThread(current, in: session.state),
-                             director: mascot, draft: composerDraft, typing: composerFocused)
-                .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { mascotDock.avatar = $0 }
-                // While the empty thread's mascot is out it is the bot; a
-                // second face up here is one too many. It comes back as the
-                // mascot is sucked up into it.
-                .opacity(showsEmptyMascot || mascotOut ? 0 : 1)
-                .animation(.easeOut(duration: 0.18).delay(showsEmptyMascot ? 0 : 0.4), value: showsEmptyMascot)
-                .animation(.easeOut(duration: 0.14), value: mascotOut)
+            ZStack {
+                // 3.0: while the bot works it stands in the island instead;
+                // one of it on screen, never two.
+                if !islandHoldsMascot {
+                    ThreadHeaderFace(chat: current, size: 30, live: MausState.forThread(current, in: session.state),
+                                     director: mascot, draft: composerDraft, typing: composerFocused)
+                        .modifier(MatchedMascot(namespace: islandEnabled && !reduceMotion ? islandSpace : nil))
+                        .transition(.opacity)
+                } else {
+                    Color.clear.frame(width: 30, height: 30)
+                }
+            }
+            .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { mascotDock.avatar = $0 }
+            // While the empty thread's mascot is out it is the bot; a
+            // second face up here is one too many. It comes back as the
+            // mascot is sucked up into it.
+            .opacity(showsEmptyMascot || mascotOut ? 0 : 1)
+            .animation(.easeOut(duration: 0.18).delay(showsEmptyMascot ? 0 : 0.4), value: showsEmptyMascot)
+            .animation(.easeOut(duration: 0.14), value: mascotOut)
+            }
         }
+    }
+
+    /// A 1:1 bot's colour for its name-only header pill; nil for a room.
+    private var headerNameColor: Color? {
+        guard case let .bot(bot) = current else { return nil }
+        return BotNameColor.color(bot.color, scheme: colorScheme)
     }
 
     /// A bot thread that has loaded and has nothing in it yet: no messages,
@@ -1042,7 +1138,7 @@ struct ChatView: View {
         return AnyView(ChannelRosterChip(
             roster: ChannelRoster(room: room, members: channelMembers, hostLive: hostLive),
             notifications: room.notifications,
-            faces: Dictionary(uniqueKeysWithValues: channelMembers.compactMap { bot in memberFace(bot, in: room).map { (bot.id, $0) } })
+            faces: Dictionary(channelMembers.compactMap { bot in memberFace(bot, in: room).map { (bot.id, $0) } }, uniquingKeysWith: { first, _ in first })
         ) { showingProfile = true })
     }
 
@@ -1231,6 +1327,138 @@ struct ChatView: View {
     /// A question, approval or secret card is waiting on you here.
     private var cardWaiting: Bool {
         messages.contains { $0.card?.isPending == true || $0.secret?.isPending == true }
+    }
+
+    // MARK: - 3.0 island
+
+    /// The island is 3.0 only, and only for a bot's own thread.
+    private var islandEnabled: Bool {
+        session.state.v3 && current.isBot && !creatingThread
+    }
+
+    /// The thread's own runtime state, which says "waiting-on-you" before
+    /// the card itself has loaded.
+    private var islandTaskActivity: String? {
+        guard case let .bot(bot) = current else { return nil }
+        return session.state.bot(bot.id)?.tasks?.first { $0.threadId == threadId }?.activity
+    }
+
+    private var islandNeedsYou: Bool {
+        current.busy && (cardWaiting || islandTaskActivity == "waiting-on-you")
+    }
+
+    private var islandPhase: LiveIslandState.Phase {
+        island.phase(enabled: islandEnabled, needsYou: islandNeedsYou)
+    }
+
+    /// This thread's newest steer; nothing is read unless 3.0 is on.
+    private var islandSteerMark: LiveIslandSteer.Mark {
+        .init(thread: threadId, id: islandEnabled ? LiveIslandSteer.lastSteeredId(in: messages) : nil)
+    }
+
+    /// The mascot stands in the island (and so nowhere else) now.
+    private var islandHoldsMascot: Bool {
+        islandPhase != .off && islandMascotReady && !mascotOut && !showsEmptyMascot
+    }
+
+    /// The face it wears at work: the feed's, else what the newest step says.
+    private var islandFace: MausState {
+        if let live = MausState.forThread(current, in: session.state) { return live }
+        return LiveActivityLine.label(for: messages.last) == LiveActivityLine.thinking ? .thinking : .working
+    }
+
+    /// When this turn began: the person's last message.
+    private var islandStartedAt: Date? {
+        messages.last(where: { $0.role == .user }).map { Date(timeIntervalSince1970: $0.at / 1000) }
+    }
+
+    private func islandBusyChanged(_ busy: Bool) {
+        var next = island
+        let beganDone = next.busyChanged(busy)
+        withAnimation(V3Motion.travel(reduceMotion: reduceMotion)) { island = next }
+        guard beganDone else { return }
+        let beat = next.beat
+        var hold = LiveIslandState.doneBeat
+#if DEBUG
+        let args = ProcessInfo.processInfo.arguments
+        if let i = args.firstIndex(of: "-v3-done-hold"), i + 1 < args.count, let value = Double(args[i + 1]) { hold = value }
+#endif
+        Task { @MainActor in
+            try? await Task.sleep(for: .seconds(hold))
+            withAnimation(V3Motion.travel(reduceMotion: reduceMotion)) { island.settle(beat: beat) }
+        }
+    }
+
+    /// The header's pill while this bot works; nil otherwise.
+    private var headerLive: AnyView? {
+        guard case let .bot(bot) = current, islandPhase != .off else { return nil }
+        // 3.0 thread worker: the face is at the end of the thread; the pill
+        // is the name and a breathing dot, or "needs you". The done beat is
+        // the worker's, so the pill is already plain again.
+        if islandPhase == .done { return nil }
+        return AnyView(ThreadWorkerHeaderPill(bot: bot, needsYou: islandPhase == .needsYou, nameColor: headerNameColor))
+    }
+
+    @ViewBuilder private var liveIsland: some View {
+        if case let .bot(bot) = current, islandPhase != .off {
+            let ask = LiveIslandAsk.pending(in: messages)
+            LiveIslandBar(
+                bot: bot, phase: islandPhase,
+                line: LiveActivityLine.label(for: messages.last),
+                ask: ask?.line ?? (islandPhase == .needsYou ? String(localized: "Waiting on you") : nil),
+                face: islandFace, startedAt: islandStartedAt,
+                holdsMascot: islandHoldsMascot,
+                namespace: reduceMotion ? nil : islandSpace,
+                onOpen: {
+                    Haptics.selection()
+                    composerFocused = true
+                },
+                onAsk: {
+                    Haptics.selection()
+                    askTarget = LiveIslandAsk.pending(in: messages)?.messageId
+                },
+                onStop: nil,
+                stopping: stoppingThreadId == threadId,
+                gotIt: islandSteerAck != nil && islandPhase == .working,
+                inHeader: true,
+                nameColor: headerNameColor
+            )
+            .transition(.opacity)
+        }
+    }
+
+    /// When the running turn began, ms: the person's last message that
+    /// started it (a mid-turn send joins the turn, it does not restart it).
+    private var workerSince: Double? {
+        messages.last(where: { $0.role == .user && $0.steered != true })?.at
+    }
+
+    /// 3.0: the bot standing at the end of its own thread while it works.
+    @ViewBuilder private var threadWorker: some View {
+        if islandEnabled, islandPhase != .off, case let .bot(bot) = current {
+            let since = workerSince
+            let steerId = LiveIslandSteer.lastSteeredId(in: messages)
+            let reads = ThreadWorker.steerReads(messages, busy: current.busy)
+            ThreadWorkerRow(
+                bot: bot, phase: islandPhase,
+                label: LiveActivityLine.label(for: messages.last),
+                ask: LiveIslandAsk.pending(in: messages)?.line,
+                face: islandFace, since: since,
+                steps: ThreadWorker.turnSteps(messages),
+                turnKey: ThreadWorker.turnKey(threadId: threadId, since: since),
+                steerId: steerId, steerRead: steerId.flatMap { reads[$0] },
+                lastNews: ThreadWorker.lastNewsAt(messages, since: since),
+                holdsMascot: islandHoldsMascot,
+                onAsk: {
+                    Haptics.selection()
+                    askTarget = LiveIslandAsk.pending(in: messages)?.messageId
+                },
+                onStop: stopAction,
+                stopping: stoppingThreadId == threadId
+            )
+            .id("thread-worker-" + threadId)
+            .transition(.opacity.combined(with: .move(edge: .bottom)))
+        }
     }
 
     /// How the turn that just settled went, for the header face.
@@ -1905,6 +2133,9 @@ struct ChatView: View {
                     .transition(.opacity)
             }
 
+            // 3.0: the bot at work is the header pill, not a strip here.
+            // The composer stays open the whole turn (firaz found the fold
+            // annoying), and stop lives in the composer only.
             if current.busy, !sendingMessage {
                 SendPriorityToggle(priority: $sendPriority, color: MausPalette.color(current.color))
                     .transition(.opacity)
@@ -1935,6 +2166,7 @@ struct ChatView: View {
                     onLongVoice: { openWalkie() }
                 )
             }
+            .transition(.opacity.combined(with: .offset(y: 8)))
         }
         .padding(.horizontal, 12)
         .padding(.top, 6)
@@ -2133,7 +2365,34 @@ struct ChatHeaderBar<Avatar: View>: View {
     var threadDone: ThreadDoneAction? = nil
     var onComputer: (() -> Void)? = nil
     var onExport: ((String) -> Void)? = nil
+    /// A bot's 1:1: the pill is its name in this colour over a thin line of
+    /// it, with no face (3.0 one face on screen). `avatar` then only anchors
+    /// where the empty-thread mascot flies home to.
+    var nameColor: Color? = nil
+    /// 3.0: while a bot works, the live island is the pill (face, name,
+    /// what it is doing, timer); its menu stays the tap.
+    var live: AnyView? = nil
+    /// The bot is waiting on a card: the menu's first item goes there.
+    var onAsk: (() -> Void)? = nil
     @ViewBuilder let avatar: () -> Avatar
+
+    @ViewBuilder private var pillLabel: some View {
+        if let live {
+            live.background(alignment: .leading) { avatar() }
+        } else if let nameColor {
+            Text(name).font(.system(size: 17, weight: .semibold)).lineLimit(1)
+                .foregroundStyle(nameColor)
+                .overlay(alignment: .bottom) {
+                    Capsule().fill(nameColor.opacity(0.6)).frame(height: 2).offset(y: 5)
+                }
+                .background(alignment: .leading) { avatar() }
+        } else {
+            HStack(spacing: 8) {
+                avatar()
+                Text(name).font(.system(size: 17, weight: .semibold)).lineLimit(1)
+            }
+        }
+    }
 
     var body: some View {
         VStack(spacing: 6) {
@@ -2153,18 +2412,16 @@ struct ChatHeaderBar<Avatar: View>: View {
             }
             .buttonStyle(.plain).glassCapsule().accessibilityLabel(closesPane ? "Close" : "Back")
             Spacer(minLength: 4)
-            if !canOpenThreads && canOpenSettings && onComputer == nil && onExport == nil {
+            if !canOpenThreads && canOpenSettings && onComputer == nil && onExport == nil && onAsk == nil {
                 Button(action: onSettings) {
-                    HStack(spacing: 8) {
-                        avatar()
-                        Text(name).font(.system(size: 17, weight: .semibold)).lineLimit(1)
-                    }.padding(.horizontal, 12).frame(height: 44)
+                    pillLabel.padding(.horizontal, 12).frame(height: 44)
                 }
                 .buttonStyle(.plain).glassCapsule()
                 .accessibilityLabel("\(name), conversation details")
                 .accessibilityIdentifier("chat-options")
             } else {
             Menu {
+                if let onAsk { Button("Show the question", systemImage: "arrow.up.message", action: onAsk) }
                 if canOpenThreads { Button("Threads", systemImage: "square.stack", action: onThreads) }
                 if let threadDone {
                     Button(threadDone.title, systemImage: threadDone.systemImage, action: threadDone.run)
@@ -2179,10 +2436,7 @@ struct ChatHeaderBar<Avatar: View>: View {
                 }
                 if canOpenSettings { Button("Conversation settings", systemImage: "gearshape", action: onSettings) }
             } label: {
-                HStack(spacing: 8) {
-                    avatar()
-                    Text(name).font(.system(size: 17, weight: .semibold)).lineLimit(1)
-                }
+                pillLabel
                 .padding(.horizontal, 12).frame(height: 44)
             }
             .buttonStyle(.plain).glassCapsule()
@@ -2505,6 +2759,8 @@ struct MessageRow: View {
     /// Every version of this message when it was edited and retried, in
     /// order; empty when there is only the one.
     var versions: [Message] = []
+    /// 3.0: a mid-turn send's "waiting for" / "read this" line.
+    var steerRead: SteerRead? = nil
     @Environment(\.sessionActions) private var sessionActions
     private var session: Session { sessionActions! }
     @State private var editingText = ""
@@ -2551,7 +2807,9 @@ struct MessageRow: View {
                     .accessibilityIdentifier("reply-quote-" + reference)
             }
             content
-            if let steeringStatus = message.steeringStatus {
+            if let steerRead {
+                SteerReadLabel(read: steerRead, name: chat.name, color: chat.color)
+            } else if let steeringStatus = message.steeringStatus {
                 Text(steeringLabel(steeringStatus))
                     .font(.caption)
                     .foregroundStyle(steeringStatus == .uncertain ? Color.orange : Color.secondary)
@@ -2667,6 +2925,24 @@ struct MessageRow: View {
 
     @ViewBuilder
     private var content: some View {
+        if let card = message.voiceCall, card.isDrawable {
+            VoiceChatCardView(card: card, openThread: openThread)
+        } else if let connector = message.connector {
+            // a bot asking for an app; a dismissed one leaves no gap
+            if connector.dismissed == true {
+                EmptyView()
+            } else if let home = chat.remoteHomeName {
+                RemoteOnlyNoteCard(title: connector.label, home: home, pending: connector.status != .connected, tint: MausPalette.color(message.from?.color ?? chat.color))
+            } else {
+                ConnectorCardView(chat: chat, message: message, connector: connector)
+            }
+        } else {
+            kindContent
+        }
+    }
+
+    @ViewBuilder
+    private var kindContent: some View {
         switch message.kind {
         case .text:
             TextBubble(message: message, chat: chat, selfID: selfID, tailed: endsRun, openLink: openLink)
@@ -2735,6 +3011,7 @@ extension MessageRow: Equatable {
             && lhs.chat.color == rhs.chat.color && lhs.chat.isRemoteBot == rhs.chat.isRemoteBot
             && lhs.chat.remoteHomeName == rhs.chat.remoteHomeName
             && lhs.chat.botBusy == rhs.chat.botBusy
+            && lhs.steerRead == rhs.steerRead
     }
 }
 
@@ -4073,6 +4350,8 @@ final class TranscriptMemo {
         var threadId: String
         var detail: String
         var creating: Bool
+        /// 3.0's thread worker: the running turn's steps stay in the rows.
+        var worker: Bool
     }
 
     struct Derived {

@@ -25,6 +25,7 @@ export const presetSchema = z.object({
     md: z.string().min(1).max(24_000),
   }).strict()).max(4).optional(),
   prepared: z.object({
+    intro: z.enum(["read", "told"]).optional(),
     profile: z.array(z.object({ label: z.string().trim().min(1).max(40), value: z.string().max(600) }).strict()).max(12),
     team: z.array(z.object({ name: z.string().trim().min(1).max(40), job: z.string().trim().min(1).max(240) }).strict()).max(8),
     firstJob: z.object({ title: z.string().trim().min(1).max(80), prompt: z.string().trim().min(1).max(4000) }).strict().optional(),

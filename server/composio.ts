@@ -148,6 +148,13 @@ interface IntegrationContext {
   /** native read-only WhatsApp tools (whatsapp-service.ts) ride the same
    * bridge and the same per-bot grant; they work without a Composio key */
   whatsappNative?: boolean;
+  /** 3.0 cards: connect asks carry a reason, WhatsApp links in the chat and
+   * an expired sign-in comes back as a reconnect card */
+  v3Cards?: boolean;
+  /** 3.0 cards: native WhatsApp is on but nothing is linked yet. The bridge
+   * still mounts (with only its own connect tool) so the bot can show the
+   * QR card in the chat. Ignored unless v3Cards. */
+  whatsappLinkable?: boolean;
 }
 
 let managedBrokerAccess: { url: string; token: string } | null | undefined;
@@ -544,7 +551,7 @@ export async function mcpIntegration(
   context: IntegrationContext,
 ): Promise<ComposioMcpIntegration | null> {
   const composioReady = configured(cfg);
-  if (!composioReady && !context.whatsappNative) return null;
+  if (!composioReady && !context.whatsappNative && !(context.v3Cards && context.whatsappLinkable)) return null;
   return {
     command: process.execPath,
     args: [SPAWNED_PROXIES.connectors],
@@ -561,6 +568,7 @@ export async function mcpIntegration(
       } : {}),
       ...(context.whatsappNative ? { OMB_WHATSAPP_NATIVE: "1" } : {}),
       OMB_WHATSAPP_REPLIES: context.whatsappReplies ? "1" : "0",
+      ...(context.v3Cards ? { OMB_V3_CARDS: "1" } : {}),
       OMB_HARNESS_URL: context.harnessUrl,
       // Distinct from the agents proxy token: Codex flattens mounted MCP env
       // variables into one process environment, so a shared name would let

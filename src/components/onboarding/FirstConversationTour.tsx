@@ -11,6 +11,7 @@ import { currentStep } from "@/lib/guided-tour";
 import { anchorFor, nextSpotlight, placementFor, tourComplete, type ChatObservation, type SpotlightId } from "@/lib/first-conversation";
 import { t } from "@/lib/i18n";
 import type { MausState } from "@/lib/mascot";
+import { useV3 } from "@/lib/v3";
 import { api, useStore, useStreaming } from "@/state/store";
 import { Spotlight } from "./Spotlight";
 
@@ -25,6 +26,8 @@ export function FirstConversationTour() {
   const { state, dispatch } = useStore();
   const { streaming } = useStreaming();
   const remoteClient = window.ogb?.remoteClient?.active === true;
+  // 3.0: the bot points at these cards itself (v3/Teach)
+  const v3 = useV3();
   const record = state.config?.onboarding;
   // the guided tour covers the composer and the model chip; this watcher
   // only explains the two cards that appear on their own
@@ -44,6 +47,7 @@ export function FirstConversationTour() {
   }, [busy]);
 
   const eligible =
+    !v3 &&
     !remoteClient &&
     record?.marketerAssignment?.botId !== state.selectedId &&
     !state.welcomeOpen &&

@@ -72,6 +72,28 @@ extension RealtimeVoice {
             + "Do not introduce yourself. What you finished: \(result.isEmpty ? "the job they asked for" : result)"
     }
 
+    /// How a call opens when the bot rang back because work given on an
+    /// earlier call settled: the result first, then an offer of details.
+    public static func jobDoneOpener(result: String) -> String {
+        let result = String(result.trimmingCharacters(in: .whitespacesAndNewlines).prefix(asyncUpdateLimit))
+        return "You rang them back because work they gave you on an earlier call has settled, and they just picked up. "
+            + "Open with the result in one or two plain spoken sentences, then ask \"want the details?\". "
+            + "If it stopped, say so plainly and why. Do not introduce yourself. "
+            + "The result: \(result.isEmpty ? "the work they asked for is done" : result)"
+    }
+
+    /// What a live call is told when a voice job settles mid-call.
+    public static func settledUpdate(botName: String, result: String) -> String {
+        let result = result.trimmingCharacters(in: .whitespacesAndNewlines)
+        return "Work they gave you on a call just came back from \(botName): \(result.isEmpty ? "it's done." : result) "
+            + "Tell them the result in a sentence when there's a natural pause, then ask if they want the details."
+    }
+
+    /// The opener for a picked-up ring: a call-back leads with its result.
+    public static func opener(for ring: VoiceRing) -> String {
+        ring.purpose == VoiceRing.jobDone ? jobDoneOpener(result: ring.reason) : ringOpener(reason: ring.reason)
+    }
+
     /// How a call opens when the caller picked up a bot's ring.
     public static func ringOpener(reason: String) -> String {
         let reason = String(reason.trimmingCharacters(in: .whitespacesAndNewlines).prefix(asyncUpdateLimit))
@@ -91,15 +113,20 @@ public struct VoiceRing: Codable, Hashable, Identifiable, Sendable {
     /// The computer rang a phone that had the app on screen in-app only, with
     /// no VoIP push: ring here now instead of waiting for CallKit.
     public var inApp: Bool
+    /// Why the computer rang: `job_done` is a call-back with a voice job's
+    /// result. Older computers send none.
+    public var purpose: String?
 
+    public static let jobDone = "job_done"
     public var id: String { ringId }
 
-    public init(ringId: String, botId: String, threadId: String?, reason: String, inApp: Bool = false) {
+    public init(ringId: String, botId: String, threadId: String?, reason: String, inApp: Bool = false, purpose: String? = nil) {
         self.ringId = ringId
         self.botId = botId
         self.threadId = threadId
         self.reason = reason
         self.inApp = inApp
+        self.purpose = purpose
     }
 
     public init(from decoder: any Decoder) throws {
@@ -109,6 +136,7 @@ public struct VoiceRing: Codable, Hashable, Identifiable, Sendable {
         threadId = try c.decodeIfPresent(String.self, forKey: .threadId).flatMap { $0.isEmpty ? nil : $0 }
         reason = try c.decodeIfPresent(String.self, forKey: .reason) ?? ""
         inApp = try c.decodeIfPresent(Bool.self, forKey: .inApp) ?? false
+        purpose = try c.decodeIfPresent(String.self, forKey: .purpose).flatMap { $0.isEmpty ? nil : $0 }
         guard !ringId.isEmpty, !botId.isEmpty else {
             throw DecodingError.dataCorruptedError(forKey: .ringId, in: c, debugDescription: "empty ring")
         }
@@ -142,7 +170,8 @@ public enum VoicePush: Equatable, Sendable {
                   let botId = payload["botId"], !botId.isEmpty else { return nil }
             self = .ring(VoiceRing(ringId: ringId, botId: botId,
                                    threadId: payload["threadId"].flatMap { $0.isEmpty ? nil : $0 },
-                                   reason: payload["reason"] ?? ""))
+                                   reason: payload["reason"] ?? "",
+                                   purpose: payload["purpose"].flatMap { $0.isEmpty ? nil : $0 }))
         default:
             return nil
         }

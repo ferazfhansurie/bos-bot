@@ -18,6 +18,8 @@ struct GlyphMark: View {
     var animated = false
     /// A turn that just finished plays `finished` for a beat, then settles.
     var completedTurnID: String? = nil
+    /// What the mascot wears; nil draws exactly the bare face.
+    var accessories: MascotAccessories? = nil
 
     @Environment(\.colorScheme) private var scheme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -56,11 +58,11 @@ struct GlyphMark: View {
     }
 
     private func canvas(at now: Date?) -> some View {
-        let state = shown, color = color, bodyId = bodyId, scheme = scheme, changedAt = changedAt
+        let state = shown, color = color, bodyId = bodyId, scheme = scheme, changedAt = changedAt, accessories = accessories
         return Canvas { context, canvas in
             let slot = CGRect(x: canvas.width / 4, y: canvas.height / 4, width: canvas.width / 2, height: canvas.height / 2)
             Self.draw(in: &context, slot: slot, color: color, bodyId: bodyId, state: state,
-                      scheme: scheme, now: now, changedAt: changedAt)
+                      scheme: scheme, now: now, changedAt: changedAt, accessories: accessories)
         }
     }
 
@@ -80,23 +82,41 @@ struct GlyphMark: View {
     }
 
     /// One frame. `slot` is where the body sits (the size the caller asked
-    /// for); the accent may land outside it. `now` nil is a still frame.
+    /// for); the accent may land outside it. `now` nil is a still frame: no
+    /// sheet motion, no blink, no glance.
     static func draw(in context: inout GraphicsContext, slot: CGRect, color: String, bodyId: String?,
                      state: GlyphFaceState, scheme: ColorScheme, now: Date? = nil, changedAt: Date? = nil,
-                     look: GlyphLook = GlyphLook()) {
+                     look: GlyphLook = GlyphLook(), accessories: MascotAccessories? = nil) {
         let layout = GlyphFaces.layout
         let paint = colors(color, scheme: scheme)
-        let base = GlyphFaces.face(state)
-        let face = (left: look.left ?? base.left, right: look.right ?? base.right,
-                    accent: look.accent ?? (look.hidesAccent ? nil : base.accent),
-                    anchor: look.accent != nil ? look.anchor : base.anchor)
+        let resolved = look.resolve(state)
         let side = min(slot.width, slot.height)
 
-        // The body, from the same 100-box catalog the flat mark draws.
         let k = side / 100
         let outline = FlatMascotBodies.outline(bodyId)
-        var bodyContext = context
-        bodyContext.translateBy(x: slot.midX - side / 2, y: slot.midY - side / 2)
+        let origin = CGPoint(x: slot.midX - side / 2, y: slot.midY - side / 2)
+        // Proportions are in body diameters, measured from the body centre.
+        let bounds = outline.boundingBoxOfPath
+        let diameter = min(bounds.width, bounds.height) * k
+        let centre = CGPoint(x: origin.x + bounds.midX * k, y: origin.y + bounds.midY * k)
+        // Glyph eyes span almost half the body, wider than the classic eyes
+        // the catalog's faceX was tuned for, so they sit on the body's mass
+        // instead: a bean's notch would otherwise swallow the left eye.
+        let mass = massCentre[FlatMascotBodies.body(bodyId).id] ?? CGPoint(x: bounds.midX, y: bounds.midY)
+        let faceCentre = CGPoint(x: origin.x + mass.x * k, y: origin.y + mass.y * k)
+
+        let t = now.map { $0.timeIntervalSinceReferenceDate } ?? 0
+        let sinceChange = now.flatMap { now in changedAt.map { now.timeIntervalSince($0) } } ?? .infinity
+        // the sheet's motion starts when the face appears, like a CSS class mounting
+        let motion = now == nil ? GlyphFaceArt.still
+            : GlyphMotionCurves.frames(resolved.motion, at: sinceChange.isFinite ? sinceChange : t)
+
+        // The whole body hops, squishes or taps about the point it stands on.
+        var root = context
+        GlyphFaceArt.apply(motion.body, to: &root, about: CGPoint(x: centre.x, y: origin.y + bounds.maxY * k), unit: diameter / 64)
+
+        var bodyContext = root
+        bodyContext.translateBy(x: origin.x, y: origin.y)
         bodyContext.scaleBy(x: k, y: k)
         bodyContext.fill(Path(outline), with: .color(paint.body))
         // a white bot on a light screen (or a near-black one on dark) still
@@ -105,53 +125,35 @@ struct GlyphMark: View {
             bodyContext.stroke(Path(outline), with: .color(paint.ink.opacity(0.22)), lineWidth: max(1, side / 52) / k)
         }
 
-        // Proportions are in body diameters, measured from the body centre.
-        let bounds = outline.boundingBoxOfPath
-        let diameter = min(bounds.width, bounds.height) * k
-        let centre = CGPoint(x: slot.midX - side / 2 + bounds.midX * k, y: slot.midY - side / 2 + bounds.midY * k)
-        // Glyph eyes span almost half the body, wider than the classic eyes
-        // the catalog's faceX was tuned for, so they sit on the body's mass
-        // instead: a bean's notch would otherwise swallow the left eye.
-        let mass = massCentre[FlatMascotBodies.body(bodyId).id] ?? CGPoint(x: bounds.midX, y: bounds.midY)
-        let faceCentre = CGPoint(x: slot.midX - side / 2 + mass.x * k, y: slot.midY - side / 2 + mass.y * k)
+        // Eyes: a quick squash when the face changes, a random blink now and
+        // then (each bot on its own seed), and a glance while it rests.
+        let swap = sinceChange < 0.12 ? max(0.15, abs(1 - 2 * sinceChange / 0.12)) : 1
+        let seed = GlyphBlink.seed(color + (bodyId ?? ""))
+        let blinks = now != nil && sinceChange > 0.4 && look.eyeSquash == 1 && !resolved.skipsBlink
+        let blink = blinks ? GlyphBlink.openness(at: t, seed: seed) : 1
+        let glance = now != nil && resolved.rests && look.eyeShift == .zero ? GlyphIdleGaze.offset(at: t, seed: seed) : .zero
+        let gaze = CGSize(width: resolved.gaze.width + look.eyeShift.width + glance.width,
+                          height: resolved.gaze.height + look.eyeShift.height + glance.height)
+        GlyphFaceArt.drawEyes(GlyphFaceArt.Eyes(left: resolved.left, right: resolved.right, gaze: gaze,
+                                                squash: swap * blink * look.eyeSquash),
+                              in: root, faceCentre: faceCentre, diameter: diameter, ink: paint.ink,
+                              motion: motion.eyes, eachEye: motion.eachEye)
 
-        let t = now.map { $0.timeIntervalSinceReferenceDate } ?? 0
-        let sinceChange = now.flatMap { now in changedAt.map { now.timeIntervalSince($0) } } ?? .infinity
-
-        // Eyes: a quick squash when the face changes, and a blink to `- -`.
-        let squash = (sinceChange < 0.12 ? max(0.15, abs(1 - 2 * sinceChange / 0.12)) : 1) * look.eyeSquash
-        // each bot blinks on its own beat, not the whole list at once
-        let beat = Double(color.unicodeScalars.reduce(0) { $0 &+ Int($1.value) } % 17) / 4
-        let blinking = now != nil && sinceChange > 0.4 && (t + beat).truncatingRemainder(dividingBy: 4.3) < 0.11
-        let eyeSide = layout.eyeBox * diameter
-        let eyeScale = eyeSide / GlyphFaces.viewBox
-        let eyeStroke = max(GlyphFaces.stroke, layout.minStrokePx / eyeScale)
-        var eyes = context
-        eyes.translateBy(x: faceCentre.x, y: faceCentre.y)
-        eyes.rotate(by: .degrees(GlyphFaces.tiltDegrees))
-        for (glyph, x) in [(face.left, -layout.eyeX), (face.right, layout.eyeX)] {
-            var eye = eyes
-            eye.translateBy(x: (x + look.eyeShift.width) * diameter, y: (layout.eyeY + look.eyeShift.height) * diameter)
-            eye.scaleBy(x: eyeScale, y: eyeScale * squash)
-            eye.translateBy(x: -GlyphFaces.viewBox / 2, y: -GlyphFaces.viewBox / 2)
-            eye.stroke(Path(glyphPath(blinking ? "dash" : glyph)), with: .color(paint.ink),
-                       style: StrokeStyle(lineWidth: eyeStroke, lineCap: .round, lineJoin: .round))
+        // Accessories ride the same face (glasses follow a glance), over the
+        // eyes and under the accent, like the desktop's.
+        if let accessories, !accessories.isEmpty {
+            MascotAccessoryArt.draw(accessories, in: &root,
+                                    box: CGRect(x: origin.x, y: origin.y, width: side, height: side),
+                                    bodyId: bodyId, color: color,
+                                    face: MascotFace(centre: mass, diameter: min(bounds.width, bounds.height), shift: gaze))
         }
 
         // The accent carries the mood at a glance; under the minimum size it
         // is noise, so small faces show the eyes alone.
-        guard side >= layout.accentMinSize, let accent = face.accent, let anchor = face.anchor,
-              let place = GlyphFaces.placement(anchor) else { return }
+        guard side >= layout.accentMinSize, let accent = resolved.accent, let anchor = resolved.anchor else { return }
         let pop = sinceChange < 0.22 ? easeOutBack(sinceChange / 0.22) : 1
-        let float = now == nil || anchor == .split ? 0 : sin(t * 2 * .pi / 1.8) * 0.025 * diameter
-        let boxSide = place.box * diameter * pop
-        let boxScale = boxSide / GlyphFaces.viewBox
-        guard boxScale > 0 else { return }
-        var mark = context
-        mark.translateBy(x: centre.x + place.x * diameter - boxSide / 2, y: centre.y + place.y * diameter - boxSide / 2 + float)
-        mark.scaleBy(x: boxScale, y: boxScale)
-        mark.stroke(Path(glyphPath(accent)), with: .color(paint.accent),
-                    style: StrokeStyle(lineWidth: max(place.stroke, layout.minStrokePx / boxScale), lineCap: .round, lineJoin: .round))
+        GlyphFaceArt.drawAccent(accent, anchor: anchor, in: root, centre: centre, diameter: diameter,
+                                color: paint.accent, body: color, pop: CGFloat(pop), motion: motion.accent)
     }
 
     /// A glyph from the shared table, or one of the phone's own mood marks.
@@ -173,16 +175,7 @@ struct GlyphMark: View {
     }()
 
     /// Area centroid of every body in its 100 box, sampled once.
-    static let massCentre: [String: CGPoint] = Dictionary(uniqueKeysWithValues: FlatMascotBodies.all.map { body in
-        let outline = FlatMascotBodies.outline(body.id)
-        var sum = CGPoint.zero, count = 0.0
-        for y in stride(from: 1.0, to: 100, by: 2) {
-            for x in stride(from: 1.0, to: 100, by: 2) where outline.contains(CGPoint(x: x, y: y)) {
-                sum.x += x; sum.y += y; count += 1
-            }
-        }
-        return (body.id, count > 0 ? CGPoint(x: sum.x / count, y: sum.y / count) : CGPoint(x: 50, y: 50))
-    })
+    static var massCentre: [String: CGPoint] { MascotFace.massCentres }
 
     private static func easeOutBack(_ t: Double) -> Double {
         let c = 1.7, u = min(max(t, 0), 1) - 1
@@ -190,9 +183,11 @@ struct GlyphMark: View {
     }
 }
 
-/// A face drawn off its state's table: other eye glyphs, another accent, the
-/// eyes shifted (a glance, in body diameters, before the tilt) or squashed (a
-/// blink). The chat list's idle faces use it; everything else draws plain.
+/// A face drawn off its state's table: another whole table face, other eye
+/// glyphs (a ring when it notices something), another accent, the eyes
+/// shifted (a glance, in body diameters, before the tilt) or squashed (a
+/// blink sprung from outside). The chat list's idle faces and the thread
+/// mascot use it; everything else draws plain.
 struct GlyphLook: Equatable {
     var left: String?
     var right: String?
@@ -201,6 +196,119 @@ struct GlyphLook: Equatable {
     var hidesAccent = false
     var eyeShift: CGSize = .zero
     var eyeSquash: CGFloat = 1
+    /// A table face worn instead of the state's: its layered eyes, gaze,
+    /// accent and motion.
+    var face: GlyphFaceState?
+
+    /// What to draw for `state` with this look on it.
+    func resolve(_ state: GlyphFaceState) -> GlyphFaceArt.Resolved {
+        let shown = face ?? state
+        let base = GlyphFaces.face(shown)
+        let swapped = left != nil || right != nil
+        return GlyphFaceArt.Resolved(
+            left: left.map { [GlyphFaceArt.part($0)] } ?? base.leftParts,
+            right: right.map { [GlyphFaceArt.part($0)] } ?? base.rightParts,
+            accent: accent ?? (hidesAccent ? nil : base.accent),
+            anchor: accent != nil ? anchor : base.anchor,
+            gaze: swapped ? .zero : base.gazeOffset,
+            motion: swapped ? GlyphMotion() : base.motion,
+            skipsBlink: !swapped && GlyphMotionCurves.skipsBlink(base),
+            rests: !swapped && shown == .idle)
+    }
+}
+
+/// The eyes and accent of a glyph face, drawn the same way by GlyphMark and
+/// LiveMascot: layered eye parts at their weights, the face's gaze inside
+/// the tilt, and the sheet's motion (src/components/GlyphFace.tsx).
+enum GlyphFaceArt {
+    struct Resolved {
+        var left: [GlyphEyePart]
+        var right: [GlyphEyePart]
+        var accent: String?
+        var anchor: GlyphAccentAnchor?
+        /// in body diameters, inside the tilt
+        var gaze: CGSize
+        var motion: GlyphMotion
+        var skipsBlink: Bool
+        /// a plain resting face, which may glance about on its own
+        var rests: Bool
+    }
+
+    struct Eyes {
+        var left: [GlyphEyePart]
+        var right: [GlyphEyePart]
+        /// in body diameters, inside the tilt
+        var gaze: CGSize
+        /// blink and swap squash, about the face centre
+        var squash: CGFloat = 1
+        /// each eye's own size: a pose's attention, a voice's stretch
+        var scale = CGSize(width: 1, height: 1)
+    }
+
+    typealias Frames = (eyes: GlyphMotionFrame, eachEye: GlyphMotionFrame, accent: GlyphMotionFrame, body: GlyphMotionFrame)
+    static let still: Frames = (.identity, .identity, .identity, .identity)
+
+    /// A whole eye from one glyph; a dot gets the resting dot's weight.
+    static func part(_ glyph: String) -> GlyphEyePart {
+        GlyphEyePart(glyph: glyph, weight: glyph == "dot" ? GlyphFaces.face(.idle).leftParts[0].weight : 1)
+    }
+
+    /// Applies a sheet motion about `pivot`; distances are sheet px, `unit` apart.
+    static func apply(_ frame: GlyphMotionFrame, to context: inout GraphicsContext, about pivot: CGPoint, unit: CGFloat) {
+        guard !frame.isIdentity else { return }
+        context.translateBy(x: pivot.x + frame.dx * unit, y: pivot.y + frame.dy * unit)
+        if frame.rotate != 0 { context.rotate(by: .degrees(Double(frame.rotate))) }
+        context.scaleBy(x: frame.sx, y: frame.sy)
+        context.translateBy(x: -pivot.x, y: -pivot.y)
+        if frame.opacity != 1 { context.opacity *= Double(frame.opacity) }
+    }
+
+    static func drawEyes(_ eyes: Eyes, in context: GraphicsContext, faceCentre: CGPoint, diameter: CGFloat, ink: Color,
+                         motion: GlyphMotionFrame = .identity, eachEye: GlyphMotionFrame = .identity) {
+        let layout = GlyphFaces.layout
+        var pair = context
+        // the sheet moves the eyes in screen space about the face at eye
+        // height, then tilts them; the blink squashes about the face centre
+        apply(motion, to: &pair, about: CGPoint(x: faceCentre.x, y: faceCentre.y + layout.eyeY * diameter), unit: diameter / 64)
+        pair.translateBy(x: faceCentre.x, y: faceCentre.y)
+        pair.rotate(by: .degrees(GlyphFaces.tiltDegrees))
+        pair.scaleBy(x: 1, y: max(0.02, eyes.squash))
+        pair.translateBy(x: eyes.gaze.width * diameter, y: eyes.gaze.height * diameter)
+        let eyeScale = layout.eyeBox * diameter / GlyphFaces.viewBox
+        let minStroke = layout.minStrokePx / eyeScale
+        for (parts, x) in [(eyes.left, -layout.eyeX), (eyes.right, layout.eyeX)] {
+            var eye = pair
+            eye.translateBy(x: x * diameter, y: layout.eyeY * diameter)
+            // spin, twinkle and beat turn each eye about its own centre
+            if eachEye.rotate != 0 { eye.rotate(by: .degrees(Double(eachEye.rotate))) }
+            eye.scaleBy(x: eyeScale * eachEye.sx * eyes.scale.width, y: eyeScale * eachEye.sy * eyes.scale.height)
+            eye.translateBy(x: -GlyphFaces.viewBox / 2, y: -GlyphFaces.viewBox / 2)
+            for part in parts {
+                eye.stroke(Path(GlyphMark.glyphPath(part.glyph)), with: .color(ink),
+                           style: StrokeStyle(lineWidth: max(GlyphFaces.stroke * part.weight, minStroke), lineCap: .round, lineJoin: .round))
+            }
+        }
+    }
+
+    /// The accent off the body, popped in by `pop`, moving to its motion. A
+    /// cheek accent sits on the body, so it takes the colour opposite the eyes.
+    static func drawAccent(_ glyph: String, anchor: GlyphAccentAnchor, in context: GraphicsContext, centre: CGPoint,
+                           diameter: CGFloat, color: Color, body: String, pop: CGFloat, motion: GlyphMotionFrame = .identity) {
+        guard let place = GlyphFaces.placement(anchor), pop > 0.001, motion.opacity > 0.001 else { return }
+        let boxScale = place.box * diameter / GlyphFaces.viewBox
+        guard boxScale > 0 else { return }
+        var mark = context
+        apply(motion, to: &mark, about: CGPoint(x: centre.x + place.x * diameter, y: centre.y + place.y * diameter), unit: diameter / 64)
+        mark.translateBy(x: centre.x + place.x * diameter, y: centre.y + place.y * diameter)
+        mark.scaleBy(x: boxScale * pop, y: boxScale * pop)
+        mark.translateBy(x: -GlyphFaces.viewBox / 2, y: -GlyphFaces.viewBox / 2)
+        let paint = place.onBodyAlpha.map { alpha in
+            (GlyphFaces.ink(GlyphFaces.resolveColor(body)) == "#000000" ? Color.white : Color.black).opacity(Double(alpha))
+        } ?? color
+        mark.stroke(Path(GlyphMark.glyphPath(glyph)), with: .color(paint),
+                    style: StrokeStyle(lineWidth: max(place.stroke, GlyphFaces.layout.minStrokePx / (boxScale * pop)),
+                                       lineCap: .round, lineJoin: .round))
+    }
 }
 
 extension MausState {

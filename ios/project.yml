@@ -8,6 +8,10 @@
 # in Xcode by hand, add the App/ folder, and add the local CompanionCore
 # package — the Info.plist keys below are the part that is easy to miss.
 name: BosBot
+# The CarPlay entitlement, only once Apple has granted it (see carplay.yml).
+include:
+  - path: carplay.yml
+    enable: ${BOS_CARPLAY}
 options:
   bundleIdPrefix: com.aihlete
   deploymentTarget:
@@ -50,8 +54,8 @@ targets:
       base:
         DEVELOPMENT_TEAM: 4W9658Z948
         PRODUCT_BUNDLE_IDENTIFIER: com.aihlete.aios
-        MARKETING_VERSION: "2.2.1"
-        CURRENT_PROJECT_VERSION: "147"
+        MARKETING_VERSION: "3.0.0"
+        CURRENT_PROJECT_VERSION: "158"
         SWIFT_VERSION: "5.9"
         TARGETED_DEVICE_FAMILY: "1,2"
         # The catalog lives in App/, which is already a source path.
@@ -77,6 +81,7 @@ targets:
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         NSUserActivityTypes:
           - INSendMessageIntent
+          - INStartCallIntent
         LSApplicationCategoryType: public.app-category.productivity
         ITSAppUsesNonExemptEncryption: false
         OpenMausKeychainAccessGroup: $(AppIdentifierPrefix)group.com.aihlete.aios.shared
@@ -122,6 +127,16 @@ targets:
         # no "audio": app review rejected it (2.5.4) since the app plays no
         # persistent background audio; a call started in-app ends when locked
         UIBackgroundModes: [voip]
+        # BOS on the car screen (App/CarPlay). SwiftUI keeps its own window
+        # scene; this adds only the CarPlay one, which connects only in a
+        # build signed with the CarPlay entitlement (carplay.yml).
+        UIApplicationSceneManifest:
+          UIApplicationSupportsMultipleScenes: true
+          UISceneConfigurations:
+            CPTemplateApplicationSceneSessionRoleApplication:
+              - UISceneClassName: CPTemplateApplicationScene
+                UISceneConfigurationName: BOS CarPlay
+                UISceneDelegateClassName: CarPlaySceneDelegate
         NSMicrophoneUsageDescription: >-
           BOS listens while you dictate a message to a bot or talk
           to one on a voice call.
@@ -186,8 +201,8 @@ targets:
       base:
         DEVELOPMENT_TEAM: 4W9658Z948
         PRODUCT_BUNDLE_IDENTIFIER: com.aihlete.aios.notification-content
-        MARKETING_VERSION: "2.2.1"
-        CURRENT_PROJECT_VERSION: "147"
+        MARKETING_VERSION: "3.0.0"
+        CURRENT_PROJECT_VERSION: "158"
         SWIFT_VERSION: "5.9"
         SWIFT_ACTIVE_COMPILATION_CONDITIONS: "$(inherited) WIDGET_EXTENSION"
         APPLICATION_EXTENSION_API_ONLY: YES
@@ -213,6 +228,7 @@ targets:
               - OPENMAUS_UPDATE
               - OPENMAUS_APPROVAL
               - VOICE_WORK_DONE
+              - BOS_ANSWER_PERMISSION
             UNNotificationExtensionInitialContentSizeRatio: 0.36
             UNNotificationExtensionUserInteractionEnabled: true
 
@@ -228,8 +244,8 @@ targets:
       base:
         DEVELOPMENT_TEAM: 4W9658Z948
         PRODUCT_BUNDLE_IDENTIFIER: com.aihlete.aios.notification-service
-        MARKETING_VERSION: "2.2.1"
-        CURRENT_PROJECT_VERSION: "147"
+        MARKETING_VERSION: "3.0.0"
+        CURRENT_PROJECT_VERSION: "158"
         SWIFT_VERSION: "5.9"
         APPLICATION_EXTENSION_API_ONLY: YES
         SKIP_INSTALL: true
@@ -265,8 +281,8 @@ targets:
       base:
         DEVELOPMENT_TEAM: 4W9658Z948
         PRODUCT_BUNDLE_IDENTIFIER: com.aihlete.aios.share
-        MARKETING_VERSION: "2.2.1"
-        CURRENT_PROJECT_VERSION: "147"
+        MARKETING_VERSION: "3.0.0"
+        CURRENT_PROJECT_VERSION: "158"
         SWIFT_VERSION: "5.9"
         TARGETED_DEVICE_FAMILY: "1,2"
         APPLICATION_EXTENSION_API_ONLY: YES
@@ -327,8 +343,8 @@ targets:
       base:
         DEVELOPMENT_TEAM: 4W9658Z948
         PRODUCT_BUNDLE_IDENTIFIER: com.aihlete.aios.widgets
-        MARKETING_VERSION: "2.2.1"
-        CURRENT_PROJECT_VERSION: "147"
+        MARKETING_VERSION: "3.0.0"
+        CURRENT_PROJECT_VERSION: "158"
         SWIFT_VERSION: "5.9"
         SWIFT_ACTIVE_COMPILATION_CONDITIONS: "$(inherited) WIDGET_EXTENSION"
         TARGETED_DEVICE_FAMILY: "1,2"

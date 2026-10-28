@@ -5,10 +5,12 @@ final class EmptyMascotBrainTests: XCTestCase {
     func testEveryMoodDrawsRealGlyphs() {
         for mood in MascotMood.allCases {
             let face = EmptyMascotBrain.face(mood)
-            for id in [face.left, face.right] + [face.accent].compactMap({ $0 }) {
+            for id in (face.leftParts + face.rightParts).map(\.glyph) + [face.accent].compactMap({ $0 }) {
                 XCTAssertFalse(EmptyMascotBrain.path(id).isEmpty, "\(mood) uses missing glyph \(id)")
                 let box = EmptyMascotBrain.path(id).boundingBoxOfPath
-                XCTAssertTrue(CGRect(x: -0.5, y: -0.5, width: 25, height: 25).contains(box), "\(id) leaves the 24 box")
+                // brows sit above the eye, so they may rise out of the top of the box
+                let top: CGFloat = id.hasPrefix("brow") ? -4 : -0.5
+                XCTAssertTrue(CGRect(x: -0.5, y: top, width: 25, height: 24.5 - top).contains(box), "\(id) leaves the 24 box")
             }
             XCTAssertEqual(face.accent == nil, face.anchor == nil, "\(mood) accent without anchor")
         }
@@ -89,7 +91,14 @@ final class EmptyMascotBrainTests: XCTestCase {
 
     func testEyesAreTheHeadersGlyphEyes() {
         // at rest it wears the brand's idle face, the same eyes as the header
-        XCTAssertEqual(EmptyMascotBrain.face(.idle).left, GlyphFaces.face(.idle).left)
+        XCTAssertEqual(EmptyMascotBrain.face(.idle).leftParts, GlyphFaces.face(.idle).leftParts)
+        XCTAssertEqual(EmptyMascotBrain.face(.idle).left, "dot")
+        // B eyes: no - - and no ^ ^ anywhere on the empty thread
+        for mood in MascotMood.allCases {
+            let glyphs = (EmptyMascotBrain.face(mood).leftParts + EmptyMascotBrain.face(mood).rightParts).map(\.glyph)
+            XCTAssertFalse(glyphs.contains("caret"), "\(mood)")
+            if mood != .suspicious { XCTAssertFalse(glyphs.contains("dash"), "\(mood)") }
+        }
         for mood in MascotMood.allCases {
             let face = EmptyMascotBrain.face(mood)
             XCTAssertFalse(EmptyMascotBrain.path(face.left).isEmpty, "\(mood)")

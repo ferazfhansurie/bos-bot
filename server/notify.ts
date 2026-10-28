@@ -1,7 +1,9 @@
 // Notifications — what is worth interrupting someone for.
 //
-// `BotRecord.notifications` has been a switch in the settings panel that
-// nothing read. This is the thing that reads it. The rule it encodes is
+// `BotRecord.notifications` is the owner's per-bot mute (false = muted). It
+// is the owner's setting, kept on the owner's BOS: a bot cannot propose it
+// (profile-requests.ts refuses the key). This is the thing that reads it.
+// The rule it encodes is
 // small and deliberate: a bot that is *blocked on you* is worth a buzz, and
 // a bot that *finished* is worth one if you asked for it; everything else a
 // bot does while it works is not.
@@ -60,6 +62,16 @@ export function blockedTarget(
   return { threadId: room.threadId, group: { id: room.id, name: room.name } };
 }
 
+/** The kinds that mean a bot cannot go on without a person: these reach the
+ * owner even when the bot is muted. */
+export const BLOCKED_ON_YOU: ReadonlySet<NotifyKind> = new Set<NotifyKind>(["approval", "question", "takeover"]);
+
+/** Whether the owner muted this bot. Absent means not muted: older bot
+ * records predate the switch. */
+export function botMuted(bot: Pick<NotifyBot, "notifications">): boolean {
+  return bot.notifications === false;
+}
+
 /** Build the frame for one event, or null when it should stay quiet.
  *
  * Kept pure and separate from the event fold so the policy — which is the
@@ -71,10 +83,11 @@ export function buildNotification(
   detail: string,
   extra?: { avatarUrl?: string; group?: { id: string; name: string }; requestId?: string; messageId?: string },
 ): Notification | null {
-  // The toggle means what it says: off is off, including for approvals.
-  // A bot whose notifications you turned off can still block waiting for
-  // you — that is the choice you made, and the chat still shows the card.
-  if (bot.notifications === false) return null;
+  // Off means muted, not deaf: a muted bot's news (it finished, failed, hit
+  // a problem, ran a routine) stays in the sidebar with no banner and no
+  // push. A muted bot that is blocked on you still buzzes, because silence
+  // there stalls work the owner asked for and nothing else will surface it.
+  if (botMuted(bot) && !BLOCKED_ON_YOU.has(kind)) return null;
 
   const body = summarize(detail);
   // A bot working in a room is not "Scout" to whoever reads the banner — it
@@ -142,10 +155,13 @@ export function buildVoiceWorkDone(
  * same identities the live frame has, flattened into the APNs payload. A
  * voice_work_done push also names its type and call, the data the phone
  * acts on: `{ type, botId, threadId, callId, messageId }`. */
-export function ownerPushTarget(notification: Notification): PushTarget {
+export function ownerPushTarget(notification: Notification, opts: { answerable?: boolean } = {}): PushTarget {
   // The digest is from no bot: no sender, so no communication-style push.
   if (notification.kind === "digest") return { kind: "digest" };
   return {
+    // bos bot 3.0: a tool approval the phone may answer from the banner
+    // (allow behind Face ID, deny). Older phones ignore the field.
+    ...(opts.answerable && notification.kind === "approval" && notification.requestId ? { answer: "permission" } : {}),
     kind: notification.kind, botId: notification.botId, threadId: notification.threadId,
     senderId: `bot:${notification.botId}`, senderName: notification.title,
     ...(notification.requestId ? { requestId: notification.requestId } : {}),

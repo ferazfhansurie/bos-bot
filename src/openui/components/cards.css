@@ -1,0 +1,257 @@
+/* bos bot 3.0 cards (cards.tsx) and the v3 polish of the base components.
+   Nothing here can reach a flag-off page: the .iui-v3-* classes are only
+   drawn by the card components, which only the v3 library has, and the
+   polish block is scoped to :root[data-v3]. Surfaces are solid tokens
+   (--color-card where the skin has one), edges are a quiet solid hairline,
+   no gradients and no backdrop blur, so reduce transparency needs no
+   override. The rise-in is the only motion and reduced motion drops it. */
+
+.iui-v3-card,
+:root[data-v3] .bos-openui {
+  --iui-v3-surface: var(--color-card, var(--iui-canvas));
+  /* solid mixes, never alpha: they read the same on any bubble behind */
+  --iui-v3-edge: color-mix(in srgb, var(--iui-border) 72%, var(--iui-v3-surface));
+  --iui-v3-inset: color-mix(in srgb, var(--iui-ink) 4.5%, var(--iui-v3-surface));
+  --iui-v3-hover: color-mix(in srgb, var(--iui-ink) 7%, var(--iui-v3-surface));
+  --iui-v3-radius: 14px;
+  --iui-v3-radius-inner: 10px;
+}
+
+/* Shell */
+.iui-v3-card {
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  padding: 14px 16px;
+  border: 1px solid var(--iui-v3-edge);
+  border-radius: var(--iui-v3-radius);
+  background: var(--iui-v3-surface);
+  color: var(--iui-ink);
+  font-family: var(--iui-font);
+  font-size: 14px;
+  line-height: 20px;
+  text-align: start;
+  overflow-wrap: anywhere;
+}
+.iui-v3-card *, .iui-v3-card *::before, .iui-v3-card *::after { box-sizing: border-box; }
+
+@keyframes iui-v3-rise {
+  from { opacity: 0; transform: translateY(4px); }
+}
+.iui-v3-rise { animation: iui-v3-rise 160ms cubic-bezier(0.2, 0.7, 0.2, 1) both; }
+@media (prefers-reduced-motion: reduce) {
+  .iui-v3-rise { animation: none; }
+}
+:root[data-reduced-motion="true"] .iui-v3-rise { animation: none; }
+
+/* Head: icon, title over meta, a status pill on the right */
+.iui-v3-head { display: flex; align-items: flex-start; gap: 10px; min-width: 0; }
+.iui-v3-head-text { display: flex; flex: 1 1 auto; flex-direction: column; gap: 2px; min-width: 0; }
+.iui-v3-title { color: var(--iui-ink); font-size: 15px; line-height: 20px; font-weight: 600; letter-spacing: -0.1px; }
+.iui-v3-meta { color: var(--iui-muted); font-size: 12px; line-height: 16px; font-weight: 440; }
+.iui-v3-aside { display: flex; flex: none; align-items: center; gap: 6px; max-width: 45%; }
+.iui-v3-icon {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 9px;
+  background: var(--iui-v3-inset);
+  color: var(--iui-ink);
+}
+.iui-v3-card-person .iui-v3-icon { width: 36px; height: 36px; border-radius: 50%; }
+.iui-v3-avatar { font-size: 13px; line-height: 1; font-weight: 600; letter-spacing: 0.02em; font-variant-numeric: tabular-nums; }
+.iui-v3-body { margin: 0; color: var(--iui-ink); font-size: 14px; line-height: 20px; }
+.iui-v3-sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+
+/* Status pills: the base Badge colours at a card's scale */
+.iui-v3-card .iui-badge { min-height: 22px; padding: 2px 9px; font-size: 12px; line-height: 16px; max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
+
+/* Buttons: the base pills, a size down, and a tapped one stays readable */
+.iui-v3-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.iui-v3-card .iui-button { align-self: auto; min-height: 32px; padding: 6px 14px; font-size: 13px; line-height: 18px; white-space: normal; text-align: center; }
+.iui-v3-card .iui-button-outline { border-color: var(--iui-v3-edge); background: var(--iui-v3-surface); }
+.iui-v3-card .iui-button-outline:not(:disabled):hover { background: var(--iui-v3-hover); }
+.iui-v3-card .iui-button:disabled { cursor: default; opacity: 0.45; }
+.iui-v3-card .iui-button.is-picked:disabled { opacity: 1; }
+.iui-v3-card .iui-button-outline.is-picked { background: var(--iui-v3-inset); }
+
+/* Facts: label / value rows (Person), stacked inside a Compare column */
+.iui-v3-facts {
+  display: grid;
+  grid-template-columns: minmax(64px, max-content) minmax(0, 1fr);
+  gap: 6px 16px;
+  margin: 0;
+  font-size: 13px;
+  line-height: 18px;
+}
+.iui-v3-facts > div { display: contents; }
+.iui-v3-facts dt { color: var(--iui-muted); }
+.iui-v3-facts dd { min-width: 0; margin: 0; color: var(--iui-ink); font-variant-numeric: tabular-nums; }
+.iui-v3-facts.is-stacked { grid-template-columns: minmax(0, 1fr); gap: 8px; }
+.iui-v3-facts.is-stacked > div { display: flex; flex-direction: column; gap: 1px; }
+.iui-v3-facts.is-stacked dt { font-size: 12px; line-height: 16px; }
+
+/* Approval items */
+.iui-v3-items {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: var(--iui-v3-radius-inner);
+  background: var(--iui-v3-inset);
+  font-size: 13px;
+  line-height: 18px;
+  list-style: none;
+}
+.iui-v3-items > li { position: relative; padding-left: 14px; }
+.iui-v3-items > li::before { content: ""; position: absolute; top: 7px; left: 2px; width: 5px; height: 5px; border-radius: 50%; background: var(--iui-faint); }
+
+/* Choices */
+.iui-v3-options { display: flex; flex-wrap: wrap; gap: 8px; }
+.iui-v3-option {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  min-height: 34px;
+  padding: 7px 14px;
+  border: 1px solid var(--iui-v3-edge);
+  border-radius: 17px;
+  background: var(--iui-v3-surface);
+  color: var(--iui-ink);
+  font: inherit;
+  font-size: 13px;
+  line-height: 18px;
+  font-weight: 500;
+  text-align: start;
+  cursor: pointer;
+  transition: background-color 0.15s, border-color 0.15s;
+}
+.iui-v3-option > span { min-width: 0; overflow-wrap: anywhere; }
+.iui-v3-option > svg { flex: none; }
+.iui-v3-option:not(:disabled):hover { background: var(--iui-v3-hover); }
+.iui-v3-option.is-on { border-color: var(--iui-ink); background: var(--iui-v3-inset); font-weight: 600; }
+.iui-v3-option:disabled { cursor: default; }
+.iui-v3-option:disabled:not(.is-on) { opacity: 0.5; }
+.iui-v3-option:focus-visible, .iui-v3-card .iui-button:focus-visible { outline: 2px solid var(--iui-focus); outline-offset: 2px; }
+
+/* Steps */
+.iui-v3-steps { display: flex; flex-direction: column; margin: 0; padding: 0; list-style: none; }
+.iui-v3-steps > li { position: relative; display: grid; grid-template-columns: 20px minmax(0, 1fr); column-gap: 10px; padding-bottom: 12px; }
+.iui-v3-steps > li:last-child { padding-bottom: 0; }
+.iui-v3-steps > li:not(:last-child)::after { content: ""; position: absolute; top: 24px; bottom: 4px; left: 9.5px; width: 1px; background: var(--iui-v3-edge); }
+.iui-v3-step-mark {
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  border: 1.5px solid var(--iui-v3-edge);
+  border-radius: 50%;
+  background: var(--iui-v3-surface);
+  color: var(--iui-ink);
+}
+.iui-v3-steps .is-done .iui-v3-step-mark { border-color: transparent; background: var(--iui-badge-success-soft); color: var(--iui-badge-success); }
+.iui-v3-steps .is-failed .iui-v3-step-mark { border-color: transparent; background: var(--iui-badge-danger-soft); color: var(--iui-badge-danger); }
+.iui-v3-steps .is-doing .iui-v3-step-mark { border-color: var(--iui-ink); }
+.iui-v3-steps .is-doing .iui-v3-step-mark::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--iui-ink); }
+.iui-v3-step-body { display: flex; flex-direction: column; gap: 2px; min-width: 0; padding-top: 0; }
+.iui-v3-step-label { font-size: 14px; line-height: 20px; font-weight: 500; }
+.iui-v3-steps .is-todo .iui-v3-step-label { color: var(--iui-muted); font-weight: 440; }
+.iui-v3-steps .is-failed .iui-v3-step-label { color: var(--iui-badge-danger); }
+
+/* Receipt */
+.iui-v3-lines { display: flex; flex-direction: column; margin: 0; padding: 0; list-style: none; }
+.iui-v3-lines > li { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; padding: 8px 0; border-top: 1px solid var(--iui-v3-edge); }
+.iui-v3-lines > li:first-child { padding-top: 0; border-top: 0; }
+.iui-v3-lines > li:last-child { padding-bottom: 0; }
+.iui-v3-line-label { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.iui-v3-num { flex: none; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.iui-v3-totals { display: flex; flex-direction: column; gap: 4px; margin: 0; padding-top: 10px; border-top: 1px solid var(--iui-v3-edge); font-size: 13px; line-height: 18px; }
+.iui-v3-totals > div { display: flex; justify-content: space-between; gap: 12px; }
+.iui-v3-totals dt { color: var(--iui-muted); }
+.iui-v3-totals dd { margin: 0; }
+.iui-v3-totals .is-total { padding-top: 2px; font-size: 15px; line-height: 20px; font-weight: 600; }
+.iui-v3-totals .is-total dt { color: var(--iui-ink); }
+
+/* Schedule sample, Draft text */
+.iui-v3-inset {
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: var(--iui-v3-radius-inner);
+  background: var(--iui-v3-inset);
+  color: var(--iui-ink);
+  font-size: 13px;
+  line-height: 19px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.iui-v3-draft-text { font-size: 14px; line-height: 21px; }
+.iui-v3-draft-text.is-editable { cursor: text; }
+.iui-v3-draft-edit {
+  display: block;
+  box-sizing: border-box;
+  width: 100%;
+  margin: 0;
+  resize: none;
+  overflow: hidden;
+  border: 0;
+  outline: none;
+  box-shadow: inset 0 0 0 1px var(--iui-border-strong);
+  color: var(--iui-ink);
+  font: inherit;
+  font-size: 14px;
+  line-height: 21px;
+}
+.iui-v3-draft-edit:focus { box-shadow: inset 0 0 0 1.5px var(--iui-focus); }
+.iui-v3-subject { font-size: 13px; line-height: 18px; font-weight: 600; }
+
+/* SettingChange */
+.iui-v3-change { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: 14px; line-height: 20px; }
+.iui-v3-from, .iui-v3-to { min-width: 0; padding: 3px 9px; border-radius: 7px; background: var(--iui-v3-inset); }
+.iui-v3-from { color: var(--iui-muted); text-decoration: line-through; text-decoration-color: var(--iui-faint); }
+.iui-v3-to { font-weight: 600; }
+.iui-v3-arrow { flex: none; color: var(--iui-muted); }
+
+/* Compare: columns side by side, stacked on a phone */
+.iui-v3-compare { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 148px), 1fr)); gap: 10px; }
+.iui-v3-card.iui-v3-card-compare { padding: 12px; }
+.iui-v3-option-col { display: flex; flex-direction: column; gap: 10px; min-width: 0; padding: 12px; border: 1px solid var(--iui-v3-edge); border-radius: var(--iui-v3-radius-inner); }
+.iui-v3-option-col.is-pick { border-color: color-mix(in srgb, var(--iui-badge-success) 50%, var(--iui-v3-surface)); }
+.iui-v3-option-col.is-on { background: var(--iui-v3-inset); }
+.iui-v3-option-col > .iui-button { align-self: stretch; margin-top: auto; }
+.iui-v3-col-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; min-width: 0; }
+
+@media (max-width: 400px) {
+  .iui-v3-card { padding: 12px 14px; }
+  .iui-v3-aside { max-width: 50%; }
+}
+
+/* ── v3 polish of the base components ─────────────────────────────────────
+   Same radius and spacing rhythm as the cards; nothing structural. */
+:root[data-v3] .bos-openui .iui-card { border-color: var(--iui-v3-edge); border-radius: var(--iui-v3-radius); }
+:root[data-v3] .bos-openui .iui-card:not(.iui-card-soft) { background: var(--iui-v3-surface); }
+:root[data-v3] .bos-openui .iui-card-soft { border-color: transparent; background: var(--iui-v3-inset); }
+:root[data-v3] .bos-openui .iui-card .iui-card { border-radius: var(--iui-v3-radius-inner); }
+:root[data-v3] .bos-openui .iui-card > :is(.iui-title-sm, .iui-title-md):first-child,
+:root[data-v3] .bos-openui .iui-card > .iui-row:first-child :is(.iui-title-sm, .iui-title-md) { font-size: 15px; font-weight: 600; }
+:root[data-v3] .bos-openui .iui-stat { border-color: var(--iui-v3-edge); border-radius: var(--iui-v3-radius); background: var(--iui-v3-surface); }
+:root[data-v3] .bos-openui .iui-callout { border-radius: 12px; }
+:root[data-v3] .bos-openui .iui-table-scroll { border-color: var(--iui-v3-edge); border-radius: var(--iui-v3-radius); }
+:root[data-v3] .bos-openui .iui-table th { background: var(--iui-v3-inset); }
+:root[data-v3] .bos-openui .iui-table th, :root[data-v3] .bos-openui .iui-table td { border-bottom-color: var(--iui-v3-edge); }
+:root[data-v3] .bos-openui .iui-chart-tooltip { border-color: var(--iui-v3-edge); border-radius: 12px; background: var(--iui-v3-surface); }
+:root[data-v3] .bos-openui .iui-input { border-radius: var(--iui-v3-radius-inner); }
+:root[data-v3] .bos-openui .iui-divider { border-top-color: var(--iui-v3-edge); }
+
+/* Checkin: one block per open item, its own buttons under it */
+.iui-v3-checkins { list-style: none; margin: 0; padding: 0; display: grid; gap: 12px; }
+.iui-v3-checkins > li { display: grid; gap: 6px; padding-top: 12px; border-top: 1px solid var(--iui-v3-edge); }
+.iui-v3-checkins > li:first-child { padding-top: 0; border-top: 0; }
+.iui-v3-checkin-head { display: flex; align-items: center; gap: 8px; font-size: 14px; }

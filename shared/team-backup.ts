@@ -78,6 +78,8 @@ const backupSchema = z.object({
     workContinuity: z.boolean().optional(),
     // keep in step with MASCOT_EYE_IDS (shared/mascot-eyes.ts); this schema also runs in the browser
     mascotEyes: z.enum(["glyph", "classic", "round", "arches", "angled"]).optional(),
+    // slot → accessory id; read leniently on import (botMascotAccessories)
+    mascotAccessories: z.record(z.string().max(20), z.string().max(40)).optional(),
     chiefOfStaff: z.boolean(),
     hidden: z.boolean(),
     playbooks: z.array(playbook).max(200),

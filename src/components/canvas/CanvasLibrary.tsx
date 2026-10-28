@@ -64,14 +64,15 @@ export function CanvasLibrary({ target, onOpen, onNew }: {
     if (!app) return [];
     const collections = Object.keys(app.collections);
     return [
-      { key: "dup", label: "Duplicate", icon: Copy, onSelect: () => void appApi.duplicate(app.id).then(() => setReload(n => n + 1), () => undefined) },
+      // an installed app is its author's page: install it again rather than copy it
+      ...app.installed ? [] : [{ key: "dup", label: "Duplicate", icon: Copy, onSelect: () => void appApi.duplicate(app.id).then(() => setReload(n => n + 1), () => undefined) }],
       { key: "export", label: "Export", icon: Download, submenu: [
         { key: "json", label: "Everything (json)", onSelect: () => { location.assign(appApi.exportUrl(app.id, "json")); } },
         ...collections.map((c): MenuEntry => ({ key: c, label: `${c} (csv)`, onSelect: () => { location.assign(appApi.exportUrl(app.id, "csv", c)); } })),
       ] },
       { type: "separator", key: "sep" },
       { key: "delete", label: "Delete app and its data", icon: Trash2, danger: true, onSelect: () => {
-        if (window.confirm(`Delete ${app.name} and all its data? The page file stays in Files.`)) void appApi.destroy(app.id).then(() => setReload(n => n + 1), () => undefined);
+        if (window.confirm(app.installed ? `Remove ${app.name} and all its data?` : `Delete ${app.name} and all its data? The page file stays in Files.`)) void appApi.destroy(app.id).then(() => setReload(n => n + 1), () => undefined);
       } },
     ];
   };

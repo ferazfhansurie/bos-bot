@@ -20,6 +20,8 @@ import { Switch } from "../SettingsPrimitives";
 import { preloadConnectedApps, type ConnectorInventory } from "../PluginsPanel";
 import { inputCls } from "./field";
 import { BoxComputeMark } from "../BoxComputeMark";
+import { useV3 } from "@/lib/v3";
+import { WorksOnPicker, type WorksOnMode } from "./WorksOnPicker";
 import type { useBotSettingsDerived } from "./useBotSettingsDerived";
 
 /** Where a bot's shell tools run. Set per bot; each task pins its own copy
@@ -241,6 +243,7 @@ export function AccessSection({
   const boxComputeSelectable = state.config?.boxCompute?.configured === true;
   const [localAutoWarning, setLocalAutoWarning] = useState<string | null>(null);
   const [inventory, setInventory] = useState<ConnectorInventory | null>(null);
+  const v3 = useV3();
 
   useEffect(() => {
     let cancelled = false;
@@ -266,6 +269,27 @@ export function AccessSection({
     <div className="flex flex-col gap-4">
       <SharedWorkComputer bot={bot} />
       <div className="rounded-xl bg-card p-4">
+        {v3 ? (
+          <WorksOnPicker
+            bot={bot}
+            flat
+            defaultOpen
+            notSetUp={(mode) => mode === "boxcompute" && !boxComputeSelectable && bot.computer !== "boxcompute"}
+            disabledReason={(mode: WorksOnMode) =>
+              mode === "local" && !localSelectable ? localDisabledReason ?? "Not available here"
+                : mode === "browser" && !browserSelectable ? browserDisabledReason
+                  : undefined}
+            onChoose={(mode) => {
+              if (mode === "local" && derived.approvalMode === "auto") setLocalAutoWarning(bot.id);
+              else if (mode === "browser") patch({ computer: mode, browser: true });
+              else patch({ computer: mode });
+            }}
+            onAddComputer={() => {
+              dispatch({ type: "toggleSettings", open: false });
+              dispatch({ type: "toggleAppSettings", open: true, section: "connections" });
+            }}
+          />
+        ) : <>
         <div className="text-[15px] font-medium text-ink">Works on</div>
         <div className="mt-0.5 text-[13px] text-ink-secondary">
           Where this bot works{bot.computer ? "" : " (currently: auto)"}. Browser is the built-in browser tab only; no desktop.
@@ -317,6 +341,7 @@ export function AccessSection({
             </button>
           ))}
         </div>
+        </>}
         {bot.computer === "boxcompute" && (
           <div className="mt-3 rounded-lg bg-inset px-3 py-2.5 text-[11.5px] leading-relaxed text-ink-secondary">
             <span className="font-medium text-ink">BoxCompute sandbox.</span>{" "}

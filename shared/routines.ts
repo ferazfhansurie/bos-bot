@@ -93,6 +93,8 @@ export interface Routine {
   attachments?: RoutineContextAttachment[];
   /** A bot's own one-time check-back (set_next_wake); removed once its run settles. */
   wake?: boolean;
+  /** One of the person's three daily check-ins (3.0). */
+  checkin?: "morning" | "afternoon" | "night";
   sourceThreadId?: string;
   resultsThreadId?: string;
   nextRunAt: number | null;

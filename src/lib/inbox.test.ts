@@ -56,6 +56,14 @@ describe("normalizeInbox answer fields", () => {
     expect(inboxItemClearable(row)).toBe(true);
   });
 
+  it("keeps a v3 connect row's fields; clearing it is allowed (it dismisses the card)", () => {
+    const [row] = normalizeInbox({ items: [item({ kind: "question", messageId: "m1", connect: { slug: "gmail", label: "Gmail", reconnect: true } })] }).items;
+    expect(row.connect).toEqual({ slug: "gmail", label: "Gmail", reconnect: true });
+    expect(inboxItemClearable(row)).toBe(true);
+    const [junk] = normalizeInbox({ items: [item({ connect: { slug: "", label: 3 } as never })] }).items;
+    expect(junk).not.toHaveProperty("connect");
+  });
+
   it("an approval needs a request id and drops options", () => {
     const [live] = normalizeInbox({ items: [item({ kind: "waiting-on-you", messageId: "m1", requestId: "r1", approval: true, options: ["Allow"] })] }).items;
     expect(live).toMatchObject({ requestId: "r1", approval: true });

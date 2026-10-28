@@ -4,14 +4,24 @@
  * engine supplies the frame loop, expressive face, clipping and interruption.
  * The desktop live turn reads turnGesture; iOS mirrors it in
  * MascotActivityChoreography.activity. */
-export type MascotGesture = "idle" | "thinking" | "searching" | "working" | "waiting" | "finished";
+import type { GlyphFaceState } from "./glyph-faces.ts";
+import { screenTouchingTool, TOOL_NAMESPACE, toolSurfaceKind } from "./tool-surface";
+
+export type MascotGesture = "idle" | "thinking" | "searching" | "reading" | "browsing" | "writing" | "working" | "waiting" | "finished";
 export type GesturePose = { m: number; sx: number; sy: number; dx: number; dy: number; rotate: number; split: number; gx: number; gy: number; eye: number; face: number };
 export const IDLE_POSE: GesturePose = { m: 0, sx: 1, sy: 1, dx: 0, dy: 0, rotate: 0, split: 0, gx: 0, gy: 0, eye: 1, face: 1 };
 type Key = [number, Partial<GesturePose>];
-export const GESTURE_TIMING = { thinking: [1600, 3000], searching: [1200, 2500], working: [1800, 2800], waiting: [800, 5000], finished: [900, 0], idle: [0, 0] } as const;
+// waiting's rest is the knock period: one knock every 8s while it needs you
+export const GESTURE_TIMING = { thinking: [1600, 3000], searching: [1200, 2500], reading: [2400, 900], browsing: [1500, 2200], writing: [2200, 1200], working: [1800, 2800], waiting: [800, 8000], finished: [900, 0], idle: [0, 0] } as const;
 const timelines: Record<Exclude<MascotGesture, "idle">, Key[]> = {
   thinking: [[0,{}],[.1,{}],[.24,{sx:.9,sy:1.18,dy:-4,gy:-6}],[.36,{rotate:-13,sx:.96,sy:1.08,gx:-4,gy:-5}],[.49,{m:1,sy:1,sx:1,dy:2,face:.75,eye:.4}],[.61,{m:1,face:.75,gx:3,gy:-4}],[.76,{rotate:5,sx:1.04,sy:.97}],[.9,{}],[1,{}]],
   searching: [[0,{}],[.1,{}],[.26,{sx:1.2,sy:.88,dx:-7,rotate:-8,gx:-12}],[.38,{sx:1.1,sy:.95,dx:-5,gx:-10}],[.5,{}],[.67,{sx:1.2,sy:.88,dx:7,rotate:8,gx:12}],[.77,{sx:1.08,sy:.94,dx:4,gx:9}],[.9,{sx:.98,sy:1.03}],[1,{}]],
+  // eyes run along three lines, left to right, a line lower each time
+  reading: [[0,{}],[.08,{gx:-9,gy:-4,sy:.98}],[.27,{gx:9,gy:-4,sy:.98}],[.33,{gx:-9,gy:0,sy:.98}],[.56,{gx:9,gy:0,sy:.98}],[.62,{gx:-9,gy:4,sy:.98}],[.85,{gx:9,gy:4,sy:.98}],[1,{}]],
+  // eyes dart while the page loads, then settle for the rest window
+  browsing: [[0,{}],[.1,{gx:-11,gy:-3}],[.22,{gx:10,gy:2}],[.34,{gx:-5,gy:5}],[.46,{gx:11,gy:-2}],[.6,{sx:1.04,sy:.97}],[.75,{}],[1,{}]],
+  // head down over the page while the scribble draws underneath
+  writing: [[0,{}],[.14,{gy:8,dy:2,sy:.95,rotate:-3}],[.45,{gx:-5,gy:8,dy:2,sy:.95,rotate:-3}],[.75,{gx:5,gy:8,dy:2,sy:.95,rotate:2}],[.9,{gy:4,dy:1}],[1,{}]],
   working: [[0,{}],[.12,{sx:1.08,sy:.9}],[.24,{m:1,face:.44,split:1}],[.74,{m:1,face:.44,split:1}],[.85,{m:1,face:.7,split:0}],[.94,{sx:1.04,sy:.97}],[1,{}]],
   waiting: [[0,{}],[.12,{sx:.96,sy:1.04}],[.35,{sx:1.25,sy:.25,dy:0,eye:.75}],[1,{sx:1.25,sy:.25,dy:0,eye:.75}]],
   finished: [[0,{}],[.14,{sx:1.14,sy:.78,dy:3,eye:.55}],[.36,{sx:.86,sy:1.15,dy:-19,rotate:-17,eye:1.1}],[.53,{sx:.96,sy:1.04,dy:-13,rotate:12}],[.69,{sx:1.2,sy:.75,dy:3,eye:.35}],[.79,{sx:.96,sy:1.06,dy:-2}],[.9,{}],[1,{}]],
@@ -40,8 +50,9 @@ export function gesturePose(state: MascotGesture, elapsed: number, reduced = fal
     const settled = sample("waiting", Math.min(1, elapsed/900));
     if (elapsed > 900) {
       const phase = (elapsed - 900) % pause;
-      const perk = phase < duration ? Math.sin(phase/duration*Math.PI)**2 : 0;
-      settled.sy += perk*.08; settled.gy -= perk*4;
+      // a knock: two quick taps forward, then still until the next one
+      const perk = phase < duration ? Math.sin(phase/duration*Math.PI*2)**2 : 0;
+      settled.sy += perk*.08; settled.dy += perk*2; settled.gy -= perk*4;
     }
     return settled;
   }
@@ -57,14 +68,39 @@ export function resolveGesture(activity: GestureActivity, previous: GestureRecei
   return { gesture: activity.waiting ? "waiting" : activity.working ? "working" : activity.searching ? "searching" : activity.thinking ? "thinking" : finished ? "finished" : "idle", terminalTurnId };
 }
 
-const SEARCH_TOOLS = new Set(["web_search", "search_query", "browser_search", "search"]);
+const SEARCH_TOOLS = new Set(["web_search", "websearch", "search_query", "browser_search", "search_web", "search", "grep", "glob", "find"]);
+const BROWSE_TOOLS = new Set(["webfetch", "web_fetch", "fetch", "fetch_url", "open_url", "navigate", "read_page"]);
+const READ_TOOLS = new Set(["read", "read_file", "view", "view_file", "open_file", "cat", "ls", "list_dir", "list_files", "notebookread", "read_mcp_resource"]);
+const WRITE_TOOLS = new Set(["write", "write_file", "create_file", "edit", "edit_file", "multiedit", "apply_patch", "notebookedit"]);
+
+/** The pose a running tool plays, from its real name only. Names arrive bare
+ * (Read), namespaced (mcp__browser__agent_browser_open, computer__click) or
+ * shouted (WEB_SEARCH); everything unknown (a shell, a teammate) is work. */
+export function toolGesture(toolName: string | null | undefined): "searching" | "reading" | "browsing" | "writing" | "working" {
+  const name = (toolName ?? "").toLowerCase();
+  const bare = name.replace(TOOL_NAMESPACE, "");
+  if (SEARCH_TOOLS.has(bare)) return "searching";
+  // a page or a screen: the built-in browser, or a computer tool that changes what it shows
+  if (toolSurfaceKind(name) === "browser" || screenTouchingTool(name) || BROWSE_TOOLS.has(bare)) return "browsing";
+  if (READ_TOOLS.has(bare)) return "reading";
+  if (WRITE_TOOLS.has(bare) || bare.startsWith("str_replace")) return "writing";
+  return "working";
+}
+
 /** A live turn's gesture from real runtime signals only: a wait on the human
- * or a teammate wins, then a running tool (search tools peek), then thought. */
+ * or a teammate wins, then the running tool's pose, then thought. */
 export function turnGesture(turn: { waiting?: boolean; toolInFlight?: boolean; toolName?: string | null }): Exclude<MascotGesture, "idle" | "finished"> {
   if (turn.waiting) return "waiting";
   if (!turn.toolInFlight) return "thinking";
-  return SEARCH_TOOLS.has(turn.toolName?.toLowerCase() ?? "") ? "searching" : "working";
+  return toolGesture(turn.toolName);
 }
+
+/** The glyph face state a gesture wears where only the shared states exist
+ * (the phone, the glyph table): a tool pose wears its family's face. */
+export const GESTURE_FACE_STATE = {
+  idle: "idle", thinking: "thinking", searching: "searching", reading: "reading", browsing: "searching",
+  writing: "writing", working: "working", waiting: "waiting", finished: "finished",
+} as const satisfies Record<MascotGesture, GlyphFaceState>;
 
 // The canonical catalog is absolute M/C/Z. Sample its cubic outline once,
 // then reuse the supplied study's perimeter→circle morph. No animation loop here.

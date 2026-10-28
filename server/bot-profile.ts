@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { mascotEyesSchema } from "../shared/mascot-eyes.ts";
+import { mascotAccessoriesSchema } from "../shared/mascot-accessories.ts";
 
 import { BOT_AVATAR_CROPS, botAvatarCropSchema, botAvatarUrlSchema } from "../shared/bot-avatar.ts";
 import { BOT_PROFILE_LIMITS } from "../shared/bot-profile.ts";
@@ -34,6 +35,7 @@ export const BOT_PROFILE_PATCH_FIELDS = [
   "avatarCrop",
   "mascotBody",
   "mascotEyes",
+  "mascotAccessories",
   "color",
   "voice",
   "speakReplies",
@@ -73,6 +75,9 @@ const profilePatchSchema = z.object({
   avatarCrop: botAvatarCropSchema.optional(),
   mascotBody: mascotBodySchema.optional(),
   mascotEyes: mascotEyesSchema.nullable().optional(),
+  // a bot wearing nothing is stored as null, never {}
+  mascotAccessories: mascotAccessoriesSchema.nullable().optional()
+    .transform((value) => value && !Object.keys(value).length ? null : value),
   // Cosmetic, so paired clients may set it; normalized exactly like the
   // broad desktop PATCH (palette name kept, hex uppercased).
   color: z
@@ -102,6 +107,7 @@ export type BotProfilePatch = Partial<
     | "avatarCrop"
     | "mascotBody"
     | "mascotEyes"
+    | "mascotAccessories"
     | "color"
     | "voice"
     | "speakReplies"

@@ -17,8 +17,16 @@ import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { createMenuBarClock } from "./menubar-clock.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
+
+// The notch panel lives on every space and never closes, so anything that
+// asks "is there a window to bring back" must look past it.
+const notchWindows = new WeakSet();
+export function isNotchWindow(win) {
+  return notchWindows.has(win);
+}
 
 /** The page draws inside this box; it is the open shelf's ceiling. */
 export const NOTCH_WINDOW = { width: 760, height: 520 };
@@ -177,6 +185,17 @@ export function registerNotch({ mainWindow, pageUrl, focusMain, preload = path.j
   let placement = null;
   let snapshot = null;
   let interactive = false;
+  // the menu bar clock rides the same snapshot and the same setting
+  const menuBar = createMenuBarClock({
+    onOpen: (botId, threadId) => {
+      const main = mainWindow();
+      if (!main || main.isDestroyed()) return;
+      focusMain();
+      try {
+        main.webContents.send("notch:action", { type: "open", botId, threadId });
+      } catch {}
+    },
+  });
   let sensorKey = "";
   let sensor = null;
   const heardAsks = new Set();
@@ -394,6 +413,7 @@ export function registerNotch({ mainWindow, pageUrl, focusMain, preload = path.j
         backgroundThrottling: false,
       },
     });
+    notchWindows.add(win);
     interactive = true;
     setInteractive(false);
     win.setAlwaysOnTop(true, "screen-saver");
@@ -460,7 +480,10 @@ export function registerNotch({ mainWindow, pageUrl, focusMain, preload = path.j
     helperRestarts = 0;
     watchDisplays(enabled);
     if (enabled) create();
-    else destroy();
+    else {
+      destroy();
+      menuBar.update(null);
+    }
   });
 
   ipcMain.on("notch:snapshot", (event, raw) => {
@@ -480,6 +503,7 @@ export function registerNotch({ mainWindow, pageUrl, focusMain, preload = path.j
     clearTimeout(homeTimer);
     if (!wasIdle && idle) homeTimer = setTimeout(() => snapshotIdle(snapshot) && place(), 1500);
     chime(next);
+    menuBar.update(enabled ? next?.clock : null);
     toNotch("notch:snapshot", next);
   });
 
@@ -543,6 +567,7 @@ export function registerNotch({ mainWindow, pageUrl, focusMain, preload = path.j
       enabled = false;
       clearTimeout(homeTimer);
       destroy();
+      menuBar.dispose();
       watchDisplays(false);
     },
   };

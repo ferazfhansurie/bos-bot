@@ -12,6 +12,7 @@ import type { ApprovalMode } from "./approval-mode.ts";
 import type { TurnDigest } from "./digest.ts";
 import type { BotAvatarCrop } from "./bot-avatar.ts";
 import type { MascotEyes } from "./mascot-eyes.ts";
+import type { MascotAccessories } from "./mascot-accessories.ts";
 import type { MascotBodyId } from "./mascot-bodies.ts";
 import type { CredentialTargetId } from "./credential-request.ts";
 import type { TeamSetupRequest } from "./team-setup.ts";
@@ -130,6 +131,9 @@ export interface WireTask {
   routineRunId?: string;
   /** External channel history stays addressable without a desktop chat row. */
   channelTransport?: "discord" | "telegram";
+  /** The bot's one calls thread: every voice call's card lands here instead
+   * of opening a thread per call. Server-set; clients keep it at the top. */
+  voiceCalls?: true;
   /** Set when a bot, not a person, opened this thread. */
   openedBy?: TaskOpenedBy;
   /** Set by close_thread; absent while the thread is open. */
@@ -226,6 +230,8 @@ export interface WireBot {
   mascotExpression?: MausExpression | null;
   mascotBody?: MascotBodyId | null;
   mascotEyes?: MascotEyes | null;
+  /** Hat, glasses, mustache, bow tie: one per slot; null/absent wears nothing. */
+  mascotAccessories?: MascotAccessories | null;
   /** App-owned attachment served as this bot's custom profile image;
    * always present on the wire, null when the bot has none. */
   avatarUrl: string | null;
@@ -365,6 +371,8 @@ export interface WireMessage {
   secret?: SecretRequestCardData;
   /** One idempotently updated status card for a routine run. */
   routineRun?: RoutineRunCardData;
+  /** The voice chat card left in a bot's chat after a call. */
+  voiceCall?: import("./voice-call.ts").VoiceCallCard;
   /** Terminal receipt for a bounded multi-bot channel goal. */
   goalRun?: GroupGoalRunCardData;
   /** activity messages: tool name + outcome. */
@@ -457,6 +465,8 @@ export interface OptionCardData {
   routineRequest?: RoutineRequestCardData;
   /** A durable profile-change proposal (propose_profile). */
   profileRequest?: ProfileRequestCardData;
+  /** A one-tap setting change with undo (propose_setting, 3.0). */
+  settingChange?: import("./setting-change.js").SettingChangeCardData;
   outboundReview?: import("./outbound-review.js").OutboundReview;
   teamSetupRequest?: TeamSetupRequest;
   /** A durable learned-skill proposal. */
@@ -475,6 +485,11 @@ export interface ConnectorCardData {
   resumeKey: string;
   /** Account alias supplied by the agent when adding a second account. */
   alias?: string;
+  /** v3: the bot's one line on why it needs the app; the description
+   * already reads "<bot> needs <app> <reason>". */
+  reason?: string;
+  /** v3: the app was connected but its sign-in expired or was revoked. */
+  reconnect?: boolean;
   error?: string;
   dismissed?: boolean;
   resumed?: boolean;
@@ -617,6 +632,9 @@ export interface InboxItem {
   options?: string[];
   /** a plain live question with no choices: typed words answer it */
   freeText?: boolean;
+  /** v3: an app the bot needs connected (or signed in again); connecting
+   * settles it, clearing dismisses the card */
+  connect?: { slug: string; label: string; reconnect?: boolean };
 }
 
 export interface InboxResponse {
@@ -684,6 +702,8 @@ export type ServerFrame =
   | { kind: "voice_ring"; type: "voice_ring"; ringId: string; botId: string; threadId: string; reason: string }
   /** The needs-me count changed; clients refetch GET /api/inbox. */
   | { kind: "inbox"; count: number }
+  /** 3.0 check-ins: the today list changed; clients refetch /api/checkins. */
+  | { kind: "checkins"; count: number }
   | { kind: "group.deleted"; groupId: string }
   | { kind: "routine"; routine: Routine }
   | { kind: "routine.deleted"; routineId: string }

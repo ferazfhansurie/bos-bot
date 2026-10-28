@@ -262,8 +262,14 @@ body {
 .notch-row-rest { opacity: .55; }
 .notch-row-rest:hover { opacity: 1; }
 .notch-row-target { opacity: 1; background: rgba(255, 255, 255, .1); box-shadow: inset 0 0 0 1px var(--row); }
-.notch-row-face { flex: none; width: 26px; height: 26px; }
+.notch-row-face { flex: none; width: 26px; height: 26px; position: relative; display: grid; place-items: center; }
+.notch-plan { position: absolute; inset: -3px; pointer-events: none; }
 .notch-row-text { display: flex; align-items: baseline; gap: 8px; flex: 1; min-width: 0; }
+.notch-row-line { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+.notch-row-stack { flex-direction: column; align-items: stretch; gap: 1px; }
+.notch-step { font-size: 11px; color: rgba(255, 255, 255, .62); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; animation: notch-step-in 260ms cubic-bezier(.2, .8, .2, 1); }
+@keyframes notch-step-in { from { opacity: 0; transform: translateY(4px); } }
+@media (prefers-reduced-motion: reduce) { .notch-step { animation: none; } }
 .notch-state { flex: none; font-size: 11.5px; color: rgba(255, 255, 255, .55); font-variant-numeric: tabular-nums; }
 .notch-state-ask { color: #fff; font-weight: 600; }
 

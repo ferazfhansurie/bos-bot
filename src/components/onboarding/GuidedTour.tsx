@@ -11,6 +11,7 @@ import { t } from "@/lib/i18n";
 import type { MausState } from "@/lib/mascot";
 import { chatOnboardingOpen, hintSeenPatch } from "@/lib/onboarding";
 import type { LocaleKey } from "@/locales";
+import { useV3 } from "@/lib/v3";
 import { api, useStore, useStreaming } from "@/state/store";
 import { Spotlight } from "./Spotlight";
 
@@ -48,6 +49,8 @@ function press(anchor: string): boolean {
 
 export function GuidedTour() {
   const { state, dispatch } = useStore();
+  // 3.0: the bot shows the person around itself (v3/Teach), so no tour
+  const v3 = useV3();
   // a hosted bos runs the tour before the sign-in, often while its computer
   // is still waking: steps it passes are kept here so the tour moves on at once
   // instead of waiting for a computer that can't save them yet
@@ -174,7 +177,7 @@ export function GuidedTour() {
   const held = (chatOnboardingOpen(record) && !early.current) || Boolean(bot?.busy) || Boolean(bot && streaming[bot.threadId]) ||
     Boolean(bot?.messages.some((m) => m.kind === "options" && m.card?.requestId && !m.card.answered && !m.card.dismissed));
   const quietMarketer = record?.marketerAssignment?.botId === state.selectedId && !state.tourOpen;
-  const active = !quietMarketer && !dismissed && Boolean(record?.completedAt) && !state.welcomeOpen && step !== null && !held;
+  const active = !v3 && !quietMarketer && !dismissed && Boolean(record?.completedAt) && !state.welcomeOpen && step !== null && !held;
 
   // entering a step runs its effect once per step
   useEffect(() => {

@@ -41,6 +41,8 @@ internal class GlyphArtwork(context: Context) {
     val faces = table.getJSONObject("faces")
     val palette = table.getJSONObject("palette")
     val layout = table.getJSONObject("layout")
+    /** The desktop's EXPRESSION_STATES, shipped in the table. */
+    val expressions = table.getJSONObject("expressions")
     val bodies: Map<String, Path>
     val centers: Map<String, Offset>
 
@@ -77,15 +79,12 @@ internal class GlyphArtwork(context: Context) {
     }
 }
 
-internal fun MausState.glyphState(): String = when (this) {
-    MausState.THINKING -> "thinking"
-    MausState.SEARCHING -> "searching"
-    MausState.WORKING, MausState.ORBIT, MausState.PROGRESS, MausState.LOADING -> "working"
-    MausState.SAD, MausState.ANGRY -> "failed"
-    MausState.HAPPY, MausState.EXCITED, MausState.PLAYFUL -> "happy"
-    MausState.CELEBRATE, MausState.PROUD -> "finished"
-    MausState.DROWSY, MausState.SLEEPING -> "asleep"
-    else -> if (id.contains("wait") || id.contains("approval")) "waiting" else "idle"
+/** The desktop's glyphStateFor for an expression, read from the shipped table. */
+internal fun GlyphArtwork.glyphState(state: MausState): String = when {
+    expressions.has(state.id) -> expressions.getString(state.id)
+    state == MausState.THINKING_DOTS -> "thinking"
+    state.id.contains("wait") || state.id.contains("approval") -> "waiting"
+    else -> "idle"
 }
 
 private fun luminance(c: Color): Double {
@@ -114,7 +113,7 @@ internal fun GlyphAvatar(color: String, bodyId: String?, size: Dp, state: MausSt
         if (!animated || (coroutineContext[MotionDurationScale]?.scaleFactor ?: 1f) == 0f) return@LaunchedEffect
         while (true) awaitMotionTick { now -> phase.longValue = now }
     }
-    val face = art.faces.getJSONObject(state.glyphState())
+    val face = art.faces.getJSONObject(art.glyphState(state))
     // Its own layer when it moves: a tick then re-records this face, not the screen.
     Canvas(modifier.size(size).then(if (animated) Modifier.graphicsLayer() else Modifier)) {
         val side = min(this.size.width, this.size.height)
@@ -143,12 +142,28 @@ internal fun GlyphAvatar(color: String, bodyId: String?, size: Dp, state: MausSt
         }
         val eyeScale = art.layout.getDouble("eyeBox").toFloat() * diameter / art.table.getDouble("viewBox").toFloat()
         val stroke = max(art.table.getDouble("stroke").toFloat(), art.layout.getDouble("minStrokePx").toFloat() / eyeScale)
-        withTransform({ translate((centre.x + gaze.x.coerceIn(-6f, 6f)) * k, (centre.y + gaze.y.coerceIn(-6f, 6f)) * k); rotate(art.table.getDouble("tiltDeg").toFloat(), Offset.Zero) }) {
-            for ((glyph, direction) in listOf(face.getString("left") to -1, face.getString("right") to 1)) {
+        val tableStroke = art.table.getDouble("stroke").toFloat()
+        val faceGaze = face.getJSONArray("gaze")
+        withTransform({
+            translate((centre.x + gaze.x.coerceIn(-6f, 6f)) * k, (centre.y + gaze.y.coerceIn(-6f, 6f)) * k)
+            rotate(art.table.getDouble("tiltDeg").toFloat(), Offset.Zero)
+            // the face's own gaze, in body diameters, inside the tilt
+            translate(faceGaze.getDouble(0).toFloat() * diameter, faceGaze.getDouble(1).toFloat() * diameter)
+        }) {
+            for ((key, direction) in listOf("leftParts" to -1, "rightParts" to 1)) {
+                val parts = face.getJSONArray(key)
                 withTransform({
                     translate(direction * art.layout.getDouble("eyeX").toFloat() * diameter, art.layout.getDouble("eyeY").toFloat() * diameter)
                     scale(eyeScale, eyeScale, Offset.Zero); translate(-12f, -12f)
-                }) { drawPath(art.glyphs.getValue(if (blink) "dash" else glyph), ink, style = Stroke(stroke, cap = StrokeCap.Round, join = StrokeJoin.Round)) }
+                }) {
+                    // a blink is one thin line; lids and brows sit it out
+                    if (blink) drawPath(art.glyphs.getValue("dash"), ink, style = Stroke(stroke, cap = StrokeCap.Round, join = StrokeJoin.Round))
+                    else for (i in 0 until parts.length()) {
+                        val part = parts.getJSONObject(i)
+                        drawPath(art.glyphs.getValue(part.getString("glyph")), ink,
+                            style = Stroke(max(tableStroke * part.getDouble("weight").toFloat(), stroke), cap = StrokeCap.Round, join = StrokeJoin.Round))
+                    }
+                }
             }
         }
         val anchor = face.optString("anchor")
@@ -158,12 +173,14 @@ internal fun GlyphAvatar(color: String, bodyId: String?, size: Dp, state: MausSt
             if (place != null) {
                 val box = place.getDouble("box").toFloat() * diameter
                 val scale = box / 24f
-                val float = if (animated && anchor != "split") sin(t * 2 * Math.PI / 1.8).toFloat() * .025f * diameter else 0f
+                // a mark on the body (a blush) wears the ink's opposite at its alpha
+                val mark = if (place.has("onBodyAlpha")) (if (ink == Color.Black) Color.White else Color.Black).copy(alpha = place.getDouble("onBodyAlpha").toFloat()) else accentPaint
+                val float = if (animated && anchor != "split" && anchor != "cheek") sin(t * 2 * Math.PI / 1.8).toFloat() * .025f * diameter else 0f
                 withTransform({
                     translate(bounds.center.x * k + place.getDouble("x").toFloat() * diameter - box / 2,
                         bounds.center.y * k + place.getDouble("y").toFloat() * diameter - box / 2 + float)
                     scale(scale, scale, Offset.Zero)
-                }) { drawPath(art.glyphs.getValue(glyph), accentPaint, style = Stroke(max(place.getDouble("stroke").toFloat(), 1.5f / scale), cap = StrokeCap.Round, join = StrokeJoin.Round)) }
+                }) { drawPath(art.glyphs.getValue(glyph), mark, style = Stroke(max(place.getDouble("stroke").toFloat(), 1.5f / scale), cap = StrokeCap.Round, join = StrokeJoin.Round)) }
             }
         }
     }

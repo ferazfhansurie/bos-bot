@@ -211,7 +211,8 @@ struct RefreshGlyph: View {
             eye.scaleBy(x: scale, y: scale)
             eye.translateBy(x: -GlyphFaces.viewBox / 2, y: -GlyphFaces.viewBox / 2)
             eye.stroke(Path(GlyphFaces.path(glyph)), with: .color(ink),
-                       style: StrokeStyle(lineWidth: Self.line * 1.15 / scale, lineCap: .round, lineJoin: .round))
+                       style: StrokeStyle(lineWidth: Self.line * 1.15 / scale * GlyphFaces.weight(glyph),
+                                          lineCap: .round, lineJoin: .round))
         }
     }
 

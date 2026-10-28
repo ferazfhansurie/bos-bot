@@ -35,7 +35,7 @@ describe("built-in agent tool read policy", () => {
   it.each([
     "shared_computer", "ask_bot", "delegate_bot", "start_thread", "close_thread", "post_to_room",
     "create_bot", "request_credential", "memory_update", "propose_routine",
-    "propose_routine_action", "propose_profile", "skill_manage",
+    "propose_routine_action", "propose_profile", "propose_setting", "skill_manage",
     "propose_team_setup", "propose_bot_deletion",
     "list_secrets", "read_credentials", "list_bots_and_delete", "unknown", "",
     "mcp__agents__list_bots", "agents.list_bots", "LIST_BOTS", " list_bots",

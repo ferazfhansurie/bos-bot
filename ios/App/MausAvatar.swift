@@ -69,6 +69,11 @@ struct MausAvatar: View {
     var animated: Bool = false
     /// Comets orbiting the body — the island's "something is happening".
     var comets: Bool = false
+    /// What the mascot wears; nil draws exactly the bare mascot.
+    var accessories: MascotAccessories? = nil
+    /// A glyph face to wear instead of the state's own (3.0 thread worker:
+    /// wink, noticed, determined), for faces `MausState` has no case for.
+    var glyph: GlyphFaceState? = nil
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.scenePhase) private var scenePhase
@@ -78,19 +83,20 @@ struct MausAvatar: View {
         Group {
 #if WIDGET_EXTENSION
             if eyeStyle == .glyph {
-                GlyphMark(color: color, bodyId: bodyId, state: state.glyphState, size: size)
+                GlyphMark(color: color, bodyId: bodyId, state: state.glyphState, size: size, accessories: accessories)
             } else {
-                FlatBotMark(color: color, bodyId: bodyId, eyeStyle: eyeStyle)
+                FlatBotMark(color: color, bodyId: bodyId, eyeStyle: eyeStyle, accessories: accessories)
             }
 #else
             if eyeStyle == .glyph {
-                GlyphMark(color: color, bodyId: bodyId, state: state.glyphState, size: size,
-                          animated: animated, completedTurnID: completedTurnID)
+                GlyphMark(color: color, bodyId: bodyId, state: glyph ?? state.glyphState, size: size,
+                          animated: animated, completedTurnID: completedTurnID, accessories: accessories)
             } else if animated || completedTurnID != nil {
                 MascotActivityMark(color: color, bodyID: FlatMascotBodies.body(bodyId).id,
-                    activity: state.activityChoreography, size: size, eyeStyle: eyeStyle, completedTurnID: completedTurnID)
+                    activity: state.activityChoreography, size: size, eyeStyle: eyeStyle, completedTurnID: completedTurnID,
+                    accessories: accessories)
             } else {
-                FlatBotMark(color: color, bodyId: bodyId, eyeStyle: eyeStyle)
+                FlatBotMark(color: color, bodyId: bodyId, eyeStyle: eyeStyle, accessories: accessories)
             }
 
 #endif
@@ -110,13 +116,14 @@ struct MausFaceStill: View {
     var comets: Bool = false
     /// The clock for the comets' phase; a different date is a different frame.
     var at: Date = Date()
+    var accessories: MascotAccessories? = nil
 
     var body: some View {
         Group {
             if eyeStyle == .glyph {
-                GlyphMark(color: color, bodyId: bodyId, state: state.glyphState, size: size)
+                GlyphMark(color: color, bodyId: bodyId, state: state.glyphState, size: size, accessories: accessories)
             } else {
-                FlatBotMark(color: color, bodyId: bodyId, eyeStyle: eyeStyle)
+                FlatBotMark(color: color, bodyId: bodyId, eyeStyle: eyeStyle, accessories: accessories)
             }
         }
         .frame(width: size, height: size)
@@ -587,8 +594,17 @@ struct FlatBotMark: View {
     let color: String
     var bodyId: String?
     var eyeStyle: MascotEyeStyle = .glyph
+    /// Drawn over the mark with headroom, so a hat is never clipped.
+    var accessories: MascotAccessories? = nil
     @Environment(\.colorScheme) private var scheme
     var body: some View {
+        mark.overlay {
+            MascotAccessoriesLayer(accessories, bodyId: bodyId, color: color,
+                                   face: eyeStyle == .glyph ? .glyph(bodyId: bodyId) : .classic(bodyId: bodyId))
+        }
+    }
+
+    private var mark: some View {
         Canvas { context, size in
             if eyeStyle == .glyph {
                 // the resting glyph face has no accent, so it fits the frame

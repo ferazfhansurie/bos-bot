@@ -9,6 +9,11 @@ import { BotAvatar } from "./Avatar";
 import { cn } from "@/lib/cn";
 import type { SearchHit } from "@/lib/search-hit";
 import { landOnSearchHit } from "@/lib/focus-message";
+import { t } from "@/lib/i18n";
+import { useV3 } from "@/lib/v3";
+import { askBot } from "@/lib/v3-ask";
+import { defaultBotId } from "@/state/store";
+import { V3Empty } from "./v3/Empty";
 
 export const MIN_QUERY = 2;
 const DEBOUNCE_MS = 250;
@@ -18,6 +23,7 @@ export function SearchResults({ query, onLanded }: { query: string; onLanded: ()
   const [hits, setHits] = useState<SearchHit[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const q = query.trim();
+  const v3 = useV3();
 
   useEffect(() => {
     if (q.length < MIN_QUERY) {
@@ -42,6 +48,8 @@ export function SearchResults({ query, onLanded }: { query: string; onLanded: ()
   }, [q]);
 
   if (q.length < MIN_QUERY) return null;
+  // 3.0: no hits is not a dead end, the bot that knows your threads can look
+  const helper = v3 ? state.bots.find((bot) => bot.id === defaultBotId(state.bots)) : undefined;
 
   const land = async (hit: SearchHit) => {
     try {
@@ -58,7 +66,16 @@ export function SearchResults({ query, onLanded }: { query: string; onLanded: ()
         Messages{hits ? ` · ${hits.length}${hits.length === 40 ? "+" : ""}` : ""}
       </div>
       {error && <div className="px-3 py-2 text-[12.5px] text-danger">couldn't search: {error}</div>}
-      {hits && hits.length === 0 && !error && <div className="px-3 py-3 text-[13px] text-ink-secondary">No messages match “{q}”</div>}
+      {hits && hits.length === 0 && !error && (helper
+        ? <V3Empty
+            bot={helper}
+            size={40}
+            className="py-5"
+            testId="v3-search-empty"
+            text={t("v3.search.none", { query: q, name: helper.name })}
+            action={{ label: t("v3.search.ask", { name: helper.name }), onClick: () => { onLanded(); askBot(dispatch, helper, t("v3.search.prompt", { query: q })); } }}
+          />
+        : <div className="px-3 py-3 text-[13px] text-ink-secondary">No messages match “{q}”</div>)}
       {hits?.map((hit) => {
         const bot = hit.botId ? state.bots.find((b) => b.id === hit.botId) : undefined;
         const before = hit.snippet.slice(0, hit.matchStart);

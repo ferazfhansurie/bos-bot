@@ -58,3 +58,27 @@ it("flushes every sixty seconds and on stop", async () => {
   telemetry.track("error", { class: "network" }); await telemetry.stop();
   expect(bodies.at(-1)?.events[0].name).toBe("error");
 });
+it("times the first message from the install, across restarts, and never guesses for older installs", async () => {
+  let now = 1_000_000;
+  const at = (transport?: typeof fetch) => new ProductTelemetry({ dataDir, enabled: () => enabled, env, version: () => "3.0.0", platform: "darwin", now: () => now,
+    fetch: transport ?? vi.fn(async (_url, init) => { bodies.push(JSON.parse(String(init?.body))); return Response.json({ ok: true }); }) });
+  telemetry = at(); telemetry.track("install"); await telemetry.flush();
+  now += 42_000; telemetry = at(); telemetry.track("first_message", { v3: true }); await telemetry.flush();
+  expect(bodies.at(-1)?.events).toEqual([expect.objectContaining({ name: "first_message", props: { v3: true, duration_ms: 42_000 } })]);
+  await rm(dataDir, { recursive: true, force: true }); bodies = [];
+  dataDir = await mkdtemp(join(tmpdir(), "bos-product-"));
+  await writeFile(join(dataDir, "product-events.json"), JSON.stringify({ seen: ["install"], queue: [] }));
+  telemetry = at(); telemetry.track("first_message", { v3: true }); await telemetry.flush();
+  expect(bodies.at(-1)?.events[0].props).toEqual({ v3: true });
+});
+it("adds no timing when 3.0 is off, and clamps a very slow first message", async () => {
+  let now = 1_000_000;
+  const at = () => new ProductTelemetry({ dataDir, enabled: () => enabled, env, version: () => "2.2.1", platform: "darwin", now: () => now,
+    fetch: vi.fn(async (_url, init) => { bodies.push(JSON.parse(String(init?.body))); return Response.json({ ok: true }); }) });
+  telemetry = at(); telemetry.track("install"); await telemetry.flush();
+  now += 30 * 86_400_000; telemetry = at(); telemetry.track("first_message"); await telemetry.flush();
+  expect(bodies.at(-1)?.events[0].props).toEqual({});
+  await writeFile(join(dataDir, "product-events.json"), JSON.stringify({ seen: ["install"], queue: [], installedAt: 1_000_000 }));
+  telemetry = at(); telemetry.track("first_message", { v3: true }); await telemetry.flush();
+  expect(bodies.at(-1)?.events[0].props).toEqual({ v3: true, duration_ms: 1_000_000_000 });
+});

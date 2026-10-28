@@ -2,6 +2,7 @@ import { runtimeStreamKey } from "@/lib/runtime-stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
+  defaultBotId,
   configStatusFromFrame,
   createStreamDeltaBuffer,
   currentTaskBot,
@@ -2215,6 +2216,32 @@ it("only finishes initial chat loading when the roster snapshot arrives", () => 
   expect(reducer(loaded, { type: "connected", value: false }).rosterLoaded).toBe(true);
 });
 
+
+describe("which bot the app opens on", () => {
+  const roster = (...bots: Partial<Bot>[]) => bots.map((bot) => ({ messages: [], ...bot }) as unknown as Bot);
+
+  it("opens on the chief of staff, not the newest bot", () => {
+    // bots.json is newest-first: a fresh test bot used to win the launch.
+    const bots = roster({ id: "wedtest" }, { id: "free" }, { id: "cash" }, { id: "bos", chiefOfStaff: true, pinned: true });
+    const loaded = reducer(initialState, { type: "hydrate", bots, groups: [], computerControl: {} });
+    expect(loaded.selectedId).toBe("bos");
+  });
+
+  it("keeps the bot the person already had open across a reconnect", () => {
+    const bots = roster({ id: "cash" }, { id: "bos", chiefOfStaff: true });
+    const loaded = reducer({ ...initialState, selectedId: "cash" }, { type: "hydrate", bots, groups: [], computerControl: {} });
+    expect(loaded.selectedId).toBe("cash");
+  });
+
+  it("prefers the general chief, then any chief, then pinned, then the first visible bot", () => {
+    expect(defaultBotId(roster({ id: "a", chiefOfStaff: true, section: "Sales" }, { id: "b", chiefOfStaff: true }))).toBe("b");
+    expect(defaultBotId(roster({ id: "a" }, { id: "b", chiefOfStaff: true, section: "Sales" }))).toBe("b");
+    expect(defaultBotId(roster({ id: "a" }, { id: "b", pinned: true }))).toBe("b");
+    expect(defaultBotId(roster({ id: "a", hidden: true }, { id: "b" }))).toBe("b");
+    expect(defaultBotId(roster({ id: "a", hidden: true, chiefOfStaff: true }, { id: "b" }))).toBe("b");
+    expect(defaultBotId([])).toBe("");
+  });
+});
 
 describe("thread switch feedback", () => {
   const bot = { id: "bot", threadId: "first", messages: [], tasks: [{ threadId: "first", title: "first", createdAt: 1 }, { threadId: "second", title: "second", createdAt: 2 }] } as unknown as Bot;

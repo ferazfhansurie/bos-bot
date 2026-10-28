@@ -10,6 +10,8 @@ import { cn } from "@/lib/cn";
 import { t, tFromServer } from "@/lib/i18n";
 import type { LocaleKey } from "@/locales";
 import { SkillRequestPreview } from "@/components/SkillRequestPreview";
+import { SettingChangeCard } from "@/components/SettingChangeCard";
+import { v3Enabled } from "@/lib/v3";
 
 interface ToolLabels {
   [tool: string]: LocaleKey;
@@ -77,6 +79,7 @@ export function ApprovalCard({
 }) {
   const card = message.card;
   if (!card) return null;
+  if (card.settingChange && v3Enabled()) return <SettingChangeCard bot={bot} message={message} />;
   const settled = card.answered;
   const isRoutineRequest = Boolean(card.routineRequest);
   const isSkillRequest = Boolean(card.skillRequest);

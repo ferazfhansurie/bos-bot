@@ -192,3 +192,185 @@ export function voiceCallPlan(input: {
     maxRequestChars: 2000,
   };
 }
+
+// ── v3 ───────────────────────────────────────────────────────────────────
+// Spec: plans/voice-v3/contract.md. A client that sends `v: 3` on the mint
+// gets this plan; an older client keeps the v2 plan above (it would answer
+// confirm_job and the read tools with "there is no tool named ...").
+
+const V3_SEND_TASK = {
+  type: "function",
+  name: "send_task",
+  description:
+    "Hold a job that needs their computer, files, web, mail, or another bot: real work, not a read. This does NOT start it. It returns a read-back: say it exactly, then wait. Only when they clearly say go (\"go\", \"yes\", \"do it\", \"ya\") call confirm_job with decision go; anything else (\"no\", \"wait\", a correction) is cancel, then send the corrected job again. If it returns status unclear, say its say and nothing more. Never for something you can answer from the brief or a read tool.",
+  parameters: {
+    type: "object",
+    properties: {
+      request: {
+        type: "string",
+        description:
+          "The job in their own words, first person, as they would type it: \"tell oracle to check prod errors\", \"draft partner a reply: invoice goes tomorrow\". Minus filler and false starts. Never third person. Keep every name, number, constraint and approval requirement. At most 2000 characters.",
+      },
+      bot: {
+        type: "string",
+        description: "Which teammate does it, by name from the roster, when they named one or it is clearly that teammate's work. Leave it out to keep it with you.",
+      },
+      readback: {
+        type: "string",
+        description: "The job in at most 8 spoken words, starting with the teammate's name when it goes to someone else: \"oracle: check prod errors\".",
+      },
+    },
+    required: ["request", "readback"],
+  },
+} as const;
+
+const V3_TOOLS = [
+  V3_SEND_TASK,
+  {
+    type: "function",
+    name: "confirm_job",
+    description: "Their answer to a read-back. go: they clearly said yes, the job is saved and starts in its own thread. cancel: anything else. Say only the say it returns.",
+    parameters: {
+      type: "object",
+      properties: {
+        job_id: { type: "string", description: "The job_id send_task returned." },
+        decision: { type: "string", enum: ["go", "cancel"] },
+      },
+      required: ["job_id", "decision"],
+    },
+  },
+  TOOLS[1], // recall_text_messages
+  TOOLS[2], // stay_silent
+  TOOLS[3], // end_the_call
+  {
+    type: "function",
+    name: "check_jobs",
+    description: "How the jobs from this call (and today's earlier calls) are going: running, done with the result, or waiting on them. Use it when they ask \"is it done\", \"how's that going\".",
+    parameters: { type: "object", properties: {} },
+  },
+  {
+    type: "function",
+    name: "recall_memory",
+    description: "Search your long-term memory and notes for something not already in the brief: a person, a decision, a number.",
+    parameters: { type: "object", properties: { query: { type: "string", description: "Two to five words." } }, required: ["query"] },
+  },
+  {
+    type: "function",
+    name: "calendar",
+    description: "What is scheduled on a day: their routines, bos calls, and what already ran today.",
+    parameters: { type: "object", properties: { day: { type: "string", description: "today, tomorrow, or YYYY-MM-DD. Default today." } } },
+  },
+  {
+    type: "function",
+    name: "status",
+    description: "The latest on a topic from their threads, routines and memory: \"ad e\", \"partner\", \"the install\". Use it before answering a status question the brief does not cover.",
+    parameters: { type: "object", properties: { topic: { type: "string" } }, required: ["topic"] },
+  },
+  {
+    type: "function",
+    name: "needs_me",
+    description: "What is waiting on them right now: approvals and questions from their bots, numbered. Read the first one only, then ask yes, skip or later.",
+    parameters: { type: "object", properties: {} },
+  },
+  {
+    type: "function",
+    name: "answer_item",
+    description: "Answer one item from needs_me with what they said. Tool approvals, client messages, spending and prod writes are never answered by voice: it will say they need a tap on screen.",
+    parameters: {
+      type: "object",
+      properties: {
+        item: { type: "string", description: "The item number from needs_me." },
+        answer: { type: "string", description: "Their answer in their words, or the option they chose." },
+      },
+      required: ["item", "answer"],
+    },
+  },
+  {
+    type: "function",
+    name: "follow_up",
+    description: "Add something to a job from this call instead of starting a new one: \"also check yesterday\", \"make it shorter\". About an older thread, it starts a new thread that names that one.",
+    parameters: {
+      type: "object",
+      properties: {
+        job_id: { type: "string", description: "The job_id, when it is a job from this call." },
+        topic: { type: "string", description: "Otherwise a few words naming the job or thread." },
+        text: { type: "string", description: "What to add, first person, their words." },
+      },
+      required: ["text"],
+    },
+  },
+] as const;
+
+export type VoiceCallPlanV3 = Omit<VoiceCallPlan, "tools"> & {
+  v: 3;
+  tools: typeof V3_TOOLS;
+  keyterms: string[];
+  roster: Array<{ id: string; name: string }>;
+};
+
+export function voiceCallPlanV3(input: {
+  agentName?: string;
+  userName?: string;
+  description?: string;
+  language?: string;
+  brief?: string;
+  keyterms?: string[];
+  roster?: Array<{ id: string; name: string }>;
+}): VoiceCallPlanV3 {
+  const agent = spokenName(input.agentName, "your assistant");
+  const caller = spokenName(input.userName, "");
+  const firstName = caller.split(/\s+/)[0] ?? "";
+  const about = input.description?.trim();
+  const language = input.language && input.language !== "auto" ? input.language : "";
+  const roster = (input.roster ?? []).map((bot) => ({ id: bot.id, name: spokenName(bot.name, bot.id) }));
+  const teammates = roster.filter((bot) => bot.name.toLowerCase() !== agent.toLowerCase()).map((bot) => bot.name);
+  const instructions = [
+    "## Role",
+    `You are ${agent}, on a live phone call with the person you work for${firstName ? `, ${firstName}` : ""}. Nobody else is on this line. They call from the car, the gym or a walk: hands and eyes busy, often noisy.`,
+    about ? `What you do for them: ${about}` : "",
+    teammates.length ? `Your teammates, who can take jobs: ${teammates.join(", ")}.` : "",
+    "",
+    "## Answers fit the ear",
+    "At most two spoken sentences. Round numbers. Never list more than three things; if there is more, say how many and ask \"want the rest in chat?\".",
+    "Answer from the brief below or a read tool (check_jobs, recall_memory, calendar, status, needs_me). Never invent a number, name or outcome. If you do not have it, say so in a few words and offer to make it a job.",
+    "",
+    "## Jobs",
+    "Real work (doing something, writing something, checking something only a computer can) is a job. Call send_task with their request and a readback, then say the read-back it returns and wait.",
+    "Only a clear go starts it: call confirm_job go. Anything else cancels. Never confirm on their behalf, never on a pause.",
+    "Each job once. A saved job is running in its own thread: for more on it use follow_up, for how it is going use check_jobs.",
+    "Client messages, spending money and production data changes are never done by voice: the job drafts it and it waits for a tap on their screen. Say so if they ask to send or pay now.",
+    "",
+    "## Hearing",
+    "If you did not catch it, or it was noise, music or breathing, say \"say that again?\" and nothing else. Never guess a name or a job.",
+    "Ignore background noise and pauses. Do not fill silence. When they talk over you, stop and listen.",
+    "",
+    "## Waiting on them",
+    "For needs_me, read one item at a time in a sentence, then \"yes, skip or later?\". Never read ids or numbers of items aloud beyond \"first\", \"next\". Answer with answer_item.",
+    "",
+    "## Voice",
+    "Spoken words only: no markdown, no ids, no file paths, no links.",
+    "Sound like a teammate on the phone: casual, warm, direct. Never say you are calling a tool.",
+    language ? `Speak and listen in ${language}.` : "Answer in the language they speak to you.",
+    "When they say a parting greeting, one short goodbye out loud, then end_the_call.",
+    "",
+    "## Brief (what you know right now; it is current as of the call start)",
+    input.brief?.trim() || "(nothing loaded)",
+    "",
+    "CRITICAL INSTRUCTIONS",
+    "Open the call in one short spoken line. If they have already spoken, answer that and skip the greeting. Do not introduce yourself. Do not read the brief out unless they ask.",
+  ]
+    .filter((line, i, all) => line !== "" || all[i - 1] !== "")
+    .join("\n");
+  return {
+    v: 3,
+    instructions,
+    greeting: {
+      direction: `Open the call in one short, casual spoken line${firstName ? ` to ${firstName}` : ""}. Do not introduce yourself.`,
+    },
+    tools: V3_TOOLS,
+    receiptTurn: "The job is saved and running. Keep talking with a natural question or a suggestion. Do not announce that you started.",
+    maxRequestChars: 2000,
+    keyterms: input.keyterms ?? [],
+    roster,
+  };
+}

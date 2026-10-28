@@ -38,6 +38,47 @@ const SYNCED_RESUME_SCRIPT = `(() => {
   return true;
 })()`;
 
+/** an exposeFunction still pending after this is checked in the main frame */
+export const EXPOSE_SETTLE_MS = 10_000;
+/** Page script: the main frame has both the exposed function and the CDP
+ * binding behind it (puppeteer names it puppeteer_<name>). */
+const exposedInMainFrame = (name: string) => `(() => typeof window[${JSON.stringify(name)}] === "function" && typeof window[${JSON.stringify(`puppeteer_${name}`)}] === "function")()`;
+
+type ExposingPage = {
+  exposeFunction(name: string, fn: unknown): Promise<void>;
+  evaluate(script: string): Promise<unknown>;
+  __bosExposeGuard?: true;
+};
+
+/** puppeteer's exposeFunction installs the binding in every frame and waits
+ * for all of them. WhatsApp Web opens a cross-origin pdf-viewer iframe that
+ * swaps process mid-install; the iframe's Runtime.addBinding never gets an
+ * answer, exposeFunction never settles, whatsapp-web.js stops halfway through
+ * attachEventListeners and `ready` never fires. Only the main frame matters:
+ * once it has the function, carry on. */
+export function guardExposeFunction(page: ExposingPage | null | undefined, settleMs = EXPOSE_SETTLE_MS): void {
+  if (!page || page.__bosExposeGuard) return;
+  page.__bosExposeGuard = true;
+  const expose = page.exposeFunction.bind(page);
+  page.exposeFunction = (name, fn) => new Promise<void>((resolve, reject) => {
+    let settled = false;
+    const finish = (error?: unknown) => {
+      if (settled) return;
+      settled = true;
+      clearInterval(check);
+      if (error) reject(error);
+      else resolve();
+    };
+    const check = setInterval(() => {
+      void page.evaluate(exposedInMainFrame(name)).then((ok) => {
+        if (ok === true) finish();
+      }, () => {});
+    }, settleMs);
+    check.unref?.();
+    expose(name, fn).then(() => finish(), finish);
+  });
+}
+
 type RawMessage = wwebjs.Message;
 
 export function createReadOnlyClient(
@@ -60,7 +101,12 @@ export function createReadOnlyClient(
       args: [
         "--no-first-run",
         "--no-default-browser-check",
-        "--disable-features=Translate,MediaRouter",
+        // site-per-process + IsolateOrigins: keep WhatsApp's cross-origin
+        // iframes in the page's own process, so puppeteer never attaches to
+        // them as separate targets (see guardExposeFunction for what that
+        // does to startup)
+        "--disable-features=Translate,MediaRouter,site-per-process,IsolateOrigins",
+        "--disable-site-isolation-trials",
         "--mute-audio",
         // a real Google Chrome binary must not prompt for the login keychain
         "--use-mock-keychain",
@@ -68,6 +114,16 @@ export function createReadOnlyClient(
       ],
     },
   });
+  // inject() runs at start and again after every page reload; guard the page
+  // it is about to install whatsapp-web.js's listeners on
+  const raw = client as unknown as { inject?: () => Promise<void>; pupPage: ExposingPage | null };
+  if (typeof raw.inject === "function") {
+    const inject = raw.inject.bind(client);
+    raw.inject = async () => {
+      guardExposeFunction(raw.pupPage);
+      return inject();
+    };
+  }
 
   const chatNames = new Map<string, { name: string | null; chatId: string; at: number }>();
   const historyImportedBefore = new Map<string, number>();

@@ -44,6 +44,7 @@ export function ProviderUsage() {
           </label>
           {account.fiveHour && <Meter label="5h" window={account.fiveHour} />}
           <Meter label="7d" window={account.sevenDay} />
+          {account.stale && account.checkedAt && <div className="text-[11px] text-ink-secondary">Last read {ago(account.checkedAt)}</div>}
         </div>)}
       <XaiVoiceTile />
     </div>

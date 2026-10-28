@@ -12,6 +12,8 @@ import type { LocaleKey } from "@/locales";
 import { readCachedInventory, writeCachedInventory } from "@/lib/connected-apps-cache";
 import { managedConnectorUnavailableReason } from "../../shared/connector-availability";
 import { McpServersPanel } from "./McpServersPanel";
+import { V3Empty } from "./v3/Empty";
+import { useV3 } from "@/lib/v3";
 import { NativeWhatsAppTile } from "./NativeWhatsAppTile";
 import { reserveConnectionWindow } from "@/lib/connection-window";
 
@@ -235,6 +237,7 @@ export function ServiceIcon({ card, className = "size-11" }: { card: Pick<Toolki
 
 export function PluginsPanel() {
   const { state, dispatch } = useStore();
+  const v3 = useV3();
   const remoteClient = window.ogb?.remoteClient?.active === true;
   const dialogRef = useRef<HTMLDivElement>(null);
   const surface = state.pluginsSurface;
@@ -505,6 +508,8 @@ export function PluginsPanel() {
   );
   const connectedCount = Object.values(status).filter((service) => service.connected).length;
   const connectedEmptyCopy = connectedInventoryCopy(inventoryPhase);
+  // 3.0: the settled empty states get the bot; loading and errors keep their own copy
+  const mascotEmpty = v3 && !(tab === "connected" && inventoryPhase !== "ready");
   const close = () => dispatch({ type: "togglePlugins", open: false });
   // Only worth saying once an app is actually connected and reachable.
   const botsWithoutApps = hasUsableConnectedApps(configured, inventoryPhase, stale, status)
@@ -742,6 +747,7 @@ export function PluginsPanel() {
                       type="button"
                       disabled={!configured || inventoryPhase !== "ready" || busy || included || Boolean(unavailableReason)}
                       title={unavailableReason ?? undefined}
+                      data-v3-nod="apps"
                       onClick={() => {
                         if (pending) {
                           setAliasSlug(null);
@@ -845,7 +851,12 @@ export function PluginsPanel() {
               </div>
             </div>
           )}
-          {cards !== null && visible.length === 0 && (
+          {cards !== null && visible.length === 0 && mascotEmpty && (
+            <V3Empty className="min-h-56 justify-center"
+              text={tab === "connected" ? t("v3.empty.apps") : t("v3.empty.appsNoMatch")}
+              action={tab === "connected" ? { label: t("v3.empty.appsBrowse"), onClick: () => setTab("marketplace") } : { label: t("v3.empty.clearSearch"), onClick: () => setSearch("") }} />
+          )}
+          {cards !== null && visible.length === 0 && !mascotEmpty && (
             <div className="flex min-h-56 flex-col items-center justify-center text-center">
               <div className="text-[14px] font-medium text-ink">
                 {tab === "connected" ? connectedEmptyCopy.title : t("connectors.noAppsFound")}

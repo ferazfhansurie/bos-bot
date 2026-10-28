@@ -173,6 +173,12 @@ public struct ThreadRef: Codable, Hashable, Sendable {
     public var botId: String
     public var threadId: String
     public var title: String
+
+    public init(botId: String, threadId: String, title: String) {
+        self.botId = botId
+        self.threadId = threadId
+        self.title = title
+    }
 }
 
 /// A credential request created by the desktop for one paused task.
@@ -298,6 +304,8 @@ public struct Message: Codable, Hashable, Identifiable, Sendable {
     public var text: String?
     public var card: OptionCard?
     public var secret: SecretRequestCardData?
+    /// A bot asking for an app (`kind: "connector"`, read as `.unknown`).
+    public var connector: ConnectorCardData?
     public var tool: ToolActivity?
     public var threadRef: ThreadRef?
     /// The message this one follows; nil at the thread root. Two messages
@@ -335,6 +343,8 @@ public struct Message: Codable, Hashable, Identifiable, Sendable {
     public var attachments: [MessageImageAttachment]?
     /// Smart ui blocks' typed and toggled values, keyed per block.
     public var uiState: [String: [String: JSONValue]]?
+    /// A "voice chat" card: the end-of-call report a v3 call left.
+    public var voiceCall: VoiceCallCard?
 
     public var date: Date { Date(timeIntervalSince1970: at / 1000) }
 
@@ -546,6 +556,9 @@ public struct Bot: Codable, Hashable, Identifiable, Sendable {
     /// older harness included) means the shipped `cursor` silhouette.
     public var mascotEyes: String? = nil
     public var mascotBody: String?
+    /// What the mascot wears (v3). Read leniently: a malformed value or an
+    /// unknown piece never fails the bot, it just wears less.
+    public var mascotAccessories: MascotAccessories? = nil
     /// Present only on negotiated stream deltas; lists the complete task order.
     public var taskOrder: [String]? = nil
     public var tasks: [BotTask]?
@@ -806,14 +819,18 @@ public struct Fleet: Decodable, Sendable {
     /// The stream position (`streamId:seq`) this snapshot covers at least.
     /// Older computers, and peer views, omit it.
     public var cursor: String?
+    /// The desktop's labs → bos bot 3.0 switch. Sent only when on; older
+    /// computers never send it, so absent means the current look.
+    public var v3: Bool?
 
-    private enum CodingKeys: String, CodingKey { case bots, groups, botQueuedMessages, cursor }
+    private enum CodingKeys: String, CodingKey { case bots, groups, botQueuedMessages, cursor, v3 }
 
-    public init(bots: [Bot], groups: [Room], botQueuedMessages: [String: [QueuedSend]]? = nil, cursor: String? = nil) {
+    public init(bots: [Bot], groups: [Room], botQueuedMessages: [String: [QueuedSend]]? = nil, cursor: String? = nil, v3: Bool? = nil) {
         self.bots = bots
         self.groups = groups
         self.botQueuedMessages = botQueuedMessages
         self.cursor = cursor
+        self.v3 = v3
     }
 
     /// Whether this snapshot already holds everything up to `hello`: the
@@ -837,6 +854,7 @@ public struct Fleet: Decodable, Sendable {
             forKey: .botQueuedMessages
         ))??.mapValues { list in list.compactMap(\.value) }
         cursor = try? container.decodeIfPresent(String.self, forKey: .cursor)
+        v3 = try? container.decodeIfPresent(Bool.self, forKey: .v3)
     }
 }
 
@@ -1156,6 +1174,8 @@ public struct BotProfilePatch: Encodable, Sendable {
     public var avatarCrop: AvatarCrop?
     public var mascotEyes: String?
     public var mascotBody: String?
+    /// What the mascot wears; an empty value clears it (JSON null).
+    public var mascotAccessories: MascotAccessories?
     /// A palette name or "#RRGGBB" (`resolveMausColor` on every client).
     public var color: String?
     public var voice: String?
@@ -1180,6 +1200,7 @@ public struct BotProfilePatch: Encodable, Sendable {
         avatarCrop: AvatarCrop? = nil,
         mascotBody: String? = nil,
         mascotEyes: String? = nil,
+        mascotAccessories: MascotAccessories? = nil,
         color: String? = nil,
         voice: String? = nil,
         speakReplies: Bool? = nil
@@ -1194,13 +1215,14 @@ public struct BotProfilePatch: Encodable, Sendable {
         self.avatarCrop = avatarCrop
         self.mascotBody = mascotBody
         self.mascotEyes = mascotEyes
+        self.mascotAccessories = mascotAccessories
         self.color = color
         self.voice = voice
         self.speakReplies = speakReplies
     }
 
     private enum CodingKeys: String, CodingKey {
-        case name, title, description, soul, expectedSoul, notifications, avatarUrl, avatarCrop, mascotBody, mascotEyes, color, voice, speakReplies
+        case name, title, description, soul, expectedSoul, notifications, avatarUrl, avatarCrop, mascotBody, mascotEyes, mascotAccessories, color, voice, speakReplies
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -1220,6 +1242,12 @@ public struct BotProfilePatch: Encodable, Sendable {
         try values.encodeIfPresent(avatarCrop, forKey: .avatarCrop)
         try values.encodeIfPresent(mascotBody, forKey: .mascotBody)
         try values.encodeIfPresent(mascotEyes, forKey: .mascotEyes)
+        if let mascotAccessories {
+            // the server takes a whole object of present slots, or null; it
+            // stores {} as null and rejects a null slot
+            if mascotAccessories.isEmpty { try values.encodeNil(forKey: .mascotAccessories) }
+            else { try values.encode(mascotAccessories, forKey: .mascotAccessories) }
+        }
         try values.encodeIfPresent(color, forKey: .color)
         try values.encodeIfPresent(voice, forKey: .voice)
         try values.encodeIfPresent(speakReplies, forKey: .speakReplies)

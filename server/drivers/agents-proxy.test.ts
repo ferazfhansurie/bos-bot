@@ -92,6 +92,9 @@ let lastRoutineRequestBody: any = null;
 const DEFAULT_ROUTINE_RESPONSE = { requestId: "routine-request-1", summary: "Weekdays at 09:00 (Asia/Kolkata)" };
 let routineRequestResponse: unknown = DEFAULT_ROUTINE_RESPONSE;
 let lastProfileRequestBody: any = null;
+let lastSettingRequestBody: any = null;
+let settingRequestStatus = 201;
+let settingRequestResponse: any = { state: "pending", requestId: "setting-1", messageId: "msg-setting", summary: "cash: model Sonnet 5.5 → Haiku 5.5" };
 const DEFAULT_PROFILE_RESPONSE = { requestId: "profile-request-1", summary: "Name → Kiwi" };
 let profileRequestResponse: unknown = DEFAULT_PROFILE_RESPONSE;
 const DEFAULT_TEAM_RESPONSE = { requestId: "team-request-1", title: "Requested team change" };
@@ -423,6 +426,16 @@ beforeAll(async () => {
       });
       return;
     }
+    if (req.method === "POST" && req.url === "/api/internal/setting-requests") {
+      let data = "";
+      req.on("data", (c) => (data += c));
+      req.on("end", () => {
+        lastSettingRequestBody = JSON.parse(data);
+        res.writeHead(settingRequestStatus, { "content-type": "application/json" });
+        res.end(JSON.stringify(settingRequestResponse));
+      });
+      return;
+    }
     if (req.method === "POST" && req.url === "/api/internal/profile-requests") {
       let data = "";
       req.on("data", (c) => (data += c));
@@ -589,6 +602,11 @@ describe("agents-proxy MCP surface", () => {
     expect(wrote.result.content[0].text).toContain("rev 2");
     expect(appRequests.at(-1)).toEqual({ method: "POST", url: "/api/internal/apps/a-abcdefabcdef/write", body: { ops } });
     expect((await callTool("apps_list", {})).result.content[0].text).toContain("No apps yet");
+    expect((await callTool("app_delete", { app_id: "../x", confirm_name: "x" })).result.isError).toBe(true);
+    await callTool("app_update", { app_id: "a-abcdefabcdef", name: "Leads" });
+    expect(appRequests.at(-1)).toEqual({ method: "PATCH", url: "/api/internal/apps/a-abcdefabcdef", body: { name: "Leads" } });
+    await callTool("app_delete", { app_id: "a-abcdefabcdef", confirm_name: "Leads" });
+    expect(appRequests.at(-1)).toEqual({ method: "DELETE", url: "/api/internal/apps/a-abcdefabcdef", body: { confirm_name: "Leads" } });
   });
   it("describes all configuration tools as result-aware without changing credential requirements", async () => {
     const list = await rpc("tools/list");
@@ -732,6 +750,8 @@ describe("agents-proxy MCP surface", () => {
       "apps_list",
       "app_create",
       "app_read",
+      "app_update",
+      "app_delete",
       "app_write",
       "desk_open",
       "desk_card",
@@ -2133,10 +2153,103 @@ describe("with computer sharing off (the default)", () => {
     expect(names).toContain("list_threads");
   });
 
+  it("does not advertise propose_setting while the v3 settings switch is off", async () => {
+    const list = await gatedRpc("tools/list");
+    const names = list.result.tools.map((tool: { name: string }) => tool.name);
+    expect(names).not.toContain("propose_setting");
+    lastSettingRequestBody = null;
+    const refused = await gatedRpc("tools/call", { name: "propose_setting", arguments: { setting: "pinned", value: "on" } });
+    expect(refused.error?.message ?? refused.result?.content?.[0]?.text).toMatch(/unknown tool|turned off/i);
+    expect(lastSettingRequestBody).toBeNull();
+  });
+
   it("refuses the handlers if a model calls them by name anyway", async () => {
     for (const name of ["list_shared_computers", "shared_computer"]) {
       const refused = await gatedRpc("tools/call", { name, arguments: { computer_id: "x", action: "list_files" } });
       expect(refused.error?.message ?? refused.result?.content?.[0]?.text).toMatch(/unknown tool|turned off/i);
+    }
+  });
+});
+
+// propose_setting (3.0 "ask instead") exists only when the server's
+// features.v3 switch injects OMB_SETTING_CARDS_ENABLED=1.
+describe("with the v3 settings switch on", () => {
+  let enabled: ChildProcess;
+  const enabledPending = new Map<number, (msg: any) => void>();
+  let enabledId = 700;
+  const enabledRpc = (method: string, params?: unknown): Promise<any> =>
+    new Promise((resolve, reject) => {
+      const id = enabledId++;
+      enabledPending.set(id, resolve);
+      enabled.stdin!.write(JSON.stringify({ jsonrpc: "2.0", id, method, params }) + "\n");
+      setTimeout(() => {
+        if (enabledPending.delete(id)) reject(new Error(`${method} timed out`));
+      }, 10_000).unref?.();
+    });
+
+  beforeAll(async () => {
+    enabled = spawn(process.execPath, [PROXY], {
+      env: {
+        ...proxyTestEnv,
+        OMB_HARNESS_URL: `http://127.0.0.1:${stubPort}`,
+        OMB_BOT_ID: "bot-asker",
+        OMB_THREAD_ID: "thread-asker-routine",
+        OMB_COMMS_TOKEN: TOKEN,
+        OMB_TURN_DEPTH: "0",
+        OMB_SETTING_CARDS_ENABLED: "1",
+      },
+      stdio: ["pipe", "pipe", "inherit"],
+    });
+    let buf = "";
+    enabled.stdout!.on("data", (c) => {
+      buf += c;
+      let nl;
+      while ((nl = buf.indexOf("\n")) !== -1) {
+        const line = buf.slice(0, nl);
+        buf = buf.slice(nl + 1);
+        if (!line.trim()) continue;
+        const msg = JSON.parse(line);
+        enabledPending.get(msg.id)?.(msg);
+        enabledPending.delete(msg.id);
+      }
+    });
+    await enabledRpc("initialize", { protocolVersion: "2024-11-05" });
+  });
+
+  afterAll(() => {
+    enabled?.kill();
+  });
+
+  it("advertises propose_setting with a card-only schema", async () => {
+    const list = await enabledRpc("tools/list");
+    const tool = list.result.tools.find((candidate: { name: string }) => candidate.name === "propose_setting");
+    expect(tool).toBeDefined();
+    expect(tool.inputSchema.required).toEqual(["setting", "value"]);
+    expect(tool.inputSchema.properties.setting.enum).toEqual(["model", "notifications", "pinned", "computer", "apps", "browser", "speak_replies"]);
+    expect(tool.description).toMatch(/never applies/i);
+  });
+
+  it("posts the request as the injected bot and thread and says nothing is applied yet", async () => {
+    settingRequestStatus = 201;
+    const res = await enabledRpc("tools/call", { name: "propose_setting", arguments: { setting: "model", value: "haiku", for_bot_id: "bot-cash", reason: "asked" } });
+    expect(lastSettingRequestBody).toEqual({ fromBotId: "bot-asker", fromThreadId: "thread-asker-routine", setting: "model", value: "haiku", reason: "asked", forBotId: "bot-cash" });
+    const text = res.result.content[0].text;
+    expect(res.result.isError).toBeFalsy();
+    expect(text).toContain("cash: model Sonnet 5.5 → Haiku 5.5");
+    expect(text).toMatch(/NOT been applied/);
+  });
+
+  it("reports a refusal as no card shown and nothing changed", async () => {
+    settingRequestStatus = 400;
+    const saved = settingRequestResponse;
+    settingRequestResponse = { error: 'no available model matches "gemini"' };
+    try {
+      const res = await enabledRpc("tools/call", { name: "propose_setting", arguments: { setting: "model", value: "gemini" } });
+      expect(res.result.isError).toBe(true);
+      expect(res.result.content[0].text).toMatch(/No card was shown.*no available model matches/s);
+    } finally {
+      settingRequestStatus = 201;
+      settingRequestResponse = saved;
     }
   });
 });

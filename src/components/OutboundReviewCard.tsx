@@ -38,7 +38,7 @@ export function OutboundReviewCard({ botId, threadId, message }: { botId: string
     {status === "submitted" && draft.receipt && <p className="mb-3 break-all text-xs text-ink-secondary">receipt: {draft.receipt.id} · tool message: {draft.receipt.toolMessageId}</p>}
     {error && <p role="alert" className="mb-3 text-xs text-danger">{error}</p>}
     <div className="flex flex-wrap gap-2">
-      {status === "pending" && <><button type="button" disabled={pending || task?.busy} onClick={() => void decide("approve")} className="rounded-lg bg-accent px-3 py-2 text-accent-ink disabled:opacity-40">{pending ? "saving…" : "approve exact message"}</button><button type="button" disabled={pending} onClick={() => void decide("discard")} className="rounded-lg border border-hairline px-3 py-2 disabled:opacity-40">discard</button></>}
+      {status === "pending" && <><button type="button" data-v3-nod="outbound" disabled={pending || task?.busy} onClick={() => void decide("approve")} className="rounded-lg bg-accent px-3 py-2 text-accent-ink disabled:opacity-40">{pending ? "saving…" : "approve exact message"}</button><button type="button" disabled={pending} onClick={() => void decide("discard")} className="rounded-lg border border-hairline px-3 py-2 disabled:opacity-40">discard</button></>}
       {status === "approved" && !approvalInThread && <button type="button" disabled={pending || task?.busy} onClick={() => void decide("approve")} className="rounded-lg border border-hairline px-3 py-2 disabled:opacity-40">continue approved request in this thread</button>}
     </div>
   </section>;

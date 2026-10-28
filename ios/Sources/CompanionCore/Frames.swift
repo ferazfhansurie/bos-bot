@@ -68,6 +68,10 @@ public enum Frame: Sendable {
     /// The bot's cloud computer is being provisioned.
     case computer(botId: String, state: String)
     case config
+    /// A config frame from a desktop that mirrors its labs → bos bot 3.0
+    /// switch. Older desktops never send it; their config frames stay
+    /// `.config`.
+    case labs(v3: Bool)
     case runtime(RuntimeEvent)
     /// Pushed activity feed, folded into `CompanionState.activityFeed`:
     /// `replace` is a whole snapshot (lanes it omits are gone), otherwise
@@ -75,6 +79,11 @@ public enum Frame: Sendable {
     case activity([ActivityFeedEntry], replace: Bool)
     /// A bot is ringing the owner (`ring_owner`).
     case voiceRing(VoiceRing)
+    /// An app's records or details changed (a bot, the desktop, another phone).
+    case app(AppChange)
+    /// A bot opened something beside a conversation (`tab` "canvas" is a
+    /// page from open_tab or app_create).
+    case workspaceOpen(botId: String, threadId: String, tab: String)
     case unknown(kind: String)
 }
 
@@ -82,7 +91,10 @@ extension Frame: Decodable {
     private enum CodingKeys: String, CodingKey {
         case kind, cursor, resumed, threadId, message, activeLeafId
         case bot, botId, group, groupId, notification, png, mime, state, event, queues
+        case features, tab
     }
+
+    private struct LabsFeatures: Decodable { var v3: Bool? }
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
@@ -145,13 +157,26 @@ extension Frame: Decodable {
                 state: try container.decodeIfPresent(String.self, forKey: .state) ?? ""
             )
         case "config":
-            self = .config
+            if let v3 = (try? container.decodeIfPresent(LabsFeatures.self, forKey: .features))??.v3 {
+                self = .labs(v3: v3)
+            } else {
+                self = .config
+            }
         case "runtime":
             self = .runtime(try container.decode(RuntimeEvent.self, forKey: .event))
         case "voice_ring":
             // A ring this build can't read is no ring, not a broken stream.
             if let ring = try? VoiceRing(from: decoder) { self = .voiceRing(ring) }
             else { self = .unknown(kind: kind) }
+        case "app":
+            // A change this build can't read is no change, not a broken stream.
+            if let change = try? AppChange(from: decoder) { self = .app(change) }
+            else { self = .unknown(kind: kind) }
+        case "workspace.open":
+            if let botId = try? container.decode(String.self, forKey: .botId),
+               let threadId = try? container.decode(String.self, forKey: .threadId) {
+                self = .workspaceOpen(botId: botId, threadId: threadId, tab: (try? container.decode(String.self, forKey: .tab)) ?? "")
+            } else { self = .unknown(kind: kind) }
         case activityFeedEventName:
             // Never throws: an unreadable activity frame is an empty
             // update, not a lost one.
@@ -178,6 +203,8 @@ extension Frame {
             return notification.threadId
         case let .runtime(event):
             return event.threadId
+        case let .workspaceOpen(_, threadId, _):
+            return threadId
         default:
             return nil
         }
@@ -218,6 +245,13 @@ extension Frame {
     /// non-token kinds; treating each as a change redrew every screen.
     public var isLiveTextOnly: Bool {
         if case .runtime = self { return true }
+        return false
+    }
+
+    /// An app change folds nothing into the store: only an open app or the
+    /// apps grid listens for it, so it must not redraw the rest of the app.
+    public var isAppChange: Bool {
+        if case .app = self { return true }
         return false
     }
 }

@@ -17,6 +17,8 @@ import { sendBrowserCommand } from "@/components/workbench/browser-tabs";
 import { WORKSPACE_COMMAND_EVENT, workspaceCommandForEvent, type WorkspaceCommandId } from "@/lib/workspace-commands";
 import { locatePath, type WorkspaceChanges, type WorkspaceLocation } from "@/lib/workspace-files-client";
 import { api, useStore, type Bot } from "@/state/store";
+import { v3Enabled } from "@/lib/v3";
+import { markOpened } from "@/lib/v3-stage";
 
 export interface OpenOptions { pane?: WorkspacePane; path?: string; fresh?: boolean; ref?: string; title?: string; from?: string }
 
@@ -303,7 +305,10 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       const ref = detail.ref, title = typeof detail.title === "string" ? detail.title : undefined;
       setWorkspaces((all) => {
         const current = all[id] ?? loadWorkspace(id);
-        const next = (detail.tab === "desk" ? showDesk(current, ref, title) : showPage(current, ref, title)).state;
+        const shown = detail.tab === "desk" ? showDesk(current, ref, title) : showPage(current, ref, title);
+        const next = shown.state;
+        // 3.0: the bot walks into the header of the tab it just opened
+        if (shown.id && v3Enabled()) queueMicrotask(() => markOpened(detail.botId as string, shown.id));
         saveWorkspace(id, next);
         return { ...all, [id]: next };
       });

@@ -1,3 +1,4 @@
+import type { CheckinSlot } from "../shared/checkins.ts";
 import type { RoutineNotificationPolicy } from "../shared/routine-notifications.ts";
 import { randomUUID } from "node:crypto";
 import { mkdirSync, readFileSync } from "node:fs";
@@ -109,6 +110,9 @@ export interface Routine {
   failureStreak?: number;
   /** A bot's own one-time check-back (set_next_wake); removed once its run settles. */
   wake?: boolean;
+  /** One of the person's three daily check-ins (checkins.ts). Its prompt is
+   * composed fresh at each run, and a no-model gate may skip the run. */
+  checkin?: CheckinSlot;
   /** Conversation that created this routine in chat. Calendar/import-created
    * routines intentionally have no source, and older files migrate in place. */
   sourceThreadId?: string;
@@ -309,7 +313,18 @@ export interface RoutineManagerOptions {
   /** A successful provider turn is intermediate while its peer work or
    * queued continuation still belongs to this detached execution. */
   hasPendingDelegations?: (threadId: string) => boolean;
+  /** Check-ins: whether this run is worth a model at all. False settles it
+   * quietly with no thread, so a day where nothing moved costs nothing. */
+  checkinGate?: (routine: Routine, run: RoutineRun) => boolean;
+  /** Check-ins: the run's prompt, composed from the live check-in state. */
+  checkinPrompt?: (routine: Routine, run: RoutineRun) => string;
 }
+
+export const CHECKIN_SLOTS: ReadonlyArray<{ slot: CheckinSlot; hour: number }> = [
+  { slot: "morning", hour: 9 },
+  { slot: "afternoon", hour: 14 },
+  { slot: "night", hour: 22 },
+];
 
 const ALL_DAYS = [0, 1, 2, 3, 4, 5, 6];
 const CATCH_UP_MS = 12 * 60 * 60_000;
@@ -1096,6 +1111,62 @@ export class RoutineManager {
     return { routine: this.routineWithHealth(routine), at };
   }
 
+  /** The person's three daily check-ins on their chief bot: 9, 14 and 22 in
+   * their timezone, all reporting into one results thread. Idempotent: a bot
+   * that already has check-ins keeps them as they are. */
+  createCheckins(input: { botId: string; timeZone: string; resultsThreadId?: string }): Routine[] {
+    const existing = this.routines.filter((routine) => routine.checkin && routine.botId === input.botId);
+    const slotOrder = (routine: Routine) => CHECKIN_SLOTS.findIndex(({ slot }) => slot === routine.checkin);
+    if (existing.length) return existing.sort((a, b) => slotOrder(a) - slotOrder(b)).map((routine) => this.routineWithHealth(routine));
+    const now = this.now();
+    const made: Routine[] = [];
+    let resultsThreadId = input.resultsThreadId;
+    for (const { slot, hour } of CHECKIN_SLOTS) {
+      const clean = sanitizeInput({
+        name: `${slot} check-in`,
+        prompt: `Your ${slot} check-in: look at what changed, propose at most 3 things that need the person, stay quiet when nothing does.`,
+        botId: input.botId,
+        schedule: { type: "cron", expression: `0 ${hour} * * *`, timeZone: input.timeZone },
+        notificationPolicy: "all",
+        timeoutMinutes: 20,
+      }, now);
+      const routine: Routine = {
+        id: randomUUID(),
+        ...clean,
+        checkin: slot,
+        nextRunAt: this.initialOccurrence(clean.schedule, now),
+        createdAt: now,
+        updatedAt: now,
+      };
+      const discard = this.applyResultsInput(routine, resultsThreadId ?? null);
+      resultsThreadId = routine.resultsThreadId;
+      this.commitMutation(() => { this.routines.unshift(routine); }, discard);
+      this.emitRoutine(routine);
+      made.push(this.routineWithHealth(routine));
+    }
+    return made;
+  }
+
+  /** Latest finish of any run that is not itself a check-in, for the gate. */
+  lastRunFinishedAt(exclude: (run: RoutineRun) => boolean = () => false): number {
+    return this.runs.reduce((max, run) => (exclude(run) ? max : Math.max(max, run.finishedAt ?? 0)), 0);
+  }
+
+  /** When a check-in on this bot last actually ran (not skipped by the gate). */
+  lastCheckinAt(botId: string): number | undefined {
+    const ids = new Set(this.routines.filter((routine) => routine.checkin && routine.botId === botId).map((routine) => routine.id));
+    let last: number | undefined;
+    for (const run of this.runs) {
+      if (!ids.has(run.routineId) || !run.threadId || run.status !== "completed") continue;
+      last = Math.max(last ?? 0, run.startedAt ?? run.finishedAt ?? 0);
+    }
+    return last;
+  }
+
+  isCheckinRun(run: RoutineRun): boolean {
+    return Boolean(this.routines.find((routine) => routine.id === run.routineId)?.checkin);
+  }
+
   update(
     id: string,
     patch: Partial<RoutineInput>,
@@ -1593,6 +1664,19 @@ export class RoutineManager {
           this.failRun(run, this.missingTargetMessage(run.target));
           continue;
         }
+        const checkinRoutine = this.routines.find((routine) => routine.id === run.routineId && routine.checkin);
+        if (checkinRoutine && !run.manual && this.options.checkinGate && !this.options.checkinGate(checkinRoutine, run)) {
+          // Nothing moved since the last check-in: settle it quietly with no
+          // thread and no model turn.
+          run.status = "completed";
+          run.startedAt = now;
+          run.finishedAt = now;
+          run.quiet = true;
+          run.output = "skipped: nothing changed since the last check-in";
+          this.save();
+          this.emitRun(run);
+          continue;
+        }
         // A webhook is an incoming message, so make its task the bot's live
         // chat immediately. Scheduled work remains detached and unobtrusive.
         const task = run.target === "room-goal"
@@ -1612,7 +1696,9 @@ export class RoutineManager {
         this.save();
         this.emitRun(run);
         try {
-          const prompt = run.prompt ?? this.routines.find((r) => r.id === run.routineId)?.prompt;
+          const prompt = checkinRoutine && this.options.checkinPrompt
+            ? this.options.checkinPrompt(checkinRoutine, run)
+            : run.prompt ?? this.routines.find((r) => r.id === run.routineId)?.prompt;
           if (!prompt) {
             this.failThread(task.threadId, "The routine was deleted before it could start");
             continue;

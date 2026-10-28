@@ -118,6 +118,32 @@ describe("app routes", () => {
     expect(h.out.body).toMatchObject({ total: 1, records: [{ id: "ali", _by: "bos" }] });
   });
 
+  it("lets a bot rename and delete only its own apps, outside rooms, with the exact name", async () => {
+    const h = harness();
+    const mine = h.apps.ensure("bot-1", { threadId: "t1", path: "crm.html", name: "CRM" }, "bos");
+    const theirs = h.apps.ensure("bot-2", { threadId: "t9", path: "hr.html", name: "HR" }, "x");
+    h.apps.update(theirs.id, { sharedRoomIds: ["room-1"] }, "Firaz");
+    h.setBody({ name: "Leads" });
+    await h.internal("PATCH", `/api/internal/apps/${mine.id}`, "room-1");
+    expect(h.out.status).toBe(403);
+    await h.internal("PATCH", `/api/internal/apps/${theirs.id}`, null);
+    expect(h.out.status).toBe(403);
+    await h.internal("PATCH", `/api/internal/apps/${mine.id}`, null);
+    expect(h.out.body).toMatchObject({ app_id: mine.id, name: "Leads" });
+    h.setBody({ confirm_name: "CRM" });
+    await h.internal("DELETE", `/api/internal/apps/${mine.id}`, null);
+    expect(h.out.status).toBe(400);
+    expect(h.apps.list("bot-1")).toHaveLength(1);
+    h.setBody({ confirm_name: "leads" });
+    await h.internal("DELETE", `/api/internal/apps/${mine.id}`, null);
+    expect(h.out.body).toMatchObject({ ok: true, deleted: mine.id, name: "Leads" });
+    expect(h.apps.list("bot-1")).toHaveLength(0);
+    h.setBody({ confirm_name: "HR" });
+    await h.internal("DELETE", `/api/internal/apps/${theirs.id}`, null);
+    expect(h.out.status).toBe(403);
+    expect(h.apps.list("bot-2")).toHaveLength(1);
+  });
+
   it("parses ops and searches records", () => {
     expect(() => parseOps([])).toThrow(/1-100/);
     expect(() => parseOps([{ op: "patch", collection: "c" }])).toThrow(/needs an id/);

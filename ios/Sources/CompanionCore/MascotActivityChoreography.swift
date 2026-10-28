@@ -97,6 +97,24 @@ public enum MascotActivityChoreography {
         guard state != .idle, state != .finished || elapsed < gestureDuration(state) else { return nil }
         return nextFrameDelay(state, elapsed: elapsed)
     }
+    /// The face a running tool wears: the desktop's `toolGesture` read
+    /// through `GESTURE_FACE_STATE` (shared/mascot-choreography.ts). A search
+    /// or a page looks around, a read scans lines, a write looks down at
+    /// the work; anything else (a shell, a teammate) works.
+    public static func toolFace(_ toolName: String?) -> GlyphFaceState {
+        let name = (toolName ?? "").lowercased()
+        let bare = name.replacingOccurrences(of: #"^(?:mcp__.+?|[a-z][a-z0-9_-]{0,31})__"#, with: "", options: .regularExpression)
+        if toolSearchNames.contains(bare) { return .searching }
+        if name.contains("browser") || bare.hasPrefix("computer") || name.hasPrefix("computer__") || name.hasPrefix("mcp__computer__")
+            || toolBrowseNames.contains(bare) { return .searching }
+        if toolReadNames.contains(bare) { return .reading }
+        if toolWriteNames.contains(bare) || bare.hasPrefix("str_replace") { return .writing }
+        return .working
+    }
+    static let toolSearchNames: Set<String> = ["web_search", "websearch", "search_query", "browser_search", "search_web", "search", "grep", "glob", "find"]
+    static let toolBrowseNames: Set<String> = ["webfetch", "web_fetch", "fetch", "fetch_url", "open_url", "navigate", "read_page"]
+    static let toolReadNames: Set<String> = ["read", "read_file", "view", "view_file", "open_file", "cat", "ls", "list_dir", "list_files", "notebookread", "read_mcp_resource"]
+    static let toolWriteNames: Set<String> = ["write", "write_file", "create_file", "edit", "edit_file", "multiedit", "apply_patch", "notebookedit"]
     /// Tools whose run reads as a search (the desktop's `SEARCH_TOOLS`): the
     /// mascot peeks side to side rather than working.
     public static let searchTools: Set<String> = ["web_search", "search_query", "browser_search", "search"]

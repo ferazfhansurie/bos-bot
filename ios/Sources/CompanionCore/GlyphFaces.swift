@@ -10,21 +10,81 @@
 import CoreGraphics
 import Foundation
 
+/// The B sharp-dots emote set (2026-10-27), in the table's order. Raw values
+/// are the desktop's names; `CaseIterable` order is `document.states`.
 public enum GlyphFaceState: String, CaseIterable, Codable, Sendable {
-    case idle, thinking, searching, working, waiting, finished, happy, failed, asleep
+    // home base
+    case idle, glance, listening, noticed, drowsy, asleep
+    // working, from the real tool
+    case thinking, searching, reading, writing, working, focused, sending
+    case waiting, finished
+    case nailedIt = "nailed-it"
+    // feelings
+    case happy, love, excited, surprised, confused, skeptical, determined
+    case sad, scared, shy, wink, dizzy, failed
+    // more life
+    case waking, yawn, curious, proud, laughing
+    case mindBlown = "mind-blown"
+    case celebrate, nervous, bored, voice, calling
+    case handingOff = "handing-off"
+    case waitingMate = "waiting-mate"
+    // cash only
+    case kaChing = "ka-ching"
 }
 
 public enum GlyphAccentAnchor: String, Codable, Sendable {
     case left
     case topRight = "top-right"
     case split
+    /// on the body, under the eyes (a blush)
+    case cheek
+    /// under the body (a pencil, a hand-off arrow)
+    case below
+}
+
+/// One stroke of an eye: a glyph and its stroke weight as a multiple of the
+/// table's stroke. A heavy round-cap `dot` (3.2) is the resting eye; brows and
+/// lids are extra parts in the same eye box.
+public struct GlyphEyePart: Codable, Equatable, Sendable {
+    public let glyph: String
+    public let weight: CGFloat
+    public init(glyph: String, weight: CGFloat = 1) { self.glyph = glyph; self.weight = weight }
+}
+
+/// The sheet's motion names for a face; a still surface ignores them. Times
+/// and curves: `GlyphMotionCurves` in the app (src/components/glyph-motion.css).
+public struct GlyphMotion: Codable, Equatable, Sendable {
+    public let eyes: String?
+    public let accent: String?
+    public let body: String?
+    public init(eyes: String? = nil, accent: String? = nil, body: String? = nil) {
+        self.eyes = eyes; self.accent = accent; self.body = body
+    }
 }
 
 public struct GlyphFace: Codable, Equatable, Sendable {
+    /// each eye's main glyph (its first part)
     public let left: String
     public let right: String
     public let accent: String?
     public let anchor: GlyphAccentAnchor?
+    /// every part of each eye, main glyph first
+    public let leftParts: [GlyphEyePart]
+    public let rightParts: [GlyphEyePart]
+    /// where the eyes look: both shift by [x, y] body diameters, before the tilt
+    public let gaze: [CGFloat]
+    public let motion: GlyphMotion
+
+    public init(left: String, right: String, accent: String?, anchor: GlyphAccentAnchor?,
+                leftParts: [GlyphEyePart]? = nil, rightParts: [GlyphEyePart]? = nil,
+                gaze: [CGFloat] = [0, 0], motion: GlyphMotion = GlyphMotion()) {
+        self.left = left; self.right = right; self.accent = accent; self.anchor = anchor
+        self.leftParts = leftParts ?? [GlyphEyePart(glyph: left)]
+        self.rightParts = rightParts ?? [GlyphEyePart(glyph: right)]
+        self.gaze = gaze; self.motion = motion
+    }
+
+    public var gazeOffset: CGSize { CGSize(width: gaze.first ?? 0, height: gaze.count > 1 ? gaze[1] : 0) }
 }
 
 public struct GlyphAccentPlacement: Codable, Equatable, Sendable {
@@ -35,6 +95,9 @@ public struct GlyphAccentPlacement: Codable, Equatable, Sendable {
     public let box: CGFloat
     /// Stroke width in the 24 box.
     public let stroke: CGFloat
+    /// Set on accents drawn on the body itself: they take the colour opposite
+    /// the eyes at this alpha.
+    public let onBodyAlpha: CGFloat?
 }
 
 public struct GlyphLayout: Codable, Equatable, Sendable {
@@ -56,6 +119,8 @@ public struct GlyphFacesDocument: Codable, Sendable {
     public let faces: [String: GlyphFace]
     public let paths: [String: String]
     public let layout: GlyphLayout
+    public let expressions: [String: String]
+    public let liveStates: [String]
     public let palette: [String: String]
     public let fallbackColor: String
 }
@@ -87,6 +152,24 @@ public enum GlyphFaces {
     public static func path(_ id: String) -> CGPath {
         parsed[id] ?? CGMutablePath()
     }
+
+    /// The weight a glyph wears when a reader names it without parts (a
+    /// look override, a phone-only mood): its weight as the leading part of
+    /// the first face that leads with it, else 1. `dot` is 3.2.
+    public static func weight(_ glyph: String) -> CGFloat {
+        leadWeights[glyph] ?? 1
+    }
+
+    private static let leadWeights: [String: CGFloat] = {
+        var weights: [String: CGFloat] = [:]
+        for state in document.states {
+            guard let face = document.faces[state] else { continue }
+            for part in [face.leftParts.first, face.rightParts.first].compactMap({ $0 }) where weights[part.glyph] == nil {
+                weights[part.glyph] = part.weight
+            }
+        }
+        return weights
+    }()
 
     public static func placement(_ anchor: GlyphAccentAnchor) -> GlyphAccentPlacement? {
         document.layout.accent[anchor.rawValue]
@@ -159,28 +242,46 @@ public enum GlyphFaces {
     // MARK: - State
 
     /// Every expression name the apps use, mapped to a glyph face — the
-    /// desktop's `EXPRESSION_STATES`, name for name. Anything else rests on idle.
-    static let expressionStates: [String: GlyphFaceState] = [
-        "idle": .idle, "thinking": .thinking, "searching": .searching, "working": .working,
-        "waiting": .waiting, "finished": .finished, "happy": .happy, "failed": .failed,
-        "sleeping": .asleep, "waking": .idle, "listening": .searching,
-        "excited": .happy, "surprised": .waiting, "suspicious": .thinking, "angry": .waiting,
-        "drowsy": .idle, "curious": .thinking, "confused": .thinking, "bored": .idle,
-        "proud": .finished, "shy": .happy, "sad": .idle, "laughing": .finished,
-        "scared": .waiting, "playful": .happy, "celebrate": .finished,
-        "orbit": .searching, "radar": .searching, "progress": .working,
-        "spawning": .idle, "humming": .idle, "loading": .working, "dictating": .searching,
-        "writing": .working, "sending": .working, "receiving": .searching, "uploading": .working,
-        "notifying": .waiting, "alerting": .waiting, "dragging": .working, "bouncing": .happy,
-        "powering-down": .idle,
-        "deadpan": .idle, "friendly": .happy, "focused": .working, "sleepy": .idle,
-        "skeptical": .thinking, "worried": .waiting, "mischievous": .happy,
-        "none": .idle, "arrive": .idle, "switch": .idle, "customize": .idle, "alert": .waiting,
-        "launch": .working, "success": .finished, "blink": .idle, "surprise": .waiting, "failure": .failed,
-        "pending": .waiting, "thanked": .happy, "stopped": .failed, "error": .failed, "dead": .failed,
-    ]
+    /// desktop's `EXPRESSION_STATES`, name for name: every face maps to
+    /// itself, then the aliases. Anything else rests on idle.
+    static let expressionStates: [String: GlyphFaceState] = {
+        var map = Dictionary(uniqueKeysWithValues: GlyphFaceState.allCases.map { ($0.rawValue, $0) })
+        let aliases: [String: GlyphFaceState] = [
+            // tool poses (shared/mascot-choreography.ts toolGesture)
+            "browsing": .searching,
+            // the sheet's own words
+            "rest": .idle, "needs-you": .waiting, "done": .finished, "nailed": .nailedIt, "mind blown": .mindBlown,
+            "handoff": .handingOff, "kaching": .kaChing, "waking-up": .waking,
+            // CursorAvatar lifecycle
+            "sleeping": .asleep, "spawning": .noticed, "humming": .idle,
+            // CursorAvatar reactions
+            "suspicious": .skeptical, "angry": .determined, "playful": .wink,
+            // CursorAvatar agent morphs
+            "orbit": .searching, "radar": .searching, "progress": .working,
+            // CursorAvatar product cycle
+            "loading": .working, "dictating": .voice, "receiving": .reading, "uploading": .sending,
+            "notifying": .waiting, "alerting": .waiting, "dragging": .working, "bouncing": .happy,
+            "powering-down": .drowsy,
+            // legacy ten-face names
+            "deadpan": .idle, "friendly": .happy, "sleepy": .drowsy, "worried": .nervous, "mischievous": .wink,
+            // MAUS_MOTIONS
+            "none": .idle, "arrive": .noticed, "switch": .glance, "customize": .happy, "alert": .waiting,
+            "launch": .working, "success": .finished, "blink": .idle, "surprise": .surprised, "failure": .failed,
+            // plain words the plan's table uses
+            "pending": .waiting, "thanked": .happy, "stopped": .sad, "error": .failed, "dead": .failed,
+            // voice calls
+            "ringing": .calling, "speaking": .voice,
+        ]
+        map.merge(aliases) { _, alias in alias }
+        return map
+    }()
 
-    private static let liveStates: Set<GlyphFaceState> = [.thinking, .searching, .working]
+    /// Faces that already describe a live turn; a working bot keeps one of
+    /// these instead of being flattened to `working`.
+    private static let liveStates: Set<GlyphFaceState> = [
+        .thinking, .searching, .reading, .writing, .working, .focused, .sending,
+        .confused, .skeptical, .determined, .nervous, .voice, .calling, .handingOff, .waitingMate,
+    ]
 
     /// The desktop's `glyphStateFor`. `activity` is the wire `BotActivity`
     /// ("working", "waiting-on-you", "idle", "no-signal", "dead").

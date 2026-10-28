@@ -8,6 +8,7 @@
 // with the call's origin), and whatever the bot settles on is fed into the
 // call as `async_update.add` so the model can say it out loud. Protocol
 // notes: plans/grok-voice, plans/voice-v2.
+import AudioToolbox
 import AVFoundation
 import Combine
 import CompanionCore
@@ -55,7 +56,8 @@ final class RealtimeVoiceCall: ObservableObject, Identifiable {
     let opener: String?
     /// The origin `callId` on everything this call sends. One id per call,
     /// across reconnects, so a done push for it can be held while it is live.
-    var callId: String { id.uuidString.lowercased() }
+    /// A prewarmed call keeps the id it was minted under.
+    private(set) lazy var callId: String = id.uuidString.lowercased()
 
     @Published private(set) var phase: Phase = .connecting
     @Published private(set) var activity: Activity = .idle
@@ -64,8 +66,14 @@ final class RealtimeVoiceCall: ObservableObject, Identifiable {
     @Published private(set) var lines: [Line] = []
     @Published private(set) var settings: VoiceCallSettings
     @Published private(set) var options: VoiceCallOptions = .fallback
+    /// The owner's call-back switch, as the computer last said; nil when the
+    /// computer has no call-backs (the row stays hidden).
+    @Published private(set) var callBack: Bool?
     /// A `send_task` went out on this call, so the bot may be working for it.
     @Published private(set) var handedWork = false
+    /// The line never connected (no network): the caller is leaving a memo
+    /// that goes to the bot once the phone is back online.
+    @Published private(set) var recordingMemo = false
 
     var onEnded: ((RealtimeVoiceCall) -> Void)?
     private(set) var hasBeenLive = false
@@ -120,6 +128,8 @@ final class RealtimeVoiceCall: ObservableObject, Identifiable {
     private var watchSince: Double?
     private var deliveredIds = Set<String>()
     private var lastTaskCallId = "voice"
+    /// Settled voice jobs already said in this call.
+    private var reportedDone = Set<String>()
     /// Caller lines already posted as part of an ask.
     private var askedLineIds = Set<String>()
     private var lastAsk: (text: String, at: Date)?
@@ -130,6 +140,29 @@ final class RealtimeVoiceCall: ObservableObject, Identifiable {
     private var pendingFrames: [String] = []
 
     private var ticker: Timer?
+
+    // v3 (plan.v == 3): client-owned jobs, real resumption, metrics.
+    var isV3: Bool { plan?.isV3 == true }
+    /// The session this call was placed through (the end-of-call screen asks it).
+    var owner: Session? { session }
+    private var desk: VoiceCallDesk?
+    private var transcriptLog = VoiceTranscriptLog()
+    /// A pre-minted credential for the next resume, re-minted past 240 s.
+    private var spare: VoiceMintedStart?
+    private var spareTask: Task<Void, Never>?
+    private var droppedAt: Date?
+    private var resumeAttempt = 0
+    private var resumeWatchdog: Task<Void, Never>?
+    private var metrics = VoiceCallMetrics()
+    /// The tap that started the call, for first_audio.
+    private let tappedAt = Date()
+    private var heardFirstAudio = false
+    private var prewarmed = false
+    private var bookedStart = false
+    private var memo: VoiceMemoRecorder?
+    private var memoStartedAt: Date?
+    /// CallKit hands the audio session over in didActivate; the engine waits.
+    private var awaitingCallKitAudio = false
 
     init(bot: Bot, threadId: String, session: Session, opener: String? = nil) {
         self.bot = bot
@@ -143,30 +176,76 @@ final class RealtimeVoiceCall: ObservableObject, Identifiable {
 
     // MARK: - Controls
 
-    func start() {
+    /// `callKit`: CallKit owns the audio session and starts the engine via
+    /// `callKitAudioActivated()` (at most 3 s later, whatever happens).
+    func start(callKit: Bool = false) {
         startTicker()
-        Task { await prepareMicrophone() }
+        audio.setMic(settings.mic)
+        if callKit {
+            awaitingCallKitAudio = true
+            Task { [weak self] in
+                try? await Task.sleep(for: .seconds(3))
+                self?.callKitAudioActivated()
+            }
+        } else {
+            Task { await prepareMicrophone() }
+        }
         Task { await dial(reconnect: false) }
+    }
+
+    func callKitAudioActivated() {
+        guard awaitingCallKitAudio, !isOver else { return }
+        awaitingCallKitAudio = false
+        Task { await prepareMicrophone() }
     }
 
     func hangUp() { finish(failure: nil) }
 
     func toggleMute() {
-        muted.toggle()
+        setMuted(!muted)
+    }
+
+    /// From the app or CallKit's mute button; each tells the other.
+    func setMuted(_ value: Bool, fromCallKit: Bool = false) {
+        guard muted != value else { return }
+        muted = value
         Haptics.selection()
+        if !fromCallKit { CallKitRinger.shared.callMuted(value) }
     }
 
     func setVoice(_ voice: String) { update { $0.voice = voice } }
     func setSpeed(_ speed: Double) { update { $0.speed = speed } }
     func setLanguage(_ language: String) { update { $0.language = language } }
+    func setMic(_ mic: VoiceMic) {
+        update { $0.mic = mic }
+        audio.setMic(mic)
+    }
+
+    /// Flip the call-back switch on the computer; a failed save puts it back.
+    func setCallBack(_ on: Bool) {
+        guard let session, callBack != nil, callBack != on else { return }
+        let before = callBack
+        callBack = on
+        Haptics.selection()
+        Task { [weak self] in
+            do {
+                let saved = try await session.setVoiceCallBack(on)
+                self?.callBack = saved
+            } catch {
+                self?.callBack = before
+            }
+        }
+    }
 
     private func update(_ change: (inout VoiceCallSettings) -> Void) {
         var next = settings
         change(&next)
         next = next.normalized(for: options)
         guard next != settings else { return }
+        let onlyMic = { var a = next; a.mic = settings.mic; return a == settings }()
         settings = next
         Self.save(next, botId: bot.id)
+        guard !onlyMic else { return }
         // Same instructions, new voice/speed/language, mid-call.
         if invited, socketOpen, let plan {
             send(RealtimeVoice.sessionUpdate(plan: plan, settings: next, reconnect: isReconnect, chatContext: chatContext))
@@ -177,7 +256,7 @@ final class RealtimeVoiceCall: ObservableObject, Identifiable {
 
     private func prepareMicrophone() async {
         let granted = await AVAudioApplication.requestRecordPermission()
-        guard !isOver else { return }
+        guard !isOver, memo == nil else { return }
         guard granted else {
             return finish(failure: "Microphone access is off for BOS. Turn it on in Settings to talk to \(bot.name).")
         }
@@ -221,10 +300,30 @@ final class RealtimeVoiceCall: ObservableObject, Identifiable {
         let token = dialToken
         do {
             let language = settings.language == VoiceCallSettings.autoLanguage ? nil : settings.language
-            let start = try await session.startVoiceCall(botId: bot.id, language: language, callId: callId)
+            let start: VoiceCallStart
+            if !reconnect, plan == nil { await VoiceCallWarmer.shared.settle(botId: bot.id) }
+            if !reconnect, plan == nil, let warm = VoicePrewarmCache.shared.take(botId: bot.id, language: language, now: Date()) {
+                callId = warm.callId
+                prewarmed = true
+                start = warm.start
+            } else if reconnect, let spare, spare.isFresh(now: Date()) {
+                self.spare = nil
+                start = spare.start
+            } else {
+                start = try await session.startVoiceCall(botId: bot.id, language: language, callId: callId)
+            }
             guard token == dialToken, !isOver else { return }
-            if plan == nil || !reconnect { plan = start.plan }
+            if plan == nil || !reconnect {
+                plan = start.plan
+                VoiceCallWarmer.markV3(connectionID, start.plan.isV3)
+                if start.plan.isV3, desk == nil {
+                    desk = VoiceCallDesk(callId: callId, botId: bot.id, botName: bot.name, journal: .shared,
+                                         maxRequestChars: start.plan.maxRequestChars)
+                }
+            }
+            if isV3 { keepSpare(language: language) }
             options = start.options
+            if let value = start.callBack { callBack = value }
             let normalized = settings.normalized(for: options)
             if normalized != settings { settings = normalized }
             let url = try RealtimeVoice.realtimeURL(credential: start.credential,
@@ -242,8 +341,52 @@ final class RealtimeVoiceCall: ObservableObject, Identifiable {
         } catch {
             guard token == dialToken, !isOver else { return }
             if reconnect, !Self.isFatal(error) { scheduleReconnect() }
+            else if !reconnect, !hasBeenLive, VoiceMemoPolicy.shouldRecordMemo(for: error) { recordMemo() }
             else { finish(failure: Self.describe(error)) }
         }
+    }
+
+    /// v3: one spare credential minted ahead of a drop, so a resume dials at
+    /// once. Re-minted when it is more than 240 s old.
+    private func keepSpare(language: String?) {
+        guard spareTask == nil else { return }
+        spareTask = Task { [weak self] in
+            while let self, !self.isOver, !Task.isCancelled {
+                if self.spare?.isFresh(now: Date().addingTimeInterval(30)) != true, let session = self.session {
+                    if let start = try? await session.startVoiceCall(botId: self.bot.id, language: language, callId: self.callId),
+                       !self.isOver {
+                        self.spare = VoiceMintedStart(start: start, mintedAt: Date())
+                    }
+                }
+                try? await Task.sleep(for: .seconds(20))
+            }
+        }
+    }
+
+    // MARK: - Voice memo
+
+    /// No line to the voice service: record what the caller says instead,
+    /// queued on hang-up for the bot. A tone and "recording a memo" say so.
+    private func recordMemo() {
+        guard memo == nil, !isOver else { return }
+        socket?.cancel(with: .goingAway, reason: nil)
+        socket = nil
+        socketOpen = false
+        audio.stop()
+        micReady = false
+        let recorder = VoiceMemoRecorder(callId: callId, botId: bot.id, threadId: threadId)
+        do {
+            try recorder.start()
+        } catch {
+            return finish(failure: "Couldn't reach the voice service, and couldn't record a memo: \(error.localizedDescription)")
+        }
+        AudioServicesPlaySystemSound(1113)
+        memo = recorder
+        memoStartedAt = Date()
+        recordingMemo = true
+        phase = .live
+        CallKitRinger.shared.outgoingConnected()
+        Haptics.impact(.light)
     }
 
     private static func isFatal(_ error: Error) -> Bool {
@@ -294,6 +437,10 @@ final class RealtimeVoiceCall: ObservableObject, Identifiable {
     fileprivate func socketOpened(_ task: URLSessionWebSocketTask) {
         guard task === socket, !isOver else { return }
         socketOpen = true
+        if prewarmed, !bookedStart {
+            bookedStart = true
+            event(.start)
+        }
         maybeInvite()
     }
 
@@ -307,11 +454,13 @@ final class RealtimeVoiceCall: ObservableObject, Identifiable {
             return finish(failure: "xAI closed the call. Check the xAI key on the computer.")
         }
         if hasBeenLive { scheduleReconnect() }
+        else if code == nil, memo == nil { recordMemo() }
         else { finish(failure: "Couldn't reach the voice service. Try again in a moment.") }
     }
 
     private func scheduleReconnect() {
         guard !isOver else { return }
+        if isV3 { return resume() }
         guard reconnectAttempt < RealtimeVoice.maxReconnectAttempts else {
             return finish(failure: "Lost the line to \(bot.name). Try calling again.")
         }
@@ -319,6 +468,39 @@ final class RealtimeVoiceCall: ObservableObject, Identifiable {
         resetLine()
         let delay = RealtimeVoice.reconnectDelay(attempt: reconnectAttempt)
         reconnectAttempt += 1
+        reconnectTask?.cancel()
+        reconnectTask = Task { [weak self] in
+            if delay > 0 { try? await Task.sleep(for: .seconds(delay)) }
+            guard !Task.isCancelled, let self else { return }
+            await self.dial(reconnect: true)
+        }
+    }
+
+    /// v3 drop: post `drop`, dial again at once with the spare credential
+    /// and the same conversation_id. 5 attempts or 20 s, then the call ends
+    /// normally (its jobs are in the journal).
+    private func resume() {
+        let now = Date()
+        if droppedAt == nil {
+            droppedAt = now
+            resumeAttempt = 0
+            metrics.drops += 1
+            event(.drop)
+            flushJournal()
+            resumeWatchdog?.cancel()
+            resumeWatchdog = Task { [weak self] in
+                try? await Task.sleep(for: .seconds(VoiceResumePolicy.window))
+                guard let self, !Task.isCancelled, self.droppedAt != nil, !self.isOver else { return }
+                self.finish(failure: nil)
+            }
+        }
+        resumeAttempt += 1
+        guard let droppedAt, VoiceResumePolicy.mayTry(attempt: resumeAttempt, elapsed: now.timeIntervalSince(droppedAt)) else {
+            return finish(failure: nil)
+        }
+        phase = .reconnecting
+        resetLine()
+        let delay = VoiceResumePolicy.delay(attempt: resumeAttempt)
         reconnectTask?.cancel()
         reconnectTask = Task { [weak self] in
             if delay > 0 { try? await Task.sleep(for: .seconds(delay)) }
@@ -350,7 +532,8 @@ final class RealtimeVoiceCall: ObservableObject, Identifiable {
         guard socketOpen, micReady, !invited, let plan else { return }
         invited = true
         send(RealtimeVoice.sessionUpdate(plan: plan, settings: settings, reconnect: isReconnect, chatContext: chatContext))
-        if isReconnect {
+        // v3 resumes the conversation server-side: replaying would double it.
+        if isReconnect, !plan.isV3 {
             for line in lines where line.final && !line.text.isEmpty {
                 send(RealtimeVoice.replay(role: line.speaker, text: line.text))
             }
@@ -360,9 +543,19 @@ final class RealtimeVoiceCall: ObservableObject, Identifiable {
     private func becameLive() {
         phase = .live
         reconnectAttempt = 0
+        if let droppedAt {
+            self.droppedAt = nil
+            resumeAttempt = 0
+            resumeWatchdog?.cancel()
+            metrics.resumes += 1
+            event(.resume(ms: Int(Date().timeIntervalSince(droppedAt) * 1000)))
+            flushJournal()
+            requestResponse(VoiceResumePolicy.instructions)
+        }
         if !hasBeenLive {
             hasBeenLive = true
             startedAt = Date()
+            CallKitRinger.shared.outgoingConnected()
             audio.playChime(rising: true)
             Haptics.impact(.light)
             // Open with a greeting (or the reason for this call) unless they
@@ -427,6 +620,7 @@ final class RealtimeVoiceCall: ObservableObject, Identifiable {
             guard let index = lines.firstIndex(where: { $0.id == itemId }), !lines[index].interrupted else { return }
             if let transcript, !transcript.isEmpty { lines[index].text = transcript }
             lines[index].final = true
+            log(itemId, .bot)
         case let .itemTruncated(itemId, _, transcript):
             truncated(itemId: itemId, transcript: transcript)
         case let .functionCall(callId, name, arguments):
@@ -438,6 +632,13 @@ final class RealtimeVoiceCall: ObservableObject, Identifiable {
 
     private func play(_ samples: [Float], itemId: String, contentIndex: Int) {
         guard let span = audio.schedule(samples) else { return }
+        if !heardFirstAudio {
+            heardFirstAudio = true
+            // Tap to the first audio played, counting the pre-roll.
+            let ms = Int(Date().timeIntervalSince(tappedAt) * 1000) + 40
+            metrics.firstAudioMs = ms
+            event(.firstAudio(ms: ms))
+        }
         let key = "\(itemId):\(contentIndex)"
         if var existing = spans[key] {
             existing.end = span.end
@@ -492,7 +693,9 @@ final class RealtimeVoiceCall: ObservableObject, Identifiable {
         }
         lines[index].final = true
         lines[index].interrupted = true
+        let role: VoiceTranscriptLine.Role = lines[index].speaker == .user ? .user : .bot
         if lines[index].text.isEmpty { lines.remove(at: index) }
+        log(itemId, role)
     }
 
     /// The heard part of a line, to a word boundary.
@@ -522,6 +725,14 @@ final class RealtimeVoiceCall: ObservableObject, Identifiable {
             lines[index].text = lines[index].text.trimmingCharacters(in: .whitespacesAndNewlines)
             if lines[index].text.isEmpty { lines.remove(at: index) }
         }
+        log(id, .user)
+    }
+
+    /// The end report's transcript: one line per item id, whatever the
+    /// line went through (deltas, replaces, truncation).
+    private func log(_ itemId: String, _ role: VoiceTranscriptLine.Role) {
+        let text = lines.first(where: { $0.id == itemId })?.text ?? ""
+        transcriptLog.upsert(itemId: itemId, role: role, text: text, at: Date().timeIntervalSince1970 * 1000)
     }
 
     private func appendAssistant(itemId: String, delta: String) {
@@ -531,6 +742,7 @@ final class RealtimeVoiceCall: ObservableObject, Identifiable {
         } else {
             lines.append(Line(id: itemId, speaker: .assistant, text: delta, final: false))
         }
+        log(itemId, .bot)
         if lines.count > 200 {
             let count = lines.count - 200
             archivedLines.append(contentsOf: lines.prefix(count))
@@ -568,7 +780,25 @@ final class RealtimeVoiceCall: ObservableObject, Identifiable {
     private func handleTool(callId: String, name: String, arguments: String) {
         switch RealtimeVoice.ToolName(rawValue: name) {
         case .sendTask:
-            sendTask(callId: callId, arguments: arguments)
+            if let desk, isV3 {
+                // The gate reads the caller's words: let an in-flight
+                // transcript settle first (at most 1.5 s).
+                Task { [weak self] in
+                    guard let self else { return }
+                    await self.waitForCallerTranscript()
+                    guard !self.isOver else { return }
+                    self.reply(callId, desk.sendTask(arguments: arguments, lastTranscript: self.transcriptLog.lastCallerText))
+                }
+            } else {
+                sendTask(callId: callId, arguments: arguments)
+            }
+        case .confirmJob:
+            if let desk, isV3 {
+                reply(callId, desk.confirmJob(arguments: arguments))
+            } else {
+                output(callId, ["error": .string("There is no tool called \(name).")])
+                requestResponse(nil)
+            }
         case .recallTextMessages:
             guard let session, session.connection?.id == connectionID else {
                 output(callId, ["error": "The original chat is no longer connected."])
@@ -584,9 +814,52 @@ final class RealtimeVoiceCall: ObservableObject, Identifiable {
             // Let the goodbye finish playing, at most fifteen seconds.
             hangUpDeadline = Date().addingTimeInterval(RealtimeVoice.goodbyeWaitSeconds)
         case nil:
+            if isV3 { return serverTool(callId: callId, name: name, arguments: arguments) }
             output(callId, ["error": .string("There is no tool called \(name).")])
             requestResponse(nil)
         }
+    }
+
+    /// A v3 desk answer: output, its event, a journal flush on a save.
+    private func reply(_ callId: String, _ reply: VoiceCallDesk.Reply) {
+        output(callId, reply.output)
+        if let event = reply.event { self.event(event) }
+        if reply.flush {
+            handedWork = true
+            postJob("sending")
+            flushJournal()
+        }
+        requestResponse(nil)
+    }
+
+    /// Every other v3 tool is the computer's: POST /api/voice/tool, 8 s.
+    private func serverTool(callId: String, name: String, arguments: String) {
+        let request = VoiceToolRequest(callId: self.callId, botId: bot.id, name: name,
+                                       args: VoiceCallDesk.toolArgs(arguments), jobIds: desk?.confirmedJobIds)
+        let client = session?.connection?.id == connectionID ? session?.captureSendClient() : nil
+        Task { [weak self] in
+            var text = VoiceCallDesk.toolFallback
+            if let client, let answer = try? await client.voiceTool(request, timeout: 8) { text = answer.output }
+            guard let self, !self.isOver else { return }
+            self.send(RealtimeVoice.functionCallOutput(callId: callId, text: text))
+            self.requestResponse(nil)
+        }
+    }
+
+    /// Send the journal; this call's jobs learn where they went.
+    private func flushJournal() {
+        Task { [weak self] in
+            let outcome = await VoiceCallOutbox.shared.flushJobs()
+            self?.desk?.apply(outcome.results)
+            // CarPlay hook: still journalled means safe on the phone, sent later.
+            self?.postJob(outcome.remaining == 0 ? "saved" : "saved-offline")
+        }
+    }
+
+    /// v3 counters for the computer's voice card.
+    private func event(_ event: VoiceCallEvent) {
+        guard isV3 || prewarmed else { return }
+        VoiceCallOutbox.shared.post(event, callId: callId, botId: bot.id)
     }
 
     private func output(_ callId: String, _ value: JSONValue) {
@@ -621,8 +894,10 @@ final class RealtimeVoiceCall: ObservableObject, Identifiable {
                     return
                 }
                 lastAsk = (ask.text, Date())
+                postJob("sending")
                 let failure = await session.sendFromVoiceCall(ask.text, job: ask.job, callId: self.callId,
                                                              botId: bot.id, threadId: threadId, sendId: sendId, expectedConnectionID: connectionID)
+                postJob(failure == nil ? "saved" : "failed")
                 if let failure {
                     if isOver { session.actionError = "Voice task delivery could not be confirmed: \(failure)" }
                     else {
@@ -638,6 +913,24 @@ final class RealtimeVoiceCall: ObservableObject, Identifiable {
                 }
             }
         }
+    }
+
+    // CarPlay hook (carplay-voice): job events for the car screen's
+    // "sending to <bot>" / "job saved". userInfo: callId, event
+    // (sending | saved | saved-offline | failed). v3 posts them around the
+    // journal flush, v2 around sendFromVoiceCall.
+    static let jobEvent = Notification.Name("bos.voiceCall.jobEvent")
+
+    private func postJob(_ event: String) {
+        NotificationCenter.default.post(name: Self.jobEvent, object: self, userInfo: ["callId": callId, "event": event])
+    }
+
+    /// CarPlay hook (carplay-voice): a turn asked for by a screen button
+    /// ("anything need me?"), spoken once the line is free. Never takes the
+    /// place of a turn the call already owes, and goes stale after 8 s.
+    func ask(_ instructions: String) {
+        guard !isOver, owed == nil else { return }
+        requestResponse(instructions, expires: Date().addingTimeInterval(8))
     }
 
     /// Up to 1.5 s for an in-flight caller transcript to settle.
@@ -694,6 +987,19 @@ final class RealtimeVoiceCall: ObservableObject, Identifiable {
         landed(eventId: eventId, text: text, at: Date(timeIntervalSince1970: (fresh.last?.at ?? 0) / 1000))
     }
 
+    /// A voice job settled while this call is live, given on this call or an
+    /// earlier one: the call says it (the computer skips the call-back ring
+    /// while a call is on). Once per settled message.
+    func reportSettled(_ notification: NotificationFrame) {
+        guard !isOver else { return }
+        // this call's own reply watcher already reads that thread
+        if watchSince != nil, notification.threadId == threadId { return }
+        let key = notification.messageId ?? "\(notification.threadId):\(notification.body)"
+        guard reportedDone.insert(key).inserted else { return }
+        let eventId = "done-\(reportedDone.count)-\(String(notification.threadId.prefix(36)))"
+        landed(eventId: eventId, text: RealtimeVoice.settledUpdate(botName: notification.botName, result: notification.body), at: Date())
+    }
+
     /// `async_update.add`: the server starts its own response for it.
     private func landed(eventId: String, text: String, at: Date) {
         let frame = RealtimeVoice.asyncUpdate(eventId: eventId, text: text, timestampMs: at.timeIntervalSince1970 * 1000)
@@ -729,8 +1035,8 @@ final class RealtimeVoiceCall: ObservableObject, Identifiable {
         else { next = .idle }
         if next != activity { activity = next }
 
-        if let startedAt {
-            let seconds = Int(Date().timeIntervalSince(startedAt))
+        if let since = startedAt ?? memoStartedAt {
+            let seconds = Int(Date().timeIntervalSince(since))
             if seconds != elapsed { elapsed = seconds }
         }
 
@@ -746,6 +1052,9 @@ final class RealtimeVoiceCall: ObservableObject, Identifiable {
         guard !isOver else { return }
         dialToken &+= 1
         reconnectTask?.cancel()
+        spareTask?.cancel()
+        resumeWatchdog?.cancel()
+        awaitingCallKitAudio = false
         deliverTask?.cancel()
         stateSink = nil
         ticker?.invalidate()
@@ -769,11 +1078,46 @@ final class RealtimeVoiceCall: ObservableObject, Identifiable {
                 session?.reportVoiceCallUsage(callId: callId, seconds: elapsed)
             }
         }
+        if let memo {
+            self.memo = nil
+            recordingMemo = false
+            if let item = memo.stop() { VoiceCallOutbox.shared.enqueueMemo(item) }
+        }
+        reportEnd()
         activity = .idle
         levels.mic = 0
         levels.speaker = 0
         phase = failure.map(Phase.failed) ?? .ended
         onEnded?(self)
+    }
+
+    /// Always, even for a call that never connected (seconds 0): durable,
+    /// retried until it lands, idempotent on callId. Confirmed jobs flush
+    /// first so the report says where they went.
+    private func reportEnd() {
+        VoiceJobJournal.shared.markCallEnded(callId)
+        metrics.mic = settings.mic
+        metrics.inputRoute = audio.inputRoute
+        metrics.outputRoute = audio.outputRoute
+        let started = (startedAt ?? tappedAt).timeIntervalSince1970 * 1000
+        let seconds = startedAt == nil ? 0 : elapsed
+        let transcript = isV3 ? transcriptLog.transcript : savedTranscript.map {
+            VoiceTranscriptLine(role: $0.speaker == .user ? .user : .bot, text: $0.text)
+        }
+        let make = { [callId, bot, metrics] (jobs: [VoiceCallEndJob]) in
+            VoiceCallEndRequest(callId: callId, botId: bot.id, seconds: seconds, startedAt: started,
+                                transcript: transcript, jobs: jobs, metrics: metrics)
+        }
+        let desk = self.desk
+        let flushFirst = desk?.jobs.contains { $0.status == .queued } ?? false
+        // On disk now; sent once the jobs have had their flush.
+        VoiceCallOutbox.shared.enqueueEnd(make(desk?.jobs ?? []), drain: !flushFirst)
+        guard let desk, flushFirst else { return }
+        Task {
+            let outcome = await VoiceCallOutbox.shared.flushJobs()
+            desk.apply(outcome.results)
+            VoiceCallOutbox.shared.enqueueEnd(make(desk.jobs))
+        }
     }
 
     // MARK: - Settings persistence
@@ -828,6 +1172,16 @@ struct VoiceCallRecord: Codable, Identifiable, Hashable {
     var connectionID: String? = nil
 }
 
+/// A finished v3 call, for its end-of-call screen.
+struct EndedVoiceCall: Identifiable {
+    let bot: Bot
+    let threadId: String
+    let callId: String
+    let seconds: Int
+    let session: Session
+    var id: String { callId }
+}
+
 @MainActor
 final class VoiceCallCenter: ObservableObject {
     static let shared = VoiceCallCenter()
@@ -844,6 +1198,9 @@ final class VoiceCallCenter: ObservableObject {
     /// glided into the header, so the call screen takes over without a
     /// transition of its own (one mascot on screen, never two).
     @Published private(set) var arrivedFromRing = false
+    /// The screen a v3 call ends on: what it cost, what's left, its jobs.
+    /// Stays until dismissed or the next call starts.
+    @Published private(set) var ending: EndedVoiceCall?
 
     private static let recordsKey = "voiceCall.records"
     private var seenRings = Set<String>()
@@ -859,14 +1216,24 @@ final class VoiceCallCenter: ObservableObject {
         }
     }
 
+    /// CarPlay hook (carplay-voice): the next start() for this bot id
+    /// replaces the live call (switch bot) without ending its CallKit call.
+    var swapsNextCallTo: String?
+    private var swapping = false
+
     func start(bot: Bot, threadId: String, session: Session, opener: String? = nil, fromRing: Bool = false) {
+        let swap = swapsNextCallTo == bot.id
+        if swap { swapsNextCallTo = nil }
         if let call, !call.isOver {
             if call.bot.id == bot.id, call.threadId == threadId, call.connectionID == session.connection?.id, opener == nil {
                 withAnimation(.spring(duration: 0.4)) { presentation = .full }
                 return
             }
+            swapping = swap
             call.hangUp()
+            swapping = false
         }
+        ending = nil
         Haptics.impact(.medium)
         let call = RealtimeVoiceCall(bot: bot, threadId: threadId, session: session, opener: opener)
         call.onEnded = { [weak self] ended in self?.ended(ended) }
@@ -880,13 +1247,13 @@ final class VoiceCallCenter: ObservableObject {
                 presentation = .full
                 self.call = call
             }
-            call.start()
+            call.start(callKit: CallKitRinger.shared.startOutgoing(call))
             return
         }
         arrivedFromRing = false
         presentation = .splash
         withAnimation(.easeOut(duration: 0.2)) { self.call = call }
-        call.start()
+        call.start(callKit: CallKitRinger.shared.startOutgoing(call))
         Task { [weak self] in
             try? await Task.sleep(for: .seconds(1))
             guard let self, self.call === call, self.presentation == .splash else { return }
@@ -921,13 +1288,22 @@ final class VoiceCallCenter: ObservableObject {
             if let data = try? JSONEncoder().encode(records) { UserDefaults.standard.set(data, forKey: Self.recordsKey) }
         }
         guard call === ended else { return }
+        if swapping { call = nil; return }
         if case .failed = ended.phase { CallKitRinger.shared.callEnded(failed: true) } else { CallKitRinger.shared.callEnded(failed: false) }
         if case .failed = ended.phase {
             // The failure card stays until they dismiss it.
             withAnimation(.spring(duration: 0.35)) { presentation = .full }
             return
         }
+        if ended.hasBeenLive, ended.isV3, let session = ended.owner {
+            ending = EndedVoiceCall(bot: ended.bot, threadId: ended.threadId, callId: ended.callId,
+                                    seconds: ended.elapsed, session: session)
+        }
         withAnimation(.easeIn(duration: 0.25)) { call = nil }
+    }
+
+    func dismissEnding() {
+        withAnimation(.easeIn(duration: 0.2)) { ending = nil }
     }
 
     func records(botId: String, threadId: String, connectionID: String?) -> [VoiceCallRecord] {
@@ -937,6 +1313,7 @@ final class VoiceCallCenter: ObservableObject {
 
     func forget(connectionID: String) {
         if call?.connectionID == connectionID { call?.hangUp(); call = nil }
+        if ending?.session.connection?.id == connectionID { ending = nil }
         records.removeAll { $0.connectionID == connectionID || $0.connectionID == nil }
         if let data = try? JSONEncoder().encode(records) { UserDefaults.standard.set(data, forKey: Self.recordsKey) }
     }
@@ -984,7 +1361,7 @@ final class VoiceCallCenter: ObservableObject {
     /// the call header, so both screens swap in one frame.
     func accept(handoff: Bool = false) {
         guard let incoming else { return }
-        let opener = RealtimeVoice.ringOpener(reason: incoming.ring.reason)
+        let opener = RealtimeVoice.opener(for: incoming.ring)
         let threadId = incoming.ring.threadId ?? incoming.bot.threadId
         if handoff {
             silenceRing()
@@ -1035,6 +1412,14 @@ final class VoiceCallCenter: ObservableObject {
         ringer?.stop()
         ringer = nil
         withAnimation(.easeIn(duration: 0.2)) { incoming = nil }
+    }
+
+    /// Say a settled voice job in the live call, if there is one.
+    @discardableResult
+    func reportSettled(_ notification: NotificationFrame) -> Bool {
+        guard let call, !call.isOver else { return false }
+        call.reportSettled(notification)
+        return true
     }
 
     /// The live call's origin id: its done pushes stay quiet, the call says it.

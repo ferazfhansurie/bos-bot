@@ -23,8 +23,17 @@ struct BotGlance: Codable, Hashable, Identifiable, Sendable {
     var line: String
     var threadId: String?
     var threadTitle: String?
-    /// When the current status began.
+    /// When the current job began (or, once done, when it finished).
     var since: Date?
+    /// The plan's step in progress and its size, when it has one.
+    var stepIndex: Int? = nil
+    var stepCount: Int? = nil
+
+    /// "3/5" while working from a plan.
+    var fraction: String? {
+        guard isWorking, let stepCount, stepCount >= 2, let stepIndex, stepIndex >= 1 else { return nil }
+        return "\(min(stepIndex, stepCount))/\(stepCount)"
+    }
 
     var needsYou: Bool { status == "needsYou" }
     var isWorking: Bool { status == "working" }
@@ -145,6 +154,10 @@ enum BotNotificationCategory {
     static let update = "OPENMAUS_UPDATE"
     static let approval = "OPENMAUS_APPROVAL"
     static let voiceDone = "VOICE_WORK_DONE"
+    /// bos bot 3.0: a tool approval answerable from the banner itself.
+    static let answerPermission = "BOS_ANSWER_PERMISSION"
+    static let allowAction = "BOS_ALLOW"
+    static let denyAction = "BOS_DENY"
 }
 
 enum BotGlanceWidgetKind {

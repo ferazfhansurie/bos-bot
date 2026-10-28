@@ -7,9 +7,17 @@ import { useSplitView } from "./SplitViewContext";
 import { threadPaneId } from "@/lib/split-view";
 import { TaskPicker } from "./TaskPicker";
 
+/** When a row last moved: the person's last message, except the calls
+ * thread, whose news is the newest call card. */
+export const callsAt = (task: Pick<Task, "voiceCalls" | "lastActivityAt" | "lastUserMessageAt" | "createdAt">): number =>
+  (task.voiceCalls ? Math.max(task.lastActivityAt ?? 0, task.lastUserMessageAt ?? 0) : task.lastUserMessageAt) || task.createdAt;
+
 export function compactThreads(tasks: Task[], pins: string[], active: string, limit = 5): Task[] {
-  const ordered = tasks.filter(t => !t.routineRunId && (!t.archivedAt || t.threadId === active || pins.includes(t.threadId)))
-    .sort((a, b) => Number(pins.includes(b.threadId)) - Number(pins.includes(a.threadId)) || (b.lastUserMessageAt ?? b.createdAt) - (a.lastUserMessageAt ?? a.createdAt));
+  // the calls thread always rides on top, like a pin
+  const calls = (t: Task) => Boolean(t.voiceCalls) && !t.archivedAt;
+  const pinned = (t: Task) => calls(t) || pins.includes(t.threadId);
+  const ordered = tasks.filter(t => !t.routineRunId && (!t.archivedAt || t.threadId === active || pinned(t)))
+    .sort((a, b) => Number(calls(b)) - Number(calls(a)) || Number(pinned(b)) - Number(pinned(a)) || (b.lastUserMessageAt ?? b.createdAt) - (a.lastUserMessageAt ?? a.createdAt));
   const visible = ordered.slice(0, limit);
   const current = ordered.find(t => t.threadId === active);
   if (current && !visible.includes(current)) visible[limit - 1] = current;
@@ -37,7 +45,7 @@ export function threadTime(at: number, now = Date.now()): string {
   return date.toLocaleDateString([], { day: "numeric", month: "short", ...(date.getFullYear() !== new Date(now).getFullYear() ? { year: "numeric" } : {}) });
 }
 
-export function CompactBotThreads({ bot }: { bot: Bot }) {
+export function CompactBotThreads({ bot, active = true }: { bot: Bot; active?: boolean }) {
   const { state, dispatch } = useStore();
   const { openSplit } = useSplitView();
   useActivityFeed();
@@ -58,11 +66,12 @@ export function CompactBotThreads({ bot }: { bot: Bot }) {
   return <div className="mb-2 ml-5 space-y-0.5 border-l border-hairline/30 pl-2" aria-label={`${bot.name} threads`}>
     {compactThreads(bot.tasks ?? [], pins, bot.threadId).map(task => {
       const live = withLiveActivity(bot.id, task);
-      return <SidebarThreadRow key={task.threadId} task={{ ...task, busy: live.busy, activity: live.activity }} ownerId={bot.id} current={task.threadId === bot.threadId} dense
+      return <SidebarThreadRow key={task.threadId} task={{ ...task, busy: live.busy, activity: live.activity }} ownerId={bot.id} current={active && task.threadId === bot.threadId} dense
         splitId={!bot.remote && !bot.homeLink ? threadPaneId(bot.id, task.threadId) : undefined}
         onOpenBeside={!bot.remote && !bot.homeLink && !(state.selectedId === bot.id && task.threadId === bot.threadId) ? () => openSplit(threadPaneId(bot.id, task.threadId)) : undefined}
         pinned={pins.includes(task.threadId)} onTogglePin={() => togglePin(task.threadId)} folders={bot.remote ? [] : bot.projects}
-        trailing={task.lastUserMessageAt ? <time dateTime={new Date(task.lastUserMessageAt).toISOString()} title={`your last message: ${new Date(task.lastUserMessageAt).toLocaleString()}`} className="shrink-0 text-[10px] font-normal tabular-nums text-ink-secondary/70">{threadTime(task.lastUserMessageAt)}</time> : null}
+        trailing={task.voiceCalls && task.lastActivityAt ? <time dateTime={new Date(task.lastActivityAt).toISOString()} title={`last call: ${new Date(task.lastActivityAt).toLocaleString()}`} className="shrink-0 text-[10px] font-normal tabular-nums text-ink-secondary/70">{threadTime(task.lastActivityAt)}</time>
+          : task.lastUserMessageAt ? <time dateTime={new Date(task.lastUserMessageAt).toISOString()} title={`your last message: ${new Date(task.lastUserMessageAt).toLocaleString()}`} className="shrink-0 text-[10px] font-normal tabular-nums text-ink-secondary/70">{threadTime(task.lastUserMessageAt)}</time> : null}
         onSelect={() => dispatch({ type: "switchTask", botId: bot.id, threadId: task.threadId })}
         onPrefetch={bot.remote || bot.homeLink ? undefined : () => dispatch({ type: "prefetchThread", threadId: task.threadId })}
         onRename={(title) => dispatch({ type: "renameTask", botId: bot.id, threadId: task.threadId, title })}

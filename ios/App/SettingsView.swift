@@ -10,6 +10,8 @@ struct SettingsView: View {
     @State private var traceExport: ConnectionTraceExport?
     @State private var traceExportError = false
     @State private var usageEnabled = PhoneUsageTelemetry.shared.enabled
+    @State private var siteDataAvailable = false
+    @State private var showingSiteData = false
     @AppStorage(PrefKey.activityDetail) private var activityDetail = ActivityDetail.reduced.rawValue
     @AppStorage(PrefKey.islandIntro) private var islandIntro = IslandIntro.oncePerBot.rawValue
     @AppStorage(PrefKey.language) private var language = AppLanguage.system.rawValue
@@ -90,6 +92,21 @@ struct SettingsView: View {
                             SettingsIcon(symbol: "chart.bar.fill", color: .green)
                         }
                     }
+                }
+            }
+
+            // Only the computer's owner, on a computer holding a bosbot.my
+            // data token, ever sees this row.
+            if session.connection != nil && siteDataAvailable {
+                Section {
+                    Button { showingSiteData = true } label: {
+                        Label {
+                            Text("BOS Bot data").foregroundStyle(.primary)
+                        } icon: {
+                            SettingsIcon(symbol: "chart.xyaxis.line", color: .green)
+                        }
+                    }
+                    .accessibilityIdentifier("settings-site-data")
                 }
             }
 
@@ -266,6 +283,8 @@ struct SettingsView: View {
         .navigationTitle("Settings")
         .navigationBarTitleDisplayMode(.inline)
         .task { await session.refreshNotificationAuthorization() }
+        .task(id: session.connection?.id) { siteDataAvailable = await session.loadSiteDataAvailable() }
+        .fullScreenCover(isPresented: $showingSiteData) { SiteDataView().environmentObject(session) }
     }
 
     /// "BOS 1.0.0 (57)" — the version the help footer asks people to include.

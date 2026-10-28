@@ -82,4 +82,26 @@ final class BotActivityContentTests: XCTestCase {
         XCTAssertNil(content(threadId: "").approvalThreadId)
         XCTAssertNil(content(card: card("")).approvalThreadId)
     }
+
+    func testButtonsFollowTheState() {
+        XCTAssertEqual(content().buttons(expanded: false), [.approve("Allow"), .reply])
+        let many = OptionCard(title: "Run?", subtitle: "", options: ["Allow", "Always allow", "Deny"], requestId: "r", tool: "shell")
+        XCTAssertEqual(content(card: many).buttons(expanded: false), [.openApproval, .reply])
+        XCTAssertEqual(content(kind: "working").buttons(expanded: false), [.peek, .open])
+        XCTAssertEqual(content(kind: "working").buttons(expanded: true), [.peek, .open, .stop])
+        XCTAssertEqual(content(kind: "done").buttons(expanded: true), [.callMe])
+    }
+
+    func testOneClockAndAPlanForTheWholeJob() throws {
+        var current = content(kind: "working")
+        XCTAssertEqual(current.clockStart, Date(timeIntervalSince1970: 0))
+        current.jobSince = Date(timeIntervalSince1970: -60)
+        current.stepIndex = 3
+        current.stepCount = 5
+        let rendered = try JSONDecoder().decode(BotActivityContent.self, from: JSONEncoder().encode(current))
+        XCTAssertEqual(rendered.clockStart, Date(timeIntervalSince1970: -60))
+        XCTAssertEqual(rendered.planLabel, "step 3 of 5")
+        current.stepCount = 1
+        XCTAssertNil(current.plan)
+    }
 }

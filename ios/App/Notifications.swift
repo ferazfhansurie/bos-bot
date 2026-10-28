@@ -53,6 +53,17 @@ final class NotificationCoordinator: NSObject, UNUserNotificationCenterDelegate 
         didSet { if let action = pendingVoiceAction, let voiceHandler { pendingVoiceAction = nil; Task { @MainActor in voiceHandler(action) } } }
     }
     private var pendingVoiceAction: VoiceNotificationAction?
+    /// Allow or Deny tapped on an approval banner. It may arrive before
+    /// `Session` sets the handler (the app was launched in the background).
+    var answerHandler: (@MainActor (NotificationTarget, Bool) async -> Void)? {
+        didSet {
+            if let pending = pendingAnswer, let answerHandler {
+                pendingAnswer = nil
+                Task { @MainActor in await answerHandler(pending.target, pending.allow) }
+            }
+        }
+    }
+    private var pendingAnswer: (target: NotificationTarget, allow: Bool)?
     /// The last APNs token this launch, for a handler set after it arrived.
     private(set) var deviceToken: Data?
     private var replay = NotificationReplayLedger(ids: UserDefaults.standard.stringArray(forKey: "bos.notificationReplayIDs") ?? [])
@@ -76,6 +87,14 @@ final class NotificationCoordinator: NSObject, UNUserNotificationCenterDelegate 
             UNNotificationCategory(identifier: BotNotificationCategory.update, actions: [], intentIdentifiers: []),
             UNNotificationCategory(identifier: BotNotificationCategory.approval, actions: [], intentIdentifiers: []),
             UNNotificationCategory(identifier: BotNotificationCategory.bot, actions: [], intentIdentifiers: []),
+            // bos bot 3.0: answer a tool approval without opening the app.
+            // Allow needs the phone unlocked; Deny never does.
+            UNNotificationCategory(identifier: BotNotificationCategory.answerPermission, actions: [
+                UNNotificationAction(identifier: BotNotificationCategory.allowAction, title: "Allow",
+                                     options: [.authenticationRequired], icon: UNNotificationActionIcon(systemImageName: "checkmark")),
+                UNNotificationAction(identifier: BotNotificationCategory.denyAction, title: "Deny",
+                                     options: [.destructive], icon: UNNotificationActionIcon(systemImageName: "xmark")),
+            ], intentIdentifiers: []),
         ])
     }
 
@@ -231,6 +250,22 @@ final class NotificationCoordinator: NSObject, UNUserNotificationCenterDelegate 
             guard response.actionIdentifier != UNNotificationDismissActionIdentifier else { completionHandler(); return }
             if let sharedRoomHandler { sharedRoomHandler(roomID, strings["connectionId"]) }
             else { pendingSharedRoom = (roomID, strings["connectionId"]) }
+        }
+        else if let target = NotificationTarget(payload: strings), target.requestId != nil,
+                response.actionIdentifier == BotNotificationCategory.allowAction
+                    || response.actionIdentifier == BotNotificationCategory.denyAction {
+            let allow = response.actionIdentifier == BotNotificationCategory.allowAction
+            guard let answerHandler else {
+                pendingAnswer = (target, allow)
+                completionHandler()
+                return
+            }
+            // the system keeps the app alive until the answer has been sent
+            Task { @MainActor in
+                await answerHandler(target, allow)
+                completionHandler()
+            }
+            return
         }
         else if let target = NotificationTarget(payload: strings),
                 response.actionIdentifier != UNNotificationDismissActionIdentifier {

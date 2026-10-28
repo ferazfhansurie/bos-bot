@@ -3,21 +3,23 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { CursorAvatar, FACE_BOX, type CursorState } from "./components/CursorAvatar";
 import { flatMascotBody, FLAT_MASCOT_BODIES } from "../shared/flat-mascot-bodies";
-import { resolveGesture, type MascotGesture, type GestureReceipt, type GestureActivity } from "../shared/mascot-choreography";
+import { GESTURE_FACE_STATE, resolveGesture, type MascotGesture, type GestureReceipt, type GestureActivity } from "../shared/mascot-choreography";
 import { GlyphPreview } from "./mascot-preview-glyphs";
 import { glyphFaceParts } from "./lib/glyph-face";
-import { glyphStateFor } from "../shared/glyph-faces";
 import "./mascot-preview.css";
-const gestures: MascotGesture[] = ["thinking","searching","working","waiting","finished"];
+const gestures: MascotGesture[] = ["thinking","searching","reading","browsing","writing","working","waiting","finished"];
 const descriptions = {
   idle:"original outline. quiet rest.",
   thinking:"stretch up → thoughtful tilt → little ball → unfold. 1.6s gesture, 3s rest.",
   searching:"stretch sideways → peek left → peek right → soft return. 1.2s gesture, 2.5s rest.",
   working:"curl → split into three blobs → staggered bounce → regroup. 1.8s gesture, 2.8s rest.",
-  waiting:"melt into a puddle. eyes peek out. a small 0.8s perk every 5s.",
+  reading:"eyes run along three lines, left to right. a page flips beside it. 2.4s, 0.9s rest.",
+  browsing:"eyes dart while the page loads, then settle. 1.5s, 2.2s rest.",
+  writing:"looks down while a scribble draws underneath and fades. 2.2s, 1.2s rest.",
+  waiting:"melt into a puddle. eyes peek out. one knock every 8s.",
   finished:"crouch → one happy hop → squishy landing → original idle. 0.9s, once.",
 };
-const faces: Record<MascotGesture,CursorState> = {idle:"idle",thinking:"thinking",searching:"searching",working:"working",waiting:"curious",finished:"happy"};
+const faces: Record<MascotGesture,CursorState> = {idle:"idle",thinking:"thinking",searching:"searching",reading:"searching",browsing:"searching",writing:"working",working:"working",waiting:"curious",finished:"happy"};
 const presets=[{name:"bos",body:"star",color:"#ffffff"},{name:"oracle",body:"sun",color:"#e5634e"},{name:"build",body:"squircle",color:"#8057c8"},{name:"life",body:"bean",color:"#009957"}];
 type Props={gesture:MascotGesture;bodyId:string;color:string;size:number;replay:number;still:boolean};
 function Mascot({gesture,bodyId,color,size,replay,still}:Props){
@@ -32,7 +34,7 @@ function Mascot({gesture,bodyId,color,size,replay,still}:Props){
   const body=flatMascotBody(bodyId),scale=FACE_BOX/100;
   const silhouette=useMemo(()=>({name:body.name,fit:"scale("+scale+")",body:'<path d="'+body.path+'" fill="{{GRADIENT}}"/>',clip:'<path d="'+body.path+'"/>',anchor:{x:(50+body.faceX*.5)*scale,y:(46+body.faceY)*scale,scale:.55}}),[body,scale]);
   const choreography=useMemo(()=>({gesture,key:replay,path:body.path,faceX:body.faceX,faceY:body.faceY,reduced:still}),[gesture,replay,body,still]);
-  const glyphFace=glyphFaceParts({state:glyphStateFor(gesture),color,centre:[50+body.faceX*.5,50+body.faceY],diameter:80,pixels:size*.8*FACE_BOX/(FACE_BOX+30)});
+  const glyphFace=glyphFaceParts({state:GESTURE_FACE_STATE[gesture],color,centre:[50+body.faceX*.5,50+body.faceY],diameter:80,pixels:size*.8*FACE_BOX/(FACE_BOX+30)});
   return <span ref={host} className="mascot-frame" data-motion={still?"still":visible&&active?"active":"suspended"}>
     <CursorAvatar state={faces[gesture]} size={size} title={body.name+" "+gesture+" mascot"} silhouette={silhouette} gradient={[color,color,color]} eyeColor="#151515"
       showMouth={false} effects={false} glyphs={false} motion={0} lookAround={0} autoBlink={!still&&visible&&active} autoExpression={false}
@@ -60,7 +62,7 @@ function Preview(){
       <div className="actions"><button onClick={()=>setReplay(v=>v+1)}>replay gesture</button><label><input type="checkbox" checked={manualStill} onChange={e=>setStill(e.target.checked)}/> reduced motion poses</label></div>
       {osStill&&<p className="note">system reduced motion is on</p>}
     </div></section>
-    <section className="grid" aria-label="five full-body behaviors">{gestures.map(g=><button className="card" key={g} aria-label={"show "+g} aria-pressed={gesture===g} onClick={()=>select(g)}><Mascot {...props} gesture={g} size={84}/><span>{g}</span></button>)}</section>
+    <section className="grid" aria-label="full-body behaviors">{gestures.map(g=><button className="card" key={g} aria-label={"show "+g} aria-pressed={gesture===g} onClick={()=>select(g)}><Mascot {...props} gesture={g} size={84}/><span>{g}</span></button>)}</section>
     <section className="chat"><div className="chat-header"><span>conversation sizes</span><span>32px / 44px / source 48px</span></div><div className="user">show me what the little guy can do</div>
       {[32,44,48].map(size=><div className="presence" key={size}><Mascot {...props} size={size}/><span>{size}px · {gesture==="waiting"?"waiting for you":gesture}</span></div>)}
       <div className="composer">message bos</div></section>

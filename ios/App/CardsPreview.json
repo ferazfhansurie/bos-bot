@@ -1,0 +1,177 @@
+[
+ {
+  "id": "cards-ask",
+  "role": "user",
+  "kind": "text",
+  "text": "show me every card you can draw",
+  "at": 1793000004000
+ },
+ {
+  "id": "cards-person",
+  "role": "bot",
+  "kind": "text",
+  "text": "a hot lead from an instagram ad.\n\n```openui\nroot = Col([lead])\nlead = Person(\"Aina Rahman\", \"Seri Bridal · from instagram ad\", \"hot\", {phone: \"+60 12-345 6789\", budget: \"RM 4,200\", wedding: \"14 dec 2026\", asked: \"today 10:14\"}, [call, reply])\ncall = Button(\"call her\", @ToAssistant(\"call aina rahman\"), \"outline\")\nreply = Button(\"draft a reply\", @ToAssistant(\"draft a whatsapp reply to aina about the december package\"))\n```",
+  "at": 1793000008000,
+  "parentId": "cards-ask"
+ },
+ {
+  "id": "cards-approval",
+  "role": "bot",
+  "kind": "text",
+  "text": "go-ahead before replying to a lead.\n\n```openui\nroot = Col([ok])\nok = Approval(\"Reply to Aina now?\", \"She asked about the december package.\", [\"send the price list\", \"offer a call on thursday\"], \"yes, send aina the reply\")\n```",
+  "at": 1793000012000,
+  "parentId": "cards-person"
+ },
+ {
+  "id": "cards-choices",
+  "role": "bot",
+  "kind": "text",
+  "text": "pick a fitting slot.\n\n```openui\nroot = Col([slot])\nslot = Choices(\"Which fitting slot should I offer Aina?\", [\"sat 2 nov, 11am\", \"sun 3 nov, 3pm\", \"wed 6 nov, 7pm\"])\n```",
+  "at": 1793000016000,
+  "parentId": "cards-approval"
+ },
+ {
+  "id": "cards-steps",
+  "role": "bot",
+  "kind": "text",
+  "text": "month-end close in progress.\n\n```openui\nroot = Col([close])\nclose = Steps(\"October month-end\", [{label: \"pull sales from the POS\", status: \"done\", detail: \"RM 48,320 across 412 orders\"}, {label: \"match bank deposits\", status: \"done\"}, {label: \"chase 3 unpaid invoices\", status: \"doing\", detail: \"2 of 3 replied\"}, {label: \"send the P&L to Encik Zul\", status: \"todo\"}])\n```",
+  "at": 1793000020000,
+  "parentId": "cards-choices"
+ },
+ {
+  "id": "cards-receipt",
+  "role": "bot",
+  "kind": "text",
+  "text": "workshop invoice with sst.\n\n```openui\nroot = Col([inv])\ninv = Receipt(\"Invoice INV-0418 · Ravi Kumar\", [{label: \"aircon gas top-up\", amount: 180}, {label: \"cabin filter\", qty: 1, amount: 45}, {label: \"labour (hours)\", qty: 2, amount: 60}], \"RM\", \"sent\", \"Bengkel Jaya Motor · due 31 oct\", 8)\n```",
+  "at": 1793000024000,
+  "parentId": "cards-steps"
+ },
+ {
+  "id": "cards-schedule",
+  "role": "bot",
+  "kind": "text",
+  "text": "a weekly report, proposed.\n\n```openui\nroot = Col([weekly])\nweekly = Schedule(\"Monday sales summary\", \"every monday, 9am\", \"Kak Nab Ops\", \"Last week: RM 6,480 from 92 orders, top item kek lapis (31). 4 orders still unpaid, RM 412.\")\n```",
+  "at": 1793000028000,
+  "parentId": "cards-receipt"
+ },
+ {
+  "id": "cards-settingchange",
+  "role": "bot",
+  "kind": "text",
+  "text": "change reply hours.\n\n```openui\nroot = Col([hours])\nhours = SettingChange(\"WhatsApp auto-reply hours\", \"9am to 6pm\", \"8am to 10pm\", \"Seri Bridal · all chats\")\n```",
+  "at": 1793000032000,
+  "parentId": "cards-schedule"
+ },
+ {
+  "id": "cards-filepreview",
+  "role": "bot",
+  "kind": "text",
+  "text": "a price list page.\n\n```openui\nroot = Col([page])\npage = FilePreview(\"Seri Bridal december packages\", \"page\", \"Three packages from RM 3,200 to RM 6,800, with the add-on prices and a booking form.\", \"https://seribridal.example.com/december\", \"made today · 2 min read\")\n```",
+  "at": 1793000036000,
+  "parentId": "cards-settingchange"
+ },
+ {
+  "id": "cards-compare",
+  "role": "bot",
+  "kind": "text",
+  "text": "three wedding packages.\n\n```openui\nroot = Col([pkgs])\npkgs = Compare([{name: \"Melati\", price: \"RM 3,200\", outfits: 2, makeup: \"akad only\", pelamin: \"standard\"}, {name: \"Kenanga\", price: \"RM 4,500\", outfits: 3, makeup: \"akad + sanding\", pelamin: \"premium\"}, {name: \"Cempaka\", price: \"RM 6,800\", outfits: 4, makeup: \"all events\", pelamin: \"custom\"}], [\"price\", \"outfits\", \"makeup\", \"pelamin\"], \"Kenanga\")\n```",
+  "at": 1793000040000,
+  "parentId": "cards-filepreview"
+ },
+ {
+  "id": "cards-draft",
+  "role": "bot",
+  "kind": "text",
+  "text": "a whatsapp reply to a lead.\n\n```openui\nroot = Col([reply])\nreply = Draft(\"Aina Rahman\", \"Hi Aina! Thanks for asking about our December package. Kenanga is RM 4,500 and includes 3 outfits, akad + sanding makeup and a premium pelamin. Would a fitting this Saturday at 11am work for you?\", \"whatsapp\")\n```",
+  "at": 1793000044000,
+  "parentId": "cards-compare"
+ },
+ {
+  "id": "cards-numbers",
+  "role": "bot",
+  "kind": "text",
+  "text": "october so far.\n\n```openui\nroot = Col([kpis, chart, table])\nkpis = Grid([Stat(\"Orders\", 412, 12, \"vs september\"), Stat(\"Sales\", \"RM 48,320\", 8), Stat(\"Unpaid\", \"RM 412\", -20)], 3)\nchart = Chart(\"bar\", [{week: \"w1\", sales: 10200}, {week: \"w2\", sales: 11850}, {week: \"w3\", sales: 12400}, {week: \"w4\", sales: 13870}], \"week\", [\"sales\"], \"currency\", \"MYR\")\ntable = Table([\"Item\", \"Qty\", \"Sales\"], [[\"kek lapis sarawak\", 31, \"RM 2,635\"], [\"kuih raya box\", 58, \"RM 2,784\"], [\"brownies tray\", 22, \"RM 1,320\"]])\n```",
+  "at": 1793000048000,
+  "parentId": "cards-draft"
+ },
+ {
+  "id": "conn-reconnect",
+  "role": "bot",
+  "kind": "connector",
+  "text": "connect Gmail",
+  "connector": {
+   "resumeKey": "rk-reconnect",
+   "slug": "gmail",
+   "label": "Gmail",
+   "description": "Forge needs Gmail to read your inbox",
+   "status": "required",
+   "reason": "to read your inbox",
+   "reconnect": true
+  },
+  "at": 1793000052000,
+  "parentId": "cards-numbers"
+ },
+ {
+  "id": "conn-authorizing",
+  "role": "bot",
+  "kind": "connector",
+  "text": "connect Google Calendar",
+  "connector": {
+   "resumeKey": "rk-authorizing",
+   "slug": "googlecalendar",
+   "label": "Google Calendar",
+   "description": "Forge needs Google Calendar to book the fitting",
+   "status": "authorizing"
+  },
+  "at": 1793000056000,
+  "parentId": "conn-reconnect"
+ },
+ {
+  "id": "conn-failed",
+  "role": "bot",
+  "kind": "connector",
+  "text": "connect Slack",
+  "connector": {
+   "resumeKey": "rk-failed",
+   "slug": "slack",
+   "label": "Slack",
+   "description": "Forge needs Slack",
+   "status": "failed",
+   "error": "Slack sign-in was cancelled."
+  },
+  "at": 1793000060000,
+  "parentId": "conn-authorizing"
+ },
+ {
+  "id": "conn-paused",
+  "role": "bot",
+  "kind": "connector",
+  "text": "connect Notion",
+  "connector": {
+   "resumeKey": "rk-paused",
+   "slug": "notion",
+   "label": "Notion",
+   "description": "Forge needs Notion",
+   "status": "connected",
+   "resumed": false
+  },
+  "at": 1793000064000,
+  "parentId": "conn-failed"
+ },
+ {
+  "id": "conn-connected",
+  "role": "bot",
+  "kind": "connector",
+  "text": "connect Meta Ads",
+  "connector": {
+   "resumeKey": "rk-connected",
+   "slug": "metaads",
+   "label": "Meta Ads",
+   "description": "Forge needs Meta Ads",
+   "status": "connected",
+   "resumed": true
+  },
+  "at": 1793000068000,
+  "parentId": "conn-paused"
+ }
+]

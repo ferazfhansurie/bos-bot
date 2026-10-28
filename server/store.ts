@@ -106,7 +106,7 @@ export function toWireTask(task: TaskRecord): WireTask {
 const TASK_PATCH_FIELDS = [
   "title", "projectId", "modelSelection", "approvalMode", "autoApprove", "alwaysAllow",
   "unread", "rewound", "archivedAt", "pinnedMessageId", "resumeCursors", "lastInstanceId", "cwd",
-  "closeWhenDone", "failureAckedAt", "routineRunId", "channelTransport", "surface", "appliedCompactionId", "contextFloor", "lastContextModel", "modelFallback",
+  "closeWhenDone", "failureAckedAt", "routineRunId", "channelTransport", "voiceCalls", "lastActivityAt", "surface", "appliedCompactionId", "contextFloor", "lastContextModel", "modelFallback",
 ] as const satisfies readonly (keyof TaskRecord)[];
 export type TaskPatch = Partial<Pick<TaskRecord, typeof TASK_PATCH_FIELDS[number]>>;
 
@@ -246,6 +246,13 @@ function redactBotAuthored<T extends Omit<Message, "id" | "at"> & { at?: number 
         reason: redactSecretsInText(card.profileRequest.reason),
         before: scrubChanges(card.profileRequest.before),
         changes: scrubChanges(card.profileRequest.changes),
+      };
+    }
+    if (card.settingChange) {
+      card.settingChange = {
+        ...card.settingChange,
+        targetName: redactSecretsInText(card.settingChange.targetName),
+        reason: card.settingChange.reason === undefined ? undefined : redactSecretsInText(card.settingChange.reason),
       };
     }
     out.card = card;

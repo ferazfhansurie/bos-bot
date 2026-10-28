@@ -1,0 +1,13 @@
+# The CarPlay entitlement, merged into project.yml only when BOS_CARPLAY=1:
+#
+#   BOS_CARPLAY=1 xcodegen generate
+#
+# Apple grants com.apple.developer.carplay-voice-based-conversation per App
+# ID; a profile without it refuses to sign an app that asks for it. So the
+# default build leaves it out and still signs. The CarPlay scene in the
+# Info.plist is harmless without it: CarPlay never launches the app.
+targets:
+  BosBot:
+    entitlements:
+      properties:
+        com.apple.developer.carplay-voice-based-conversation: true

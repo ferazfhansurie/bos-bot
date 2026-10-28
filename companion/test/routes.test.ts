@@ -82,6 +82,8 @@ describe("what the app may do", () => {
     ["GET", "/api/inbox"],
     ["GET", "/api/digest"],
     ["GET", "/api/provider-usage"],
+    ["GET", "/api/site-data"],
+    ["GET", "/api/site-data/available"],
     ["GET", "/api/companion/endpoints"],
     ["GET", "/api/companion/status"],
     ["GET", "/api/bots"],
@@ -397,4 +399,32 @@ describe("the phone-browser subset", () => {
       ["GET", "/api/bots/b-1/messages/x/files/y"],
     ]) expect(web(method, path), `${method} ${path}`).not.toBeNull();
   });
+});
+
+it("the owner's site data stays read-only and exact", () => {
+  const allowed = (method: string, path: string) => denyReason({ method, path, authenticated: true }) === null;
+  expect(allowed("GET", "/api/site-data")).toBe(true);
+  expect(allowed("GET", "/api/site-data/available")).toBe(true);
+  expect(denyReason({ method: "GET", path: "/api/site-data", authenticated: false })?.status).toBe(401);
+  for (const method of ["POST", "PUT", "PATCH", "DELETE"]) expect(allowed(method, "/api/site-data")).toBe(false);
+  expect(allowed("GET", "/api/site-data/token")).toBe(false);
+});
+
+it("mini apps open, read and write on the phone, but stay desktop-only to manage", () => {
+  const allowed = (method: string, path: string) => denyReason({ method, path, authenticated: true }) === null;
+  expect(allowed("GET", "/api/apps")).toBe(true);
+  expect(allowed("GET", "/api/apps/a-f8y5z50uv8mv/page")).toBe(true);
+  expect(allowed("GET", "/api/apps/a-f8y5z50uv8mv/data/contacts")).toBe(true);
+  expect(allowed("GET", "/api/apps/a-f8y5z50uv8mv/data/contacts/r_1")).toBe(true);
+  expect(allowed("POST", "/api/apps/a-f8y5z50uv8mv/data")).toBe(true);
+  expect(allowed("POST", "/api/apps/install/preview")).toBe(true);
+  expect(allowed("POST", "/api/apps/install")).toBe(true);
+  expect(denyReason({ method: "GET", path: "/api/apps", authenticated: false })?.status).toBe(401);
+  expect(allowed("DELETE", "/api/apps/a-f8y5z50uv8mv")).toBe(false);
+  expect(allowed("PATCH", "/api/apps/a-f8y5z50uv8mv")).toBe(false);
+  expect(allowed("POST", "/api/apps/a-f8y5z50uv8mv/duplicate")).toBe(false);
+  expect(allowed("GET", "/api/apps/a-f8y5z50uv8mv/export")).toBe(false);
+  expect(allowed("POST", "/api/apps/ensure")).toBe(false);
+  expect(allowed("GET", "/api/apps/a-f8y5z50uv8mv/data/contacts/r_1/x")).toBe(false);
+  expect(allowed("GET", "/api/apps/a-1/data/%2e%2e")).toBe(false);
 });

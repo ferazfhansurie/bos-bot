@@ -86,6 +86,16 @@ describe("readCodexModelCatalog", () => {
     }
   });
 
+  it("starts on terra 6.1 when the account lists it, whatever codex marks default", async () => {
+    chmodSync(FAKE_CLI, 0o755);
+    const catalog = await readCodexModelCatalog(
+      { HOME: join(tmpdir(), "omb-codex-terra-models"), PATH: process.env.PATH, FAKE_CODEX_TERRA: "1" },
+      fetch,
+      FAKE_CLI,
+    );
+    expect(catalog.default).toBe("gpt-6.1-terra");
+  });
+
   it("appends the configured local model and cached catalog slugs as custom", async () => {
     const home = scratchHome({
       "config.toml": `
@@ -192,7 +202,7 @@ name = "oMLX"
 `,
     });
     const catalog = await readCodexModelCatalog({ HOME: home });
-    expect(catalog.default).toBe("gpt-5.6-sol");
+    expect(catalog.default).toBe("gpt-6.1-terra");
     expect(catalog.options.every((option) => !option.custom)).toBe(true);
   });
 });

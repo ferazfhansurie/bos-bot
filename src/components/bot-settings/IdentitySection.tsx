@@ -9,6 +9,7 @@ import { BookOpen } from "lucide-react";
 import type { Bot } from "@/state/store";
 import type { MausMotion, MausState } from "@/lib/mascot";
 import { cn } from "@/lib/cn";
+import { useV3 } from "@/lib/v3";
 import { BOT_PROFILE_LIMITS } from "../../../shared/bot-profile";
 import { BotProfileAvatarCard } from "../BotProfileAvatarCard";
 import { BotInstructionsDialog } from "../BotInstructionsDialog";
@@ -26,6 +27,7 @@ export function IdentitySection({
   activeState: MausState;
   mascotMotion: { kind: Exclude<MausMotion, "none">; nonce: number } | null;
 }) {
+  const v3 = useV3();
   const [instructionsOpen, setInstructionsOpen] = useState(false);
 
   return (
@@ -79,7 +81,7 @@ export function IdentitySection({
           onChange={(e) => patch({ description: e.target.value })}
         />
         <div className="mt-1.5 flex items-start justify-between gap-3 text-[11px] text-ink-secondary">
-          <span>Shown on this Mac and paired phone. Shared bots also appear on linked homes. Standing instructions belong in Soul.</span>
+          <span>Shown on this Mac and paired phone. Shared bots also appear on linked homes. {v3 ? "How it should work goes in Instructions." : "Standing instructions belong in Soul."}</span>
           {/* The cap only matters when someone is near it; a counter under a
               one-line field otherwise reads as an invitation to fill it. */}
           {bot.description.length > 3_000 && (

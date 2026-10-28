@@ -204,6 +204,57 @@ describe("an ordinary turn still announces itself", () => {
   }, 40_000);
 });
 
+describe("a muted bot", () => {
+  it("lights up the sidebar but sends no banner or push when it finishes", async () => {
+    const bot = await createBot("Hush", "quick");
+    expect((await api("PATCH", `/api/bots/${bot.id}`, { notifications: false })).status).toBe(200);
+    const stream = await openSse(`${base}/api/events`);
+    try {
+      expect((await api("POST", `/api/bots/${bot.id}/messages`, { text: "how did it go?" })).status).toBe(202);
+      // the message still lands and still reads as unread
+      await expect.poll(async () => (await botState(bot.id))?.unread, { timeout: 20_000 }).toBe(true);
+      // ordering barrier: the done frame would have been broadcast in the
+      // same step that marked the thread unread, so anything after this
+      // rename proves it was never sent
+      expect((await api("PATCH", `/api/bots/${bot.id}`, { name: "Hush2" })).status).toBe(200);
+      await stream.until((candidate) => candidate.kind === "bot" && candidate.bot?.name === "Hush2", 10_000);
+      expect(stream.frames.filter((frame) => frame.kind === "notify" && frame.notification?.botId === bot.id)).toEqual([]);
+    } finally {
+      stream.close();
+      await cleanup([], [bot.id]);
+    }
+  }, 40_000);
+
+  it("still buzzes when it is blocked on an approval", async () => {
+    const asker = await createBot("Mum", "quick");
+    const peer = await createBot("Pip", "quick");
+    expect((await api("PATCH", `/api/bots/${asker.id}`, { notifications: false, approvePeerComms: true })).status).toBe(200);
+    const stream = await openSse(`${base}/api/events`);
+    const asking = api(
+      "POST",
+      "/api/internal/ask-bot",
+      { fromBotId: asker.id, toBotId: peer.id, message: "Pip, can you take the deploy?" },
+      await capability(asker.id, asker.threadId),
+    );
+    try {
+      const frame = await stream.until(
+        (candidate) => candidate.kind === "notify" && candidate.notification?.botId === asker.id,
+        20_000,
+      );
+      // muting must never silently stall work the person asked for
+      expect(frame.notification).toMatchObject({ kind: "approval", title: "Mum needs approval" });
+      const card = (await botState(asker.id))?.messages.findLast(
+        (message: { kind: string; card?: { requestId?: string } }) => message.kind === "options" && Boolean(message.card?.requestId),
+      );
+      expect((await api("POST", `/api/bots/${asker.id}/respond`, { requestId: card.card.requestId, behavior: "deny" })).status).toBe(200);
+    } finally {
+      stream.close();
+      await asking.catch(() => undefined);
+      await cleanup([], [asker.id, peer.id]);
+    }
+  }, 45_000);
+});
+
 describe("a room turn belongs to the room", () => {
   it("leaves the speaking bot's own thread unread-free while the room lights up", async () => {
     const bot = await createBot("Roomie", "quick");

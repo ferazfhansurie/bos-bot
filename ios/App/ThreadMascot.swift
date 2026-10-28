@@ -240,24 +240,24 @@ struct ThreadHeaderFace: View {
     private func glyphFace(_ bot: Bot, now: Date?) -> some View {
         GlyphPoseFace(color: bot.color, bodyId: bot.mascotBody, state: state.glyphState, scheme: scheme,
                       now: now, changedAt: changedAt, look: look, size: size,
-                      gazeX: gaze.width, gazeY: gaze.height, openness: openness)
+                      gazeX: gaze.width, gazeY: gaze.height, openness: openness, accessories: bot.mascotAccessories)
             .animation(.spring(response: sweep == nil ? 0.38 : 0.9, dampingFraction: sweep == nil ? 0.72 : 0.9), value: gaze)
     }
 
     /// The glyphs on the face right now. The live state's own face during a
-    /// turn; otherwise a mood, the card face, or open attentive eyes while
+    /// turn; otherwise a mood, the card face, or the listening face while
     /// you type, read back or the bot reads your message.
     private var look: GlyphLook? {
-        if sweep != nil { return .eyes("ring") }
-        if director.cardOpen { return .face(GlyphFaces.face(.waiting)) }
+        if sweep != nil { return .face(.listening) }
+        if director.cardOpen { return .face(.waiting) }
         if busy { return nil }
         switch director.mood {
-        case .proud: return GlyphLook(left: "caret", right: "caret", accent: "star", anchor: .topRight)
-        case .sheepish: return GlyphLook(left: "dash", right: "dash", accent: "drop", anchor: .topRight)
-        case .curious: return GlyphLook(left: "ring", right: "ring", accent: "query", anchor: .topRight)
+        case .proud: return .face(.proud)
+        case .sheepish: return .face(.shy)
+        case .curious: return .face(.curious)
         case nil: break
         }
-        if typing || director.lookingBack { return .eyes("ring") }
+        if typing || director.lookingBack { return .face(.listening) }
         return nil
     }
 
@@ -282,23 +282,24 @@ struct ThreadHeaderFace: View {
 
     private var blinkKey: Bool { scenePhase == .active && !(busy && moving && glyphBot != nil) }
 
-    /// A blink every few seconds, sometimes a double. Off while the turn's
+    /// A blink every 6 to 14 seconds, a double one time in seven (the
+    /// desktop cadence, GlyphBlink). Off while the turn's
     /// canvas blinks on its own, and while the app is in the background.
     private func blinkLoop() async {
         guard blinkKey else { return }
         while !Task.isCancelled {
-            try? await Task.sleep(for: .seconds(Double.random(in: 2.6...5.6)))
+            try? await Task.sleep(for: .seconds(Double.random(in: GlyphBlink.rest)))
             guard !Task.isCancelled else { return }
             await blink()
-            if Int.random(in: 0..<5) == 0 {
-                try? await Task.sleep(for: .milliseconds(140))
+            if Double.random(in: 0..<1) < GlyphBlink.doubleChance {
+                try? await Task.sleep(for: .seconds(GlyphBlink.doubleGap))
                 await blink()
             }
         }
     }
 
     private func blink() async {
-        withAnimation(.spring(response: 0.08, dampingFraction: 1)) { openness = 0.05 }
+        withAnimation(.spring(response: 0.08, dampingFraction: 1)) { openness = 0.08 }
         try? await Task.sleep(for: .milliseconds(90))
         withAnimation(.spring(response: 0.18, dampingFraction: 0.75)) { openness = 1 }
     }
@@ -376,9 +377,8 @@ extension GlyphLook {
     }
 
     /// A whole table face, worn whatever the live state is.
-    static func face(_ face: GlyphFace) -> GlyphLook {
-        GlyphLook(left: face.left, right: face.right, accent: face.accent, anchor: face.anchor,
-                  hidesAccent: face.accent == nil)
+    static func face(_ state: GlyphFaceState) -> GlyphLook {
+        GlyphLook(face: state)
     }
 }
 
@@ -396,6 +396,7 @@ struct GlyphPoseFace: View, Animatable {
     var gazeX: CGFloat
     var gazeY: CGFloat
     var openness: CGFloat
+    var accessories: MascotAccessories? = nil
 
     var animatableData: AnimatablePair<AnimatablePair<CGFloat, CGFloat>, CGFloat> {
         get { AnimatablePair(AnimatablePair(gazeX, gazeY), openness) }
@@ -413,11 +414,11 @@ struct GlyphPoseFace: View, Animatable {
 
     var body: some View {
         let pose = posed
-        let color = color, bodyId = bodyId, state = state, scheme = scheme, now = now, changedAt = changedAt
+        let color = color, bodyId = bodyId, state = state, scheme = scheme, now = now, changedAt = changedAt, accessories = accessories
         Canvas { context, canvas in
             let slot = CGRect(x: canvas.width / 4, y: canvas.height / 4, width: canvas.width / 2, height: canvas.height / 2)
             GlyphMark.draw(in: &context, slot: slot, color: color, bodyId: bodyId, state: state,
-                           scheme: scheme, now: now, changedAt: changedAt, look: pose)
+                           scheme: scheme, now: now, changedAt: changedAt, look: pose, accessories: accessories)
         }
         // the accent floats outside the body, as in GlyphMark
         .frame(width: size * 2, height: size * 2)
@@ -509,7 +510,7 @@ private struct BotFaceMenuPreview: View {
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
             MausAvatar(color: bot.color, size: 40, bodyId: bot.mascotBody, state: .happy,
-                       eyeStyle: MascotEyeStyle(stored: bot.mascotEyes), animated: true)
+                       eyeStyle: MascotEyeStyle(stored: bot.mascotEyes), animated: true, accessories: bot.mascotAccessories)
                 .scaleEffect(shown || reduceMotion ? 1 : 0.3, anchor: .bottomTrailing)
                 .rotationEffect(.degrees(shown || reduceMotion ? 0 : -24), anchor: .bottom)
                 .opacity(shown ? 1 : 0)

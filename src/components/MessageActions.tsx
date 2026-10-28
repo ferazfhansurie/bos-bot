@@ -69,7 +69,7 @@ export function MessageActions({
   const toggle = (next: Exclude<Popover, null>) => setPopover((current) => (current === next ? null : next));
   const popoverSide = mirrored ? "right-0" : "left-0";
   const reactions = popover === "react" && onReact && (
-    <div role="dialog" aria-label="React" className={cn("animate-pop-in absolute top-full z-30 mt-1 flex gap-0.5 rounded-full border border-hairline/50 bg-menu p-1 shadow-2xl shadow-black/50", popoverSide)}>
+    <div data-popover role="dialog" aria-label="React" className={cn("animate-pop-in absolute top-full z-30 mt-1 flex gap-0.5 rounded-full border border-hairline/50 bg-menu p-1 shadow-2xl shadow-black/50", popoverSide)}>
       {REACTIONS.map((emoji) => (
         <button
           key={emoji}

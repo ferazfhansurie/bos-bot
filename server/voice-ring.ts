@@ -18,6 +18,9 @@ export interface VoiceRingData {
   botId: string;
   threadId: string;
   reason: string;
+  /** "job_done": a voice call-back (server/voice-callback.ts). The phone
+   * opens the answered call with the result instead of "why I rang". */
+  purpose?: "job_done";
 }
 
 const WINDOW_MS = 10 * 60_000;
@@ -63,10 +66,13 @@ export class VoiceRings {
     for (const [botId, at] of data.rings) this.lastRing.set(botId, at);
   }
 
-  ring(input: { botId: string; threadId: string; reason: string }, botName: string): VoiceRingData {
+  /** A call-back (`purpose: "job_done"`) skips the ten-minute window: it
+   * is one ring per settled batch of work the owner asked for, never a
+   * bot's own choice. It still counts against the bot's next ring_owner. */
+  ring(input: { botId: string; threadId: string; reason: string; purpose?: "job_done" }, botName: string): VoiceRingData {
     const at = (this.options.now ?? Date.now)();
     const previous = this.lastRing.get(input.botId);
-    if (previous !== undefined && at - previous < WINDOW_MS) {
+    if (!input.purpose && previous !== undefined && at - previous < WINDOW_MS) {
       throw new VoiceRingRateLimit(Math.ceil((previous + WINDOW_MS - at) / 1000));
     }
     const next = new Map([...this.lastRing].filter(([, value]) => at - value < WINDOW_MS));

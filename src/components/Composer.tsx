@@ -5,12 +5,14 @@ import { track } from "@/lib/analytics";
 import { useCallback, useEffect, useMemo, useRef, useState, type SetStateAction } from "react";
 import { workingFolderLabel } from "./ComposerTray";
 import { ArrowUp, AudioLines, BookOpen, Clock, Folder, ListEnd, Loader2, Mic, Paperclip, Square, Target, Users, X } from "lucide-react";
-import { startRealtimeCall, useRealtimeCall } from "@/lib/voice-call/session";
+import { prewarmRealtimeCall, startRealtimeCall, useRealtimeCall } from "@/lib/voice-call/session";
 import { callIsOn, useCallSnapshot } from "./voice-call/VoiceCall";
 import { useStore, visibleMessages, currentTaskBot, signInBeforeSend, type Bot, type Group, type Message } from "@/state/store";
 import { EnginesBeat } from "./onboarding/beats/EnginesBeat";
 import { cn } from "@/lib/cn";
 import { activeLocale, t } from "@/lib/i18n";
+import { useV3 } from "@/lib/v3";
+import { firstVisit } from "@/lib/v3-faststart";
 import {
   draftRevision,
   restoreComposerDraft,
@@ -147,6 +149,10 @@ export function Composer({
   const callSnapshot = useCallSnapshot(callEngine);
   const voiceCallReady = Boolean(bot && !group && !shared && state.config?.xai?.configured === true && !(callEngine && callIsOn(callSnapshot)));
   const remoteClient = window.ogb?.remoteClient?.active === true;
+  // 3.0 web first visit: one bot and a ready composer, no computer or engine
+  // pickers until the person has sent their first message.
+  const v3 = useV3();
+  const bare = v3 && Boolean(bot && !group && !shared) && firstVisit(!window.ogb, state.config, bot?.threadId, bot?.messages ?? []);
   // Unified target: a 1:1 bot thread or a room. In a room the @ picker
   // offers members plus @everyone; explicit mentions override the room's
   // configured default responder.
@@ -273,12 +279,22 @@ export function Composer({
   const [dismissedAt, setDismissedAt] = useState<number | null>(null); // Esc'd this @
   const [dismissedSlashAt, setDismissedSlashAt] = useState<number | null>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const textRef = useRef(text);
+  textRef.current = text;
+  // the first visit opens with the cursor in the composer, ready to type
+  const bareThread = bare ? bot?.threadId : undefined;
+  useEffect(() => {
+    if (!bareThread) return;
+    const frame = requestAnimationFrame(() => inputRef.current?.focus({ preventScroll: true }));
+    return () => cancelAnimationFrame(frame);
+  }, [bareThread]);
   const mentionListRef = useRef<HTMLDivElement>(null);
   // the blank tab's starter chips type into this chat
   useEffect(() => {
     const onInsert = (event: Event) => {
       const detail = (event as CustomEvent<ComposerInsertDetail>).detail;
       if (!detail || group || shared || detail.botId !== bot?.id || (detail.threadId && detail.threadId !== threadId)) return;
+      if (detail.ifEmpty && textRef.current.trim()) { inputRef.current?.focus(); return; }
       editText(detail.text);
       requestAnimationFrame(() => { const el = inputRef.current; if (el) { el.focus(); el.setSelectionRange(detail.text.length, detail.text.length); } });
     };
@@ -1283,7 +1299,7 @@ export function Composer({
             <EnginesBeat inline onNext={() => {}} setMascot={() => {}} bump={() => {}} />
           </div>
         ))}
-        {modeBot && !shared && !group && !remoteClient && <div className="composer-context-strip relative mx-3 flex items-center gap-4 rounded-t-[20px] bg-raised px-3 pb-5 pt-2 text-[13px] text-ink-secondary">
+        {modeBot && !shared && !group && !remoteClient && !bare && <div className="composer-context-strip relative mx-3 flex items-center gap-4 rounded-t-[20px] bg-raised px-3 pb-5 pt-2 text-[13px] text-ink-secondary">
           <span className="flex min-w-0 items-center gap-2" title={composerTask?.cwd ?? modeBot.cwd ?? "Private bot workspace"}><Folder size={16} className="shrink-0"/><span className="composer-chip-label max-w-48 truncate">{(() => { const cwd = composerTask?.cwd ?? modeBot.cwd; return cwd ? workingFolderLabel(cwd, modeBot.id, modeBot.threadId) : "Bot workspace"; })()}</span></span>
               {modeBot && !remoteClient && (
                 <PlaceChip
@@ -1314,6 +1330,7 @@ export function Composer({
               <button
                 type="button"
                 onClick={() => fileInput.current?.click()}
+                data-v3-teach="attach"
                 aria-label={t("composer.attach")}
                 title={t("composer.attach")}
                 className="flex size-8 shrink-0 items-center justify-center rounded-full text-ink-secondary hover:bg-control hover:text-ink"
@@ -1480,7 +1497,7 @@ export function Composer({
             className="block max-h-[12rem] min-h-[36px] w-full resize-none overflow-y-auto bg-transparent px-2 py-1.5 text-[15px] leading-6 placeholder:text-ink-secondary focus:outline-none"
           />
           <div className="composer-end flex min-w-0 items-center justify-end gap-1">
-          {bot && !group && !shared && !remoteClient && !bot.remote && <ModelPicker bot={bot} threadId={threadId} placement="above" className="composer-model min-w-0"/>}
+          {bot && !group && !shared && !remoteClient && !bot.remote && !bare && <ModelPicker bot={bot} threadId={threadId} placement="above" className="composer-model min-w-0"/>}
           {/* No queue/block chip: sending while busy queues; option-enter
               still interrupts for the rare case it is wanted. */}
           {/* Stop stays a stop. Stop-then-steer is named beside the queued
@@ -1528,6 +1545,8 @@ export function Composer({
           <button
             type="button"
             onClick={() => startRealtimeCall(bot.id)}
+            onPointerEnter={() => prewarmRealtimeCall(bot.id)}
+            onFocus={() => prewarmRealtimeCall(bot.id)}
             aria-label={`Call ${bot.name}`}
             title={`Call ${bot.name}`}
             data-voice-call-start

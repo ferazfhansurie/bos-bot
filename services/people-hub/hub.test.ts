@@ -6,10 +6,10 @@ import { join } from "node:path";
 import type { AddressInfo } from "node:net";
 import { startHub } from "./hub.ts";
 
-async function setup() {
+async function setup(extra: { founderHomeId?: string } = {}) {
   const dir = mkdtempSync(join(tmpdir(), "people-hub-"));
   const emails: Array<{ to: string; subject: string }> = [];
-  const { hub, server } = startHub({ port: 0, dataDir: dir, publicOrigin: "https://people.test", sendEmail: async (to, subject) => { emails.push({ to, subject }); } });
+  const { hub, server } = startHub({ port: 0, dataDir: dir, publicOrigin: "https://people.test", sendEmail: async (to, subject) => { emails.push({ to, subject }); }, ...extra });
   await new Promise(resolve => server.once("listening", resolve));
   const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
   const call = async (path: string, init: { method?: string; token?: string; body?: unknown } = {}) => {
@@ -117,5 +117,25 @@ test("long-poll wakes on a new message and unknown tokens are refused", async ()
     assert.equal(result.body.notifications[0].text, "ping");
     const summaries = await t.call("/api/multiplayer/rooms", { token: a });
     assert.equal(summaries.body.rooms[0].unreadCount, 1);
+  } finally { t.close(); }
+});
+
+test("every home can join the founder as a contact", async () => {
+  const t = await setup({ founderHomeId: "homeF" });
+  try {
+    const u = await t.join("homeU", "Umi");
+    assert.equal((await t.call("/hub/v1/founder", { token: u, body: {} })).status, 404);
+    const f = await t.join("homeF", "Firaz");
+    assert.deepEqual((await t.call("/hub/v1/founder", { token: f, body: {} })).body, { self: true });
+    const first = await t.call("/hub/v1/founder", { token: u, body: {} });
+    assert.equal(first.status, 200);
+    assert.deepEqual(first.body.contact, { id: "homeF:person:owner", name: "Firaz", kind: "person" });
+    const again = await t.call("/hub/v1/founder", { token: u, body: {} });
+    assert.equal(again.body.room.id, first.body.room.id);
+    const theirs = await t.call("/api/multiplayer/contacts", { token: f });
+    assert.deepEqual(theirs.body.contacts.map((c: { name: string }) => c.name), ["Umi"]);
+    assert.equal((await t.call(`/api/multiplayer/rooms/${first.body.room.id}/messages`, { token: f, body: { text: "hi umi, firaz here", sendId: "f1" } })).status, 201);
+    const note = await t.call("/hub/v1/events?after=0", { token: u });
+    assert.equal(note.body.notifications[0].senderName, "Firaz");
   } finally { t.close(); }
 });

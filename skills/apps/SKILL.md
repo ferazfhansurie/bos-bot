@@ -23,6 +23,8 @@ When to use it: they want something that keeps data. "make me a crm", "i need hr
   Each template's exact fields are in its schema (app_read returns it).
   Pick the closest template even for a custom ask, then edit the page. Name it for their business ("Seri Bridal CRM"). Only in a direct conversation; in a room, use apps someone shared there.
 - `app_read {app_id, collection?, query?, limit?}`: without a collection it returns the schema and counts; with one it returns records (query matches any text field).
+- `app_update {app_id, name?, icon?}`: rename an app or change its icon; every list updates at once. Your own apps, direct conversation only.
+- `app_delete {app_id, confirm_name}`: delete one of your apps and all its records, only when the owner asks. confirm_name is its exact current name; the page file stays. Never delete app files by hand: the app list lives in memory, so a hand-deleted app stays listed until bos restarts.
 - `app_write {app_id, ops}`: all-or-nothing batch, up to 100 ops:
   - `{op:"put", collection, record, id?}` creates (or replaces, with id).
   - `{op:"patch", collection, id, fields}` changes only those fields.

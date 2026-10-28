@@ -504,6 +504,13 @@ const playTurn = (prompt: JsonValue) => {
     // A tool call held open until FAKE_CLAUDE_SLOW_TOOL_GATE exists, read
     // asynchronously so a steer folds in while the tool runs; the closing
     // reply carries it, the way the real CLI's next model call would.
+    // scripted calls (FAKE_CLAUDE_TOOL_CALLS) run and settle first, so a
+    // fixture can show finished steps beside the one still running
+    for (const call of scriptedToolCalls ?? []) {
+      const done = call.id ?? `tu-${process.pid}-${++toolUseCount}`;
+      out({ type: "assistant", message: { content: [{ type: "tool_use", id: done, name: call.name, input: call.input }], usage } });
+      out({ type: "user", message: { content: [{ type: "tool_result", tool_use_id: done, is_error: !call.ok, content: call.output }] } });
+    }
     const id = `tu-${process.pid}-${++toolUseCount}`;
     out({ type: "assistant", message: { content: [{ type: "tool_use", id, name: "Bash", input: { command: "sleep" } }], usage } });
     const gate = process.env.FAKE_CLAUDE_SLOW_TOOL_GATE ?? "";
@@ -616,6 +623,13 @@ process.stdin.on("data", (c) => {
     }
     if (turnRunning) {
       steered.push(steeredText(prompt));
+      // FAKE_CLAUDE_STEER_STEP=1 (slow-tool): the steer shows up as one quick
+      // settled step, the way the next model call that read it would
+      if (mode === "slow-tool" && process.env.FAKE_CLAUDE_STEER_STEP === "1") {
+        const id = `tu-${process.pid}-${++toolUseCount}`;
+        out({ type: "assistant", message: { content: [{ type: "tool_use", id, name: "Grep", input: { pattern: "steer" } }], usage: { input_tokens: 10, cache_read_input_tokens: 2, output_tokens: 5 } } });
+        out({ type: "user", message: { content: [{ type: "tool_result", tool_use_id: id, is_error: false, content: "1 match" }] } });
+      }
       if (process.env.FAKE_CLAUDE_STEER_RECEIVED) writeFileSync(process.env.FAKE_CLAUDE_STEER_RECEIVED, "received");
     } else {
       playTurn(prompt);

@@ -298,6 +298,8 @@ export function PendingApprovalActions({
       )}
       <button
         onClick={() => decide("allow")}
+        data-v3-point="approve"
+        data-v3-nod="approval"
         disabled={locked || (isSkillRequest && !reviewedSha256)}
         aria-busy={locked || undefined}
         className={cn(

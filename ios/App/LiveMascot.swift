@@ -21,6 +21,8 @@ struct LiveMascot: View {
     var size: CGFloat
     /// Frames a second; the ring and the call run at the display's 120.
     var fps: Double = 60
+    /// What the mascot wears; nil draws exactly the bare mascot.
+    var accessories: MascotAccessories? = nil
     /// The pose for a frame. Called once per frame on the main actor.
     let pose: (Date) -> LiveMascotPose
 
@@ -37,7 +39,7 @@ struct LiveMascot: View {
             let frame = memory.frame(at: now, color: color, bodyId: bodyId, eyes: eyeStyle, face: face,
                                      calm: reduceMotion)
             let shown = reduceMotion ? raw.calmed : raw
-            let scheme = scheme, face = face, accent = accent
+            let scheme = scheme, face = face, accent = accent, accessories = accessories
             Canvas { context, canvas in
                 let slot = CGRect(x: canvas.width / 4, y: canvas.height / 4, width: canvas.width / 2, height: canvas.height / 2)
                 for layer in frame.layers where layer.opacity > 0.01 {
@@ -46,7 +48,8 @@ struct LiveMascot: View {
                     Self.draw(in: &layered, slot: slot, color: frame.color, bodyId: layer.bodyId, eyes: layer.eyes,
                               face: face, accent: accent && layer.isCurrent, scheme: scheme, pose: shown,
                               scale: layer.scale, t: now.timeIntervalSinceReferenceDate,
-                              sinceFace: frame.sinceFace, blinking: frame.blinking)
+                              sinceFace: frame.sinceFace, openness: frame.openness, still: reduceMotion,
+                              accessories: layer.isCurrent ? accessories : nil)
                 }
             }
         }
@@ -66,7 +69,8 @@ struct LiveMascot: View {
     static func draw(in context: inout GraphicsContext, slot: CGRect, color: String, bodyId: String?,
                      eyes eyeStyle: MascotEyeStyle, face state: GlyphFaceState, accent showAccent: Bool,
                      scheme: ColorScheme, pose: LiveMascotPose, scale: CGFloat, t: TimeInterval,
-                     sinceFace: TimeInterval, blinking: Bool) {
+                     sinceFace: TimeInterval, openness: CGFloat, still: Bool = false,
+                     accessories: MascotAccessories? = nil) {
         let side = min(slot.width, slot.height)
         let k = side / 100
         let outline = FlatMascotBodies.outline(bodyId)
@@ -85,10 +89,11 @@ struct LiveMascot: View {
         if eyeStyle == .glyph {
             drawGlyph(in: &body, accentContext: context, slot: slot, origin: origin, k: k, outline: outline,
                       bounds: bounds, color: color, bodyId: bodyId, state: state, accent: showAccent, scheme: scheme,
-                      pose: pose, lift: pose.lift * side, t: t, sinceFace: sinceFace, blinking: blinking)
+                      pose: pose, lift: pose.lift * side, t: t, sinceFace: sinceFace, openness: openness,
+                      still: still, accessories: accessories)
         } else {
             drawClassic(in: &body, origin: origin, k: k, outline: outline, color: color, bodyId: bodyId,
-                        style: eyeStyle, pose: pose, blinking: blinking)
+                        style: eyeStyle, pose: pose, blinking: openness < 0.5, accessories: accessories)
         }
     }
 
@@ -96,11 +101,18 @@ struct LiveMascot: View {
                                   origin: CGPoint, k: CGFloat, outline: CGPath, bounds: CGRect, color: String,
                                   bodyId: String?, state: GlyphFaceState, accent showAccent: Bool, scheme: ColorScheme,
                                   pose: LiveMascotPose, lift: CGFloat, t: TimeInterval, sinceFace: TimeInterval,
-                                  blinking: Bool) {
+                                  openness: CGFloat, still: Bool, accessories: MascotAccessories?) {
         let layout = GlyphFaces.layout
         let paint = GlyphMark.colors(color, scheme: scheme)
         let face = GlyphFaces.face(state)
         let side = 100 * k
+        let diameter = min(bounds.width, bounds.height) * k
+        let ground = CGPoint(x: origin.x + bounds.midX * k, y: origin.y + bounds.maxY * k)
+        // the sheet's motion plays on top of the live pose, from when the face
+        // appeared; the body hops and squishes about the point it stands on
+        // (held still under reduce motion: only the expression changes)
+        let motion = still ? GlyphFaceArt.still : GlyphMotionCurves.frames(face.motion, at: sinceFace)
+        GlyphFaceArt.apply(motion.body, to: &context, about: ground, unit: diameter / 64)
 
         var shape = context
         shape.translateBy(x: origin.x, y: origin.y)
@@ -110,7 +122,6 @@ struct LiveMascot: View {
             shape.stroke(Path(outline), with: .color(paint.ink.opacity(0.22)), lineWidth: max(1, side / 52) / k)
         }
 
-        let diameter = min(bounds.width, bounds.height) * k
         let centre = CGPoint(x: origin.x + bounds.midX * k, y: origin.y + bounds.midY * k)
         let mass = massCentre[FlatMascotBodies.body(bodyId).id] ?? CGPoint(x: bounds.midX, y: bounds.midY)
         // The face slides over the body toward where it looks, and dips with
@@ -119,43 +130,41 @@ struct LiveMascot: View {
                                  y: origin.y + mass.y * k + pose.gaze.y * 0.06 * diameter + pose.nod * 0.05 * diameter)
 
         let squash = sinceFace < 0.12 ? max(0.15, abs(1 - 2 * sinceFace / 0.12)) : 1
-        let eyeSide = layout.eyeBox * diameter * pose.eyeScale
-        let eyeScale = eyeSide / GlyphFaces.viewBox
-        let eyeStroke = max(GlyphFaces.stroke, layout.minStrokePx / eyeScale)
-        var eyes = context
-        eyes.translateBy(x: faceCentre.x, y: faceCentre.y)
-        eyes.rotate(by: .degrees(GlyphFaces.tiltDegrees))
-        for (glyph, x) in [(face.left, -layout.eyeX), (face.right, layout.eyeX)] {
-            var eye = eyes
-            eye.translateBy(x: x * diameter, y: layout.eyeY * diameter)
-            // its own voice squashes the eyes: no mouth, the face talks with them
-            eye.scaleBy(x: eyeScale * (1 + 0.08 * pose.voice), y: eyeScale * squash * (1 - 0.32 * pose.voice))
-            eye.translateBy(x: -GlyphFaces.viewBox / 2, y: -GlyphFaces.viewBox / 2)
-            eye.stroke(Path(GlyphFaces.path(blinking ? "dash" : glyph)), with: .color(paint.ink),
-                       style: StrokeStyle(lineWidth: eyeStroke, lineCap: .round, lineJoin: .round))
+        let blink = GlyphMotionCurves.skipsBlink(face) ? 1 : openness
+        // its own voice squashes the eyes: no mouth, the face talks with them
+        GlyphFaceArt.drawEyes(GlyphFaceArt.Eyes(left: face.leftParts, right: face.rightParts, gaze: face.gazeOffset,
+                                                squash: squash * blink,
+                                                scale: CGSize(width: pose.eyeScale * (1 + 0.08 * pose.voice),
+                                                              height: pose.eyeScale * (1 - 0.32 * pose.voice))),
+                              in: context, faceCentre: faceCentre, diameter: diameter, ink: paint.ink,
+                              motion: motion.eyes, eachEye: motion.eachEye)
+
+        // Accessories lean and squash with the body; the hat stays on the
+        // body's mass while glasses slide with the glance.
+        if let accessories, !accessories.isEmpty {
+            let unit = min(bounds.width, bounds.height)
+            let glance = CGPoint(x: pose.gaze.x * 0.07, y: pose.gaze.y * 0.06 + pose.nod * 0.05)
+            let back = -GlyphFaces.tiltDegrees * .pi / 180
+            let shift = CGSize(width: glance.x * cos(back) - glance.y * sin(back), height: glance.x * sin(back) + glance.y * cos(back))
+            MascotAccessoryArt.draw(accessories, in: &context, box: CGRect(x: origin.x, y: origin.y, width: side, height: side),
+                                    bodyId: bodyId, color: color, face: MascotFace(centre: mass, diameter: unit, shift: shift))
         }
 
-        guard showAccent, side >= layout.accentMinSize, let accent = face.accent, let anchor = face.anchor,
-              let place = GlyphFaces.placement(anchor) else { return }
+        guard showAccent, side >= layout.accentMinSize, let accent = face.accent, let anchor = face.anchor else { return }
         let pop = sinceFace < 0.22 ? easeOutBack(sinceFace / 0.22) : 1
-        let float = anchor == .split ? 0 : sin(t * 2 * .pi / 1.8) * 0.025 * diameter
-        let boxSide = place.box * diameter * pop
-        let boxScale = boxSide / GlyphFaces.viewBox
-        guard boxScale > 0 else { return }
         // the accent hovers beside the body, so it rides the lift but not the lean
         var mark = accentContext
-        mark.translateBy(x: centre.x + place.x * diameter - boxSide / 2,
-                         y: centre.y + place.y * diameter - boxSide / 2 + float - lift)
-        mark.scaleBy(x: boxScale, y: boxScale)
-        mark.stroke(Path(GlyphFaces.path(accent)), with: .color(paint.accent),
-                    style: StrokeStyle(lineWidth: max(place.stroke, layout.minStrokePx / boxScale), lineCap: .round, lineJoin: .round))
+        mark.translateBy(x: 0, y: -lift)
+        GlyphFaceArt.apply(motion.body, to: &mark, about: ground, unit: diameter / 64)
+        GlyphFaceArt.drawAccent(accent, anchor: anchor, in: mark, centre: centre, diameter: diameter,
+                                color: paint.accent, body: color, pop: CGFloat(pop), motion: motion.accent)
     }
 
     /// The picked classic/round/arches/angled eyes, the same outlines as
     /// FlatBotMark, sliding with the gaze and widening with attention.
     private static func drawClassic(in context: inout GraphicsContext, origin: CGPoint, k: CGFloat, outline: CGPath,
                                     color: String, bodyId: String?, style: MascotEyeStyle, pose: LiveMascotPose,
-                                    blinking: Bool) {
+                                    blinking: Bool, accessories: MascotAccessories?) {
         let body = FlatMascotBodies.body(bodyId)
         var shape = context
         shape.translateBy(x: origin.x, y: origin.y)
@@ -174,20 +183,14 @@ struct LiveMascot: View {
         for path in style.paths(openness: blinking ? 0.14 : 1) {
             eyes.fill(Path(path), with: .color(ink))
         }
+        MascotAccessoryArt.draw(accessories, in: &shape, box: CGRect(x: 0, y: 0, width: 100, height: 100), bodyId: bodyId, color: color,
+                                face: .classic(centre: CGPoint(x: 53.25 + body.faceX * 0.5 + pose.gaze.x * 3.5,
+                                                               y: 45 + body.faceY + pose.gaze.y * 3 + pose.nod * 2)))
     }
 
-    /// Area centroid of every body in its 100 box, sampled once; the glyph
-    /// eyes sit on the body's mass, the same way GlyphMark places them.
-    private static let massCentre: [String: CGPoint] = Dictionary(uniqueKeysWithValues: FlatMascotBodies.all.map { body in
-        let outline = FlatMascotBodies.outline(body.id)
-        var sum = CGPoint.zero, count = 0.0
-        for y in stride(from: 1.0, to: 100, by: 2) {
-            for x in stride(from: 1.0, to: 100, by: 2) where outline.contains(CGPoint(x: x, y: y)) {
-                sum.x += x; sum.y += y; count += 1
-            }
-        }
-        return (body.id, count > 0 ? CGPoint(x: sum.x / count, y: sum.y / count) : CGPoint(x: 50, y: 50))
-    })
+    /// Area centroid of every body in its 100 box; the glyph eyes sit on
+    /// the body's mass, the same way GlyphMark places them.
+    private static var massCentre: [String: CGPoint] { MascotFace.massCentres }
 
     static func easeOutBack(_ t: Double) -> Double {
         let c = 1.7, u = min(max(t, 0), 1) - 1
@@ -211,7 +214,8 @@ final class LiveMascotMemory {
         let color: String
         let layers: [Layer]
         let sinceFace: TimeInterval
-        let blinking: Bool
+        /// 1 open, 0.08 shut at mid-blink
+        let openness: CGFloat
     }
 
     private var colorFrom: String?
@@ -263,11 +267,12 @@ final class LiveMascotMemory {
                             isCurrent: true))
 
         let sinceFace = now.timeIntervalSince(faceAt)
-        // each bot blinks on its own beat
-        let beat = Double((colorTo ?? color).unicodeScalars.reduce(0) { $0 &+ Int($1.value) } % 17) / 4
-        let blinking = sinceFace > 0.4 && (now.timeIntervalSinceReferenceDate + beat).truncatingRemainder(dividingBy: 4.3) < 0.11
+        // random blinks, now and then a double, each bot on its own seed
+        let openness = sinceFace > 0.4
+            ? GlyphBlink.openness(at: now.timeIntervalSinceReferenceDate, seed: GlyphBlink.seed((colorTo ?? color) + (bodyId ?? "")))
+            : 1
 
-        return Frame(color: currentColor(at: now) ?? color, layers: layers, sinceFace: sinceFace, blinking: blinking)
+        return Frame(color: currentColor(at: now) ?? color, layers: layers, sinceFace: sinceFace, openness: openness)
     }
 
     private func currentColor(at now: Date) -> String? {
@@ -291,6 +296,9 @@ struct ProfileLiveMascot: View {
     var eyeStyle: MascotEyeStyle = .glyph
     var size: CGFloat = 132
     var name: String
+    /// Holds one face instead of cycling moods on a tap; a tap still pokes.
+    var fixedFace: GlyphFaceState? = nil
+    var accessories: MascotAccessories? = nil
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var motion = FingerMotionBox()
@@ -302,7 +310,8 @@ struct ProfileLiveMascot: View {
     var body: some View {
         GeometryReader { proxy in
             let centre = CGPoint(x: proxy.size.width / 2, y: proxy.size.height / 2)
-            LiveMascot(color: color, bodyId: bodyId, eyeStyle: eyeStyle, face: Self.moods[mood], size: size) { date in
+            LiveMascot(color: color, bodyId: bodyId, eyeStyle: eyeStyle, face: fixedFace ?? Self.moods[mood], size: size,
+                       accessories: accessories) { date in
                 motion.motion.step(at: date.timeIntervalSinceReferenceDate)
             }
             .position(centre)
@@ -322,14 +331,14 @@ struct ProfileLiveMascot: View {
         .frame(height: size + 56)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("\(name) avatar")
-        .accessibilityHint("Double tap to change its mood")
+        .accessibilityHint(fixedFace == nil ? "Double tap to change its mood" : "Double tap to poke it")
         .accessibilityAddTraits(.isButton)
         .accessibilityAction { tap() }
     }
 
     private func tap() {
         motion.motion.poke(at: Date().timeIntervalSinceReferenceDate)
-        mood = (mood + 1) % Self.moods.count
+        if fixedFace == nil { mood = (mood + 1) % Self.moods.count }
         UIImpactFeedbackGenerator(style: .soft).impactOccurred()
     }
 }

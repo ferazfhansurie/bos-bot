@@ -1,15 +1,17 @@
 export const PRODUCT_EVENTS = [
   "install", "open", "app_opened", "engine_connected", "first_bot", "first_message", "first_job_done", "whatsapp_linked", "app_connected", "routine_created", "phone_paired", "mod_created", "mod_enabled", "update_installed", "heal_ran", "error", "pair_success", "push_ok",
   "call_started", "group_call_started", "room_members_changed", "onboarding_step", "onboarding_completed", "phone_setup_skipped", "phone_setup_completed", "email_skipped", "marketplace_rent_requested", "marketplace_downloaded", "team_imported", "marketplace_published", "bot_created", "message_sent", "room_created",
+  // 3.0 funnel: the new surfaces, so we can tell whether 3.0 grew anything
+  "island_seen", "card_clicked", "connect_started", "connect_finished", "automation_created",
 ] as const;
 export type ProductEventName = typeof PRODUCT_EVENTS[number];
 export interface ProductEvent { name: ProductEventName; at: string; props: Record<string, number | boolean | string> }
 const names = new Set<string>(PRODUCT_EVENTS);
 const counts = new Set(["count", "members", "memberCount", "bots", "duration_ms"]);
-const bools = new Set(["success", "room", "queued", "replay", "context"]);
+const bools = new Set(["success", "room", "queued", "replay", "context", "v3"]);
 const classes = ["engine", "network", "auth", "storage", "update", "push", "whatsapp", "server", "unknown"];
 const enums: Record<string, readonly string[]> = { engine: ["claude", "codex", "bos-free", "other"], class: classes, check: classes,
-  source: ["desktop", "ios", "android", "onboarding", "settings", "chat", "routine"], rating: ["up", "down"] };
+  source: ["desktop", "ios", "android", "onboarding", "settings", "chat", "routine"], rating: ["up", "down"], card: ["fixit", "needs_you", "home", "connect"] };
 
 /** Construct every field explicitly. Never forward opaque caller properties. */
 export function productEvent(name: string, input?: Record<string, unknown>, now = Date.now()): ProductEvent | null {

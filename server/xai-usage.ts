@@ -23,7 +23,17 @@ const writeQueues = new Map<string, Promise<void>>();
 
 type VoiceRow =
   | { at: string; kind: "start"; callId: string; botId: string | null }
-  | { at: string; kind: "end"; callId: string; seconds: number };
+  | { at: string; kind: "end"; callId: string; seconds: number; jobsSaid?: number; jobsSent?: number }
+  | { at: string; kind: "event"; callId: string; event: VoiceEventKind; ms?: number; good?: boolean };
+
+/** v3 call quality counters (plans/voice-v3/contract.md). */
+export type VoiceEventKind = "first_audio" | "drop" | "resume" | "unclear" | "memo" | "rating";
+const EVENT_KINDS = new Set<VoiceEventKind>(["first_audio", "drop", "resume", "unclear", "memo", "rating"]);
+export const isVoiceEventKind = (value: unknown): value is VoiceEventKind => typeof value === "string" && EVENT_KINDS.has(value as VoiceEventKind);
+/** grok voice ≈ $0.08 a minute (third-party figure, not xAI's page); rm at 4.2. */
+export const RM_PER_MINUTE = 0.08 * 4.2;
+/** A call's rough cost in rm, to the sen. */
+export const voiceRm = (seconds: number) => Math.round((seconds / 60) * RM_PER_MINUTE * 100) / 100;
 
 function monthKey(at: Date): string {
   return `${at.getUTCFullYear()}-${String(at.getUTCMonth() + 1).padStart(2, "0")}`;
@@ -62,9 +72,40 @@ export function recordVoiceCallStart(dataDir: string, callId: string, botId: str
 }
 
 /** The client hung up after `seconds` connected. The last report wins. */
-export function recordVoiceCallEnd(dataDir: string, callId: string, seconds: number, now = new Date()): Promise<void> {
+export function recordVoiceCallEnd(dataDir: string, callId: string, seconds: number, now = new Date(), jobs?: { said: number; sent: number }): Promise<void> {
   const clean = Number.isFinite(seconds) ? Math.min(MAX_CALL_SECONDS, Math.max(0, Math.round(seconds))) : 0;
-  return append(dataDir, { at: now.toISOString(), kind: "end", callId, seconds: clean });
+  const count = (n: number) => (Number.isFinite(n) ? Math.min(100, Math.max(0, Math.round(n))) : 0);
+  return append(dataDir, { at: now.toISOString(), kind: "end", callId, seconds: clean, ...(jobs ? { jobsSaid: count(jobs.said), jobsSent: count(jobs.sent) } : {}) });
+}
+
+/** One quality event from a v3 client (drop, resume, first audio, …). */
+export function recordVoiceEvent(dataDir: string, callId: string, event: { kind: VoiceEventKind; ms?: number; good?: boolean }, now = new Date()): Promise<void> {
+  const ms = typeof event.ms === "number" && Number.isFinite(event.ms) ? Math.min(600_000, Math.max(0, Math.round(event.ms))) : undefined;
+  return append(dataDir, {
+    at: now.toISOString(), kind: "event", callId, event: event.kind,
+    ...(ms !== undefined ? { ms } : {}),
+    ...(event.kind === "rating" ? { good: event.good === true } : {}),
+  });
+}
+
+export interface VoiceQuality {
+  drops: number;
+  resumes: number;
+  firstAudioP50: number | null;
+  firstAudioP90: number | null;
+  unclear: number;
+  memos: number;
+  good: number;
+  bad: number;
+  jobsSaid: number;
+  jobsSent: number;
+  /** grok voice minutes at ~$0.08/min, in rm */
+  rmEstimate: number;
+}
+
+function percentile(sorted: number[], p: number): number | null {
+  if (!sorted.length) return null;
+  return sorted[Math.min(sorted.length - 1, Math.max(0, Math.ceil((p / 100) * sorted.length) - 1))];
 }
 
 export interface VoiceTally {
@@ -76,6 +117,7 @@ export interface VoiceTally {
   unmeasured: number;
   today: { calls: number; seconds: number };
   days: Array<{ date: string; calls: number; seconds: number }>;
+  quality: VoiceQuality;
 }
 
 /** Sum this month's calls, one per callId, by the day they started. */
@@ -88,9 +130,13 @@ export function summarizeVoiceUsage(dataDir: string, now = new Date()): VoiceTal
   }
   const calls = new Map<string, { date: string; seconds: number | null }>();
   const ends = new Map<string, number>();
+  const jobs = new Map<string, { said: number; sent: number }>();
+  const ratings = new Map<string, boolean>();
+  const firstAudio = new Map<string, number>();
+  const q = { drops: 0, resumes: 0, unclear: 0, memos: 0 };
   for (const line of text.split("\n")) {
     if (!line.trim()) continue;
-    let row: Partial<VoiceRow>;
+    let row: { at?: unknown; kind?: unknown; callId?: unknown; seconds?: unknown; jobsSaid?: unknown; jobsSent?: unknown; event?: unknown; ms?: unknown; good?: unknown };
     try {
       row = JSON.parse(line);
     } catch {
@@ -98,7 +144,18 @@ export function summarizeVoiceUsage(dataDir: string, now = new Date()): VoiceTal
     }
     if (!isVoiceCallId(row.callId) || typeof row.at !== "string") continue;
     if (row.kind === "start" && !calls.has(row.callId)) calls.set(row.callId, { date: row.at.slice(0, 10), seconds: null });
-    if (row.kind === "end" && typeof row.seconds === "number") ends.set(row.callId, row.seconds);
+    if (row.kind === "end" && typeof row.seconds === "number") {
+      ends.set(row.callId, row.seconds);
+      if (typeof row.jobsSaid === "number") jobs.set(row.callId, { said: row.jobsSaid, sent: typeof row.jobsSent === "number" ? row.jobsSent : 0 });
+    }
+    if (row.kind === "event") {
+      if (row.event === "drop") q.drops += 1;
+      else if (row.event === "resume") q.resumes += 1;
+      else if (row.event === "unclear") q.unclear += 1;
+      else if (row.event === "memo") q.memos += 1;
+      else if (row.event === "rating") ratings.set(row.callId, row.good === true);
+      else if (row.event === "first_audio" && typeof row.ms === "number" && !firstAudio.has(row.callId)) firstAudio.set(row.callId, row.ms);
+    }
   }
   for (const [callId, seconds] of ends) {
     const call = calls.get(callId);
@@ -116,6 +173,17 @@ export function summarizeVoiceUsage(dataDir: string, now = new Date()): VoiceTal
     if (call.seconds === null) unmeasured += 1;
   }
   const todayKey = now.toISOString().slice(0, 10);
+  const audio = [...firstAudio.values()].sort((a, b) => a - b);
+  const quality: VoiceQuality = {
+    ...q,
+    firstAudioP50: percentile(audio, 50),
+    firstAudioP90: percentile(audio, 90),
+    good: [...ratings.values()].filter(Boolean).length,
+    bad: [...ratings.values()].filter((good) => !good).length,
+    jobsSaid: [...jobs.values()].reduce((n, row) => n + row.said, 0),
+    jobsSent: [...jobs.values()].reduce((n, row) => n + row.sent, 0),
+    rmEstimate: voiceRm(seconds),
+  };
   return {
     period: monthKey(now),
     calls: calls.size,
@@ -123,6 +191,7 @@ export function summarizeVoiceUsage(dataDir: string, now = new Date()): VoiceTal
     unmeasured,
     today: byDay.get(todayKey) ?? { calls: 0, seconds: 0 },
     days: [...byDay.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([date, day]) => ({ date, ...day })),
+    quality,
   };
 }
 

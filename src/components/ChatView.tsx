@@ -1,10 +1,12 @@
+import { VoiceCallCard } from "./voice-call/VoiceCallCard";
 import { ModCommands, ModSurfaces } from "@/mods/ModSurfaces";
 import { OutputEditor } from "./OutputEditor";
 import { withoutMemorySourceMarkers } from "../../shared/memory-source";
 import { RequestPhoneLink } from "./RequestPhoneLink";
 import { AnswerMemorySources } from "./AnswerMemorySources";
 import {ThreadDoneButton} from './ThreadDoneButton';
-import { Component, memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
+import { Component, memo, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode, type RefObject } from "react";
+import { resolveMausColor } from "../../shared/glyph-faces";
 import {
   AlertTriangle,
   ArrowDown,
@@ -42,8 +44,8 @@ import { EngineSetup } from "./EngineSetup";
 import { isProviderSafetyBlock, PROVIDER_SAFETY_GUIDANCE, PROVIDER_SAFETY_HELP_URL } from "../../shared/provider-safety";
 import { BotAvatar, GroupMark, PersonPhoto, type GroupMarkMember } from "./Avatar";
 import { TurnPresence } from "./TurnPresence";
+import { pendingApprovals } from "./PendingApproval";
 import { ActivityMascot } from "./ActivityMascot";
-import { turnGesture } from "../../shared/mascot-choreography";
 import { showToolCallsEnabled, skillAuthoringEnabled } from "@/lib/feature-flags";
 import { glyphFaceForBot, normalizeState, stateForBot } from "@/lib/mascot";
 import { peerLine, type PeerLine } from "@/lib/peer-message";
@@ -148,6 +150,17 @@ import {
 } from "@/lib/transcript-window";
 import { appendComposerDraft, useReplyDraft } from "@/lib/drafts";
 import { isArriving, trackArrivals, type ArrivalState } from "@/lib/message-arrivals";
+import { Glass } from "./Glass";
+import { useV3 } from "@/lib/v3";
+import { lastSteeredId } from "@/lib/steer-ack";
+import { derivePresence, gestureForPresence } from "../../shared/mascot-presence";
+import { clearDone, clearOpened, markDone, resetSpot, travelTo, useStage, type Spot } from "@/lib/v3-stage";
+import { fastStartInChat, firstVisit } from "@/lib/v3-faststart";
+import { FastStart } from "./v3/FastStart";
+import { EmptyMascot, PointingMascot, WalkHomeLayer, usePointTarget } from "./v3/Alive";
+import { SteerReadContext, SteerReadLabel, ThreadWorker } from "./v3/ThreadWorker";
+import { lastNewsAt, steerReads, turnSteps, type SteerRead } from "./v3/thread-worker";
+import { OnboardingGreeting, useTeach } from "./v3/Teach";
 
 /** Long user messages collapse behind a fade so pasted walls of text don't
  * bury the conversation; bots get full markdown. */
@@ -342,6 +355,7 @@ function Bubble({
   shared?: SharedChatOptions;
 }) {
   const { state, dispatch } = useStore();
+  const steerRead = useContext(SteerReadContext)?.reads.has(message.id) ?? false;
   const remoteClient = window.ogb?.remoteClient?.active === true;
   // A user-role line another bot delivered (ask_bot, delegate_bot,
   // start_thread) is that bot speaking, not the person: it takes the
@@ -536,9 +550,11 @@ function Bubble({
             {t("chat.steerUnknown")}
           </div>
         ) : message.steered && (
+          steerRead ? <SteerReadLabel id={message.id} /> : (
           <div className="mt-1 text-[11px] chat-text-tertiary" title={t("chat.sentMidTurnHint")}>
             {t("chat.sentMidTurn")}
           </div>
+          )
         )}
         {reactionChips}
         <TurnActionRow persistent={false} align="end" at={message.at}>
@@ -796,12 +812,16 @@ const TranscriptRow = memo(function TranscriptRow({
 }: TranscriptRowProps) {
   const first = item.kind === "message" ? item.message : item.messages[0];
   const voice = speaker ? first.from : undefined;
+  // 3.0 one face on screen: a 1:1 reply is signed with the name in the
+  // bot's colour, its face lives in the row, the island or the empty thread
+  const faceless = useV3() && !shared;
   const header = speaker ? (
     <div className="-mb-1">
       <SpeakerHeader
         bot={voice ? shared?.mentionBots.find((candidate) => candidate.id === voice.botId) ?? { name: voice.name, color: voice.color ?? bot.color } : bot}
         name={voice?.name ?? bot.name}
         person={voice?.person}
+        faceless={faceless}
       />
     </div>
   ) : null;
@@ -911,6 +931,7 @@ const TranscriptRow = memo(function TranscriptRow({
       case "screen":
         return m.png ? <ScreenFrame png={m.png} mime={m.mime} /> : null;
       default: {
+        if (m.voiceCall) return <VoiceCallCard card={m.voiceCall} />;
         const bubble = (
           <Bubble
             bot={bot}
@@ -938,7 +959,17 @@ const TranscriptRow = memo(function TranscriptRow({
           );
         }
         const card = m.onboarding?.card?.kind;
-        return card === "engine" || card === "suggestions" ? (
+        if (card === "suggestions") {
+          return (
+            <OnboardingGreeting bot={bot} message={m}>
+              <div className="flex flex-col gap-2.5">
+                {bubble}
+                <OnboardingChatCard bot={bot} message={m} />
+              </div>
+            </OnboardingGreeting>
+          );
+        }
+        return card === "engine" ? (
           <div className="flex flex-col gap-2.5">
             {bubble}
             <OnboardingChatCard bot={bot} message={m} />
@@ -1044,9 +1075,13 @@ const MessagesList = memo(function MessagesList({
   shared,
   scrollRef,
   following,
+  v3Dock,
 }: {
   bot: Bot;
   messages: Message[];
+  /** 3.0: the composer dock the empty-thread mascot watches; set only when
+   * the alive surfaces are on. */
+  v3Dock?: RefObject<HTMLDivElement | null>;
   /** Refresh the memoized transcript and its derived turn labels when the
    * language changes, even when the messages themselves stay unchanged. */
   locale: string;
@@ -1202,7 +1237,8 @@ const MessagesList = memo(function MessagesList({
 
   return (
     <>
-      {messages.length === 0 && !bot.busy && !shared?.historyLoading && (
+      {messages.length === 0 && !bot.busy && !shared?.historyLoading && v3Dock && !shared && <EmptyMascot bot={bot} dock={v3Dock} />}
+      {messages.length === 0 && !bot.busy && !shared?.historyLoading && !(v3Dock && !shared) && (
         <div className="flex flex-1 flex-col items-center justify-center gap-3 py-24 text-center">
           {shared?.faces ? <GroupMark members={shared.faces} size={64} /> : <BotAvatar bot={bot} state="idle" size={64} motion="none" motionKey={0} />}
           {shared || bot.remote ? <div className="text-[17px] font-semibold text-ink">{bot.name}</div> : <RenameTitle
@@ -1477,6 +1513,11 @@ export function ChatView({ bot: profile, shared }: { bot: Bot; shared?: SharedCh
 
   // Mascot while the turn works. Streaming stays invisible — when the reply
   // is finished, the whole bubble pops in above the mascot.
+  const v3 = useV3();
+  // 3.0: bos's first conversation offers the 60-second start, and on the web
+  // the first visit hides the computer and terminal until the first message.
+  const fastStart = v3 && local && fastStartInChat(state.config, bot.threadId, messages);
+  const bareVisit = v3 && local && firstVisit(!window.ogb, state.config, bot.threadId, messages);
   const lastMessage = messages.at(-1);
   const toolInFlight = lastMessage?.kind === "activity" && lastMessage.tool?.ok === undefined;
   const activityLabel = liveActivityLabel(lastMessage);
@@ -1512,6 +1553,13 @@ export function ChatView({ bot: profile, shared }: { bot: Bot; shared?: SharedCh
     }, 520);
   }, [lastMessage?.id, lastMessage?.role, lastMessage?.kind]);
   const presenceVisible = waiting || popping !== null;
+  // the island's mascot: the turn while it runs; in 3.0 the moment the
+  // answer lands it plays the finished beat instead of one more think
+  const islandPresence = derivePresence({
+    surface: "island",
+    turn: v3 && popping !== null && !waiting ? null : { toolInFlight, toolName: lastMessage?.tool?.name },
+    finishing: v3 && popping !== null && !waiting,
+  });
   // Room decoration is not the bot speaking. Keep simultaneous speakers separate.
   const presenceBots = shared ? (shared.activeBotIds?.length
     ? shared.activeBotIds.map(id => shared.mentionBots.find(candidate => candidate.id === id)
@@ -1524,6 +1572,69 @@ export function ChatView({ bot: profile, shared }: { bot: Bot; shared?: SharedCh
   useEffect(() => {
     setBusySince(bot.busy ? bot.turnStartedAt ?? Date.now() : null);
   }, [bot.busy, bot.id, bot.threadId, bot.turnStartedAt]);
+
+  // 3.0 alive: while a turn runs the header's name pill becomes the live
+  // island the bot stands in, and the composer stays open; when it needs the person it
+  // comes forward and points at the button; when it ends it hops (> <) and
+  // walks back to its row with a done dot. Off (and for rooms) none of this renders or moves anything.
+  const alive = v3 && !shared;
+  // the end of a turn is caught in render, not an effect: a committed frame
+  // that is neither busy nor finishing would send the bot home before its hop
+  const busyKey = `${bot.id}:${bot.threadId}`;
+  const [finishing, setFinishing] = useState(false);
+  const [seenBusy, setSeenBusy] = useState({ key: busyKey, busy: Boolean(bot.busy) });
+  if (seenBusy.key !== busyKey || seenBusy.busy !== Boolean(bot.busy)) {
+    const ended = alive && seenBusy.key === busyKey && seenBusy.busy && !bot.busy;
+    setSeenBusy({ key: busyKey, busy: Boolean(bot.busy) });
+    if (ended !== finishing) setFinishing(ended);
+  }
+  useEffect(() => {
+    if (alive) clearDone(bot.id);
+  }, [alive, bot.id]);
+  useEffect(() => {
+    if (alive && bot.busy) clearDone(bot.id);
+  }, [alive, bot.busy, bot.id]);
+  useEffect(() => {
+    if (!finishing) return;
+    const timer = setTimeout(() => {
+      setFinishing(false);
+      markDone(bot.id);
+      // the tab it opened keeps its own icon again
+      clearOpened(bot.id);
+    }, 1600);
+    return () => clearTimeout(timer);
+  }, [finishing, bot.id]);
+  const islandOn = alive && (Boolean(bot.busy) || finishing);
+  const needsYou = alive && Boolean(bot.busy) && (bot.activity === "waiting-on-you" || pendingApprovals(messages).length > 0);
+  const { teach, dismiss: dismissTeach } = useTeach(alive, bot);
+  const pointAt = usePointTarget(needsYou || Boolean(teach), teach?.selector);
+  const stage = useStage(bot.id);
+  // one face on screen: a resting bot sits in its row, except on an empty
+  // thread, where it stands once, big, above the composer
+  const spot: Spot = teach && pointAt ? "pointing"
+    : !islandOn ? (messages.length === 0 && !bot.busy ? "empty" : "sidebar")
+    : finishing ? "island"
+    : needsYou && pointAt ? "pointing"
+    : stage.tab ? "tab"
+    : "island";
+  useEffect(() => {
+    if (!v3) return;
+    // from a frame, not the commit: the trip flushes React itself
+    const frame = requestAnimationFrame(() => travelTo(bot.id, spot));
+    return () => cancelAnimationFrame(frame);
+  }, [v3, bot.id, spot]);
+  useEffect(() => () => resetSpot(bot.id), [bot.id]);
+
+  // 3.0 thread worker: the turn's steps, and each mid-turn send's read state
+  const workerSteps = useMemo(() => alive ? turnSteps(messages) : [], [alive, messages]);
+  const steerReadMap = useMemo(() => alive ? steerReads(messages, Boolean(bot.busy)) : new Map<string, SteerRead>(), [alive, messages, bot.busy]);
+  const steerContext = useMemo(() => alive ? { reads: steerReadMap, name: bot.name, color: resolveMausColor(bot.color) } : null, [alive, steerReadMap, bot.name, bot.color]);
+  const newestSteerId = alive ? lastSteeredId(messages) : undefined;
+  const newestSteerRead = newestSteerId ? steerReadMap.get(newestSteerId) : undefined;
+  const newestSteer = useMemo(() => newestSteerId && newestSteerRead ? { id: newestSteerId, read: newestSteerRead } : undefined, [newestSteerId, newestSteerRead]);
+  const stopTurn = useCallback(() => {
+    dispatch({ type: "interrupt", botId: bot.id, threadId: bot.threadId, onError: () => undefined });
+  }, [dispatch, bot.id, bot.threadId]);
 
   // regenerate = fork the last user message with the same text — reuses the
   // existing branch machinery, so the old answer stays reachable via ‹ ›
@@ -1723,6 +1834,28 @@ export function ChatView({ bot: profile, shared }: { bot: Bot; shared?: SharedCh
   const resultsThreadId = routineExecution?.resultsThreadId ?? routineExecution?.sourceThreadId;
   const canOpenResults = resultsThreadId && [...state.bots, ...state.groups].some((owner) => owner.threadId === resultsThreadId || owner.tasks?.some((task) => task.threadId === resultsThreadId));
 
+  // Keyed by task: each conversation keeps its own draft and a failed
+  // request can restore the old task without spilling into the newly
+  // selected one. ArrowUp-to-edit stays gated on busy because editing
+  // rewinds the thread, which a live turn forbids (the server 409s it).
+  const composer = (
+    <Composer
+      key={bot.threadId}
+      bot={profile}
+      shared={shared}
+      // A cached transcript shown while its thread switch is in flight is
+      // read-only until the server confirms the switch.
+      locked={shared?.historyLoading || switchPreview}
+      replyTo={shared && replyTo ? messages.find(message => message.id === replyTo.id) ?? replyTo : replyTo}
+      onClearReply={clearReply}
+      onConsumeReply={consumeReply}
+      onRestoreReply={restoreReply}
+      onEditLast={local && lastUserMessage && !lastUserMessageHasAttachments && !bot.busy
+        ? () => setEditingId(lastUserMessage.id)
+        : undefined}
+    />
+  );
+
   return (
     <main className="relative flex h-full min-w-0 flex-1 flex-col bg-app">
       <ConfirmDialog open={removeTarget !== null} title="Remove this message?"
@@ -1739,8 +1872,12 @@ export function ChatView({ bot: profile, shared }: { bot: Bot; shared?: SharedCh
             phone-width header there's no room to centre, so the pill sits left
             and the tools keep their full width instead of overlapping it. */}
         <div className="min-w-0 flex-1 basis-0 @max-xl/chathead:hidden" aria-hidden="true" />
-        <div className="flex min-w-0 shrink items-center gap-2 rounded-full border border-hairline/50 bg-app py-1 pe-4 ps-1.5 shadow-[0_6px_24px_rgba(0,0,0,0.35)]" style={headerNoDragStyle} data-testid="chat-title-pill">
-          {(messages.length > 0 || bot.busy || shared) && (
+        <Glass bezel={12} className={cn("flex min-w-0 shrink items-center gap-2 rounded-full border border-hairline/50 bg-app py-1 pe-4 shadow-[0_6px_24px_rgba(0,0,0,0.35)]", alive ? "min-h-11 ps-4" : "ps-1.5", needsYou && "border-accent/60")} style={alive ? { ...headerNoDragStyle, "--v3-bot-color": resolveMausColor(bot.color) } as CSSProperties : headerNoDragStyle} data-testid="chat-title-pill">
+          {/* 3.0: one face on screen. Resting, the pill is the name alone
+              (the face is in its row or above the composer); while a turn
+              runs the pill is the live island: face, name, what it is doing
+              and for how long (firaz: one status on top, not two) */}
+          {!alive && (messages.length > 0 || bot.busy || shared) && (
           <button
             onClick={() => { if (shared) shared.onOpenDetails?.(); else if (local) dispatch({ type: "toggleSettings", open: true }); }}
             className="flex size-9 shrink-0 items-center justify-center rounded-full hover:bg-raised/50"
@@ -1757,7 +1894,12 @@ export function ChatView({ bot: profile, shared }: { bot: Bot; shared?: SharedCh
               <BotAvatar
                 bot={bot}
                 state={stateForBot({ ...bot, messages })}
-                face={glyphFaceForBot({ ...bot, messages })}
+                face={derivePresence({
+                  surface: "header",
+                  // 3.0: the pill's mascot is the live turn, not just the resting face
+                  turn: v3 && bot.busy ? { waiting: bot.activity === "waiting-on-you", toolInFlight, toolName: lastMessage?.tool?.name } : null,
+                  resting: glyphFaceForBot({ ...bot, messages }),
+                }).state}
                 size={28}
                 motion={mascotMotion?.kind ?? "none"}
                 motionKey={mascotMotion?.nonce ?? 0}
@@ -1777,15 +1919,25 @@ export function ChatView({ bot: profile, shared }: { bot: Bot; shared?: SharedCh
               }
             }}
             onActivate={() => dispatch({ type: "toggleSettings", open: true })}
-            className="truncate text-[15px] font-semibold text-ink"
+            className={cn("truncate text-[15px] font-semibold text-ink", alive && "v3-name-line")}
             inputClassName="max-w-[220px] rounded bg-inset px-1.5 py-0.5 text-[15px] font-semibold"
           />}
           {remoteHint && <span className="shrink-0 truncate text-[12px] text-ink-secondary" data-testid="remote-bot-hint">{remoteHint}</span>}
           {/* The role is spoken, not shown: a coloured title pill next to the
               name cheapened the header (Firaz, 2026-10-12). */}
           {!shared && bot.chiefOfStaff && <span className="sr-only">{t("chat.chiefOfStaff")}</span>}
-          {bot.busy && <WorkingDots className="text-ink-secondary" />}
-        </div>
+          {v3 && !shared ? (
+            // the bot itself works at the end of the thread now; the pill
+            // stays calm: its name and a breathing dot in its colour
+            islandOn && !finishing ? (
+              <span className="flex shrink-0 items-center gap-2" data-testid="chat-title-status">
+                {needsYou
+                  ? <span className="text-[13px] font-medium text-accent">{t("v3.island.needsYou")}</span>
+                  : <span className="v3-pill-dot" aria-label={t("chat.activity.working")} />}
+              </span>
+            ) : null
+          ) : bot.busy && <WorkingDots className="text-ink-secondary" />}
+        </Glass>
         <div
           className="flex min-w-0 flex-1 basis-0 items-center justify-end gap-2 @max-xl/chathead:flex-none @max-xl/chathead:basis-auto"
           // The caption buttons sit over the header's right end; drop this
@@ -1817,8 +1969,8 @@ export function ChatView({ bot: profile, shared }: { bot: Bot; shared?: SharedCh
             botName={bot.name}
           />}
 
-          {local && <TerminalButton target={{ botId: bot.id, threadId: bot.threadId, name: bot.name }} className="rounded-md" />}
-          {local&&<details className="conversation-advanced"><summary className="cursor-pointer list-none rounded-lg px-2.5 py-2 text-xs text-ink-secondary hover:bg-raised">Advanced</summary>          {local && <button
+          {local && !bareVisit && <TerminalButton target={{ botId: bot.id, threadId: bot.threadId, name: bot.name }} className="rounded-md" />}
+          {local && !bareVisit && <details className="conversation-advanced"><summary className="cursor-pointer list-none rounded-lg px-2.5 py-2 text-xs text-ink-secondary hover:bg-raised">Advanced</summary>          {local && <button
             data-tour="computer"
             onClick={() => dispatch({ type: "toggleComputer" })}
             className={cn(
@@ -1946,6 +2098,7 @@ export function ChatView({ bot: profile, shared }: { bot: Bot; shared?: SharedCh
               </button>
             </div>
           ) : null}
+          <SteerReadContext.Provider value={steerContext}>
           <SharedTranscriptAnchor revision={shared?.changeRevision ?? 0} scroll={scrollRef} following={followRef}>
           <MessagesList
             bot={bot}
@@ -1965,8 +2118,10 @@ export function ChatView({ bot: profile, shared }: { bot: Bot; shared?: SharedCh
             onReply={selectReply}
             scrollRef={scrollRef}
             following={followRef}
+            v3Dock={alive ? composerDockRef : undefined}
           />
           </SharedTranscriptAnchor>
+          </SteerReadContext.Provider>
           {laterCount > 0 && (
             <div className="flex justify-center">
               <button
@@ -1985,14 +2140,29 @@ export function ChatView({ bot: profile, shared }: { bot: Bot; shared?: SharedCh
               </div>
             </div>
           )}
-          {presenceBots.map(speaker => <TurnPresence
+          {islandOn && (
+            <ThreadWorker
+              bot={bot}
+              gesture={needsYou ? "waiting" : gestureForPresence(islandPresence)}
+              label={activityLabel}
+              since={busySince}
+              needsYou={needsYou}
+              finishing={finishing}
+              steps={workerSteps}
+              turnKey={`${bot.threadId}:${busySince ?? 0}`}
+              newestSteer={newestSteer}
+              lastNews={lastNewsAt(messages, busySince)}
+              onStop={local && !bot.remote ? stopTurn : undefined}
+            />
+          )}
+          {!alive && presenceBots.map(speaker => <TurnPresence
             key={speaker.id}
             avatar={
               // an uploaded profile image (and a chosen mascot body) must
               // match the sidebar row
               <ActivityMascot
                 bot={speaker}
-                gesture={turnGesture({ toolInFlight, toolName: lastMessage?.tool?.name })}
+                gesture={gestureForPresence(islandPresence)}
               />
             }
             visible={presenceVisible}
@@ -2015,10 +2185,6 @@ export function ChatView({ bot: profile, shared }: { bot: Bot; shared?: SharedCh
         </button>
       )}
 
-      {/* Keyed by task: each conversation keeps its own draft and a failed
-          request can restore the old task without spilling into the newly
-          selected one. ArrowUp-to-edit stays gated on busy because editing
-          rewinds the thread, which a live turn forbids (the server 409s it). */}
       <div ref={composerDockRef} className="absolute inset-x-0 bottom-0 z-[2]">
       {/* The bot's run in this ask as a checklist, once it is worth one (a
           verified step, or more than one command). Save fills this thread's
@@ -2048,21 +2214,13 @@ export function ChatView({ bot: profile, shared }: { bot: Bot; shared?: SharedCh
         </div>
       )}
       {local && <><ModCommands botId={bot.id} threadId={bot.threadId} /><ModSurfaces botId={bot.id} surface="band" /></>}
-      <Composer
-        key={bot.threadId}
-        bot={profile}
-        shared={shared}
-        // A cached transcript shown while its thread switch is in flight is
-        // read-only until the server confirms the switch.
-        locked={shared?.historyLoading || switchPreview}
-        replyTo={shared && replyTo ? messages.find(message => message.id === replyTo.id) ?? replyTo : replyTo}
-        onClearReply={clearReply}
-        onConsumeReply={consumeReply}
-        onRestoreReply={restoreReply}
-        onEditLast={local && lastUserMessage && !lastUserMessageHasAttachments && !bot.busy
-          ? () => setEditingId(lastUserMessage.id)
-          : undefined}
-      />
+      {/* the live island lives in the header's name pill now, not here */}
+      {alive && <PointingMascot bot={bot} target={pointAt} caption={teach?.caption} onDismiss={teach ? dismissTeach : undefined} />}
+      {v3 && <WalkHomeLayer />}
+      {fastStart && <FastStart key={bot.threadId} variant="chat" />}
+      {/* the composer never folds into the island: firaz wants to keep
+          typing while it works, with the status on top (the composer has stop) */}
+      {composer}
       </div>
       </div>
 

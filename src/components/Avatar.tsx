@@ -6,6 +6,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
+import { DOUBLE_GAP_MS, nextBlink, REST_BLINK } from "@/lib/alive-eyes";
 import { MAUS_COLORS, type MausColor, type MausMotion, type MausState } from "@/lib/mascot";
 import { glyphFaceParts } from "@/lib/glyph-face";
 import { botAvatarProfile, type BotAvatarCrop } from "../../shared/bot-avatar";
@@ -13,7 +14,9 @@ import { flatMascotBody } from "../../shared/flat-mascot-bodies";
 import { glyphStateFor, resolveMausColor, type GlyphFaceState } from "../../shared/glyph-faces";
 import { botMascotEyes, type MascotEyes } from "../../shared/mascot-eyes";
 import { type MascotBodyId } from "../../shared/mascot-bodies";
-import { GlyphAccent, GlyphEyes } from "./GlyphFace";
+import { GlyphAccent, GlyphEyes, glyphBodyMotion } from "./GlyphFace";
+import { MascotAccessories } from "./MascotAccessories";
+import type { MascotAccessories as MascotAccessoriesValue } from "../../shared/mascot-accessories";
 
 export const EYE_SCALE = 1.12;
 export const MOUTH_WEIGHT = 11;
@@ -56,24 +59,47 @@ export type MausAvatarProps = {
   trackPointer?: boolean;
   /** Run the animation. Off renders the state's resting face. */
   animated?: boolean;
+  /** 3.0: blink now and then at random (a resting face in its seat). */
+  autoBlink?: boolean;
   /** Which body the bot wears. Unknown values fall back to the cursor. */
   bodyId?: MascotBodyId;
   /** The bot's eye style; glyph faces unless it picked another. */
   eyes?: MascotEyes | null;
   /** The glyph face to wear. Defaults to the face `state` maps to. */
   face?: GlyphFaceState;
+  /** Hat, glasses, mustache, bow tie; nothing extra is drawn when absent. */
+  accessories?: MascotAccessoriesValue | null;
 };
 
 /** The flat bodies are drawn in a 100 box, 80 across. */
 const BODY_DIAMETER = 80;
 
 function MausAvatarComponent(
-  { size = 44, label, color, bodyId = "circle", state, face, eyes: eyeStyle,
-    animated = true, trackPointer = true, gaze, turn = 0, motion = "none", motionKey = 0 }: MausAvatarProps,
+  { size = 44, label, color, bodyId = "circle", state, face, eyes: eyeStyle, accessories,
+    animated = true, trackPointer = true, gaze, turn = 0, motion = "none", motionKey = 0, autoBlink = false }: MausAvatarProps,
   ref: React.Ref<MausAvatarHandle>,
 ) {
 
   const [blinkKey, setBlinkKey] = useState(0);
+  // random blinks, now and then a double; never a fixed loop. The blink
+  // class is off under reduced motion, so the face holds still there.
+  useEffect(() => {
+    if (!autoBlink) return;
+    let timer: ReturnType<typeof setTimeout>;
+    let second: ReturnType<typeof setTimeout> | undefined;
+    const tick = () => {
+      const next = nextBlink(REST_BLINK);
+      timer = setTimeout(() => {
+        if (!document.hidden) {
+          setBlinkKey((k) => k + 1);
+          if (next.double) second = setTimeout(() => setBlinkKey((k) => k + 1), DOUBLE_GAP_MS);
+        }
+        tick();
+      }, next.delayMs);
+    };
+    tick();
+    return () => { clearTimeout(timer); clearTimeout(second); };
+  }, [autoBlink]);
   const [spinKey, setSpinKey] = useState(0);
   const [pointer, setPointer] = useState({ x: 0, y: 0 });
   useImperativeHandle(ref, () => ({
@@ -104,23 +130,26 @@ function MausAvatarComponent(
       onPointerLeave={() => setPointer({ x: 0, y: 0 })}>
       <g key={`${motion}-${motionKey}`} className={animated ? "bos-mascot-motion" : undefined} data-motion={animated ? motion : undefined}>
       <g className={animated && (state === "working" || state === "thinking") ? "bos-mascot-working" : undefined}>
+      <g {...glyphBodyMotion(glyph, animated)}>
       <g key={spinKey} className={animated && spinKey ? "bos-avatar-spin" : undefined} style={{ transformOrigin: "50px 50px" }}>
         <path d={body.path} fill={fill} />
         {glyph ? (
           <g transform={`translate(${pointer.x + (gaze?.x ?? 0)*3} ${pointer.y + (gaze?.y ?? 0)*3}) rotate(${turn} 50 50)`}>
             <GlyphEyes key={blinkKey} parts={glyph} animated={animated}
-              blinkClass={animated && blinkKey ? "bos-avatar-blink" : undefined} />
+              blinkClass={(animated || autoBlink) && blinkKey ? "bos-avatar-blink" : undefined} />
           </g>
         ) : (
           <g transform={`translate(${body.faceX + pointer.x + (gaze?.x ?? 0)*3} ${body.faceY + pointer.y + (gaze?.y ?? 0)*3}) rotate(${turn} 50 50)`}>
-            <g key={blinkKey} className={animated && blinkKey ? "bos-avatar-blink" : undefined} style={{ transformOrigin: "50px 48px" }}
+            <g key={blinkKey} className={(animated || autoBlink) && blinkKey ? "bos-avatar-blink" : undefined} style={{ transformOrigin: "50px 48px" }}
               fill="none" stroke="#151515" strokeWidth="6" strokeLinecap="round" strokeLinejoin="round">
               <path d={eyes[0]} /><path d={eyes[1]} />
             </g>
           </g>
         )}
+        {accessories && <MascotAccessories accessories={accessories} bodyId={bodyId} color={fill} />}
       </g>
       {glyph && <GlyphAccent parts={glyph} animated={animated} />}
+      </g>
       </g>
       </g>
     </svg>
@@ -137,6 +166,7 @@ export type BotAvatarProps = Omit<MausAvatarProps, "color"> & {
     avatarCrop?: BotAvatarCrop;
     mascotBody?: MascotBodyId | null;
     mascotEyes?: MascotEyes | null;
+    mascotAccessories?: MascotAccessoriesValue | null;
   };
 };
 
@@ -188,6 +218,7 @@ export function BotAvatar({ bot, size = 44, label, ...mascotProps }: BotAvatarPr
       <MausAvatar
         bodyId={bot.mascotBody ?? undefined}
         eyes={bot.mascotEyes}
+        accessories={bot.mascotAccessories}
         {...mascotProps}
         color={bot.color}
         size={size}

@@ -1,5 +1,6 @@
 import { newId, type ModelSelection } from "./contracts.ts";
 import { botMascotBody } from "../shared/mascot-bodies.ts";
+import { botMascotAccessories } from "../shared/mascot-accessories.ts";
 import { takeImportName } from "../shared/import-name.ts";
 import { MAX_TEAM_BACKUP_BYTES, parseTeamBackup, type BackupTask, type TeamBackup } from "../shared/team-backup.ts";
 import type { BotRecord, GroupRecord, Message, Store, TaskRecord } from "./store.ts";
@@ -108,6 +109,7 @@ export function createTeamBackup(store: Store, routines: Routine[], name: string
       section: bot.section, color: bot.color,
       workContinuity: bot.workContinuity,
       mascotExpression: bot.mascotExpression ?? undefined, mascotBody: bot.mascotBody ?? undefined, mascotEyes: bot.mascotEyes ?? undefined,
+      ...(bot.mascotAccessories ? { mascotAccessories: { ...bot.mascotAccessories } } : {}),
       chiefOfStaff: Boolean(bot.chiefOfStaff), hidden: Boolean(bot.hidden), playbooks: bot.playbooks ?? [],
       memory: memoryFor(bot.id),
       activeTask: bot.threadId, tasks: history(bot),
@@ -178,7 +180,8 @@ export function importTeamBackup(store: Store, routines: RoutineManager, input: 
       bots.push(bot);
       botIds.set(source.key, bot.id);
       store.patchBot(bot.id, { composio: false, computer: "off", browser: false, approvalMode: "ask", autoApprove: false,
-        hidden: source.hidden, chiefOfStaff: source.chiefOfStaff, playbooks: source.playbooks });
+        hidden: source.hidden, chiefOfStaff: source.chiefOfStaff, playbooks: source.playbooks,
+        ...(botMascotAccessories(source.mascotAccessories) ? { mascotAccessories: botMascotAccessories(source.mascotAccessories) } : {}) });
       if (source.memory) restoreMemory(bot.id, source.memory);
     }
     for (const source of backup.bots) {

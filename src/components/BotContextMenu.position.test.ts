@@ -5,6 +5,7 @@ import type { Bot } from "@/state/store";
 
 const fixture = vi.hoisted(() => ({
   effects: [] as Array<() => void | (() => void)>,
+  muted: false,
   portal: null as { node: ReactElement<{ ref: RefObject<HTMLDivElement | null> }>; target: unknown } | null,
 }));
 vi.mock("react", async (importOriginal) => {
@@ -22,7 +23,7 @@ vi.mock("./DesktopCapabilities", () => ({ useDesktopCapabilities: () => ({}) }))
 vi.mock("@/lib/thread-preferences", () => ({ useShowThreads: () => true }));
 vi.mock("@/state/store", async (importOriginal) => {
   const original = await importOriginal<typeof import("@/state/store")>();
-  return { ...original, useStore: () => ({ state: { ...original.initialState, bots: [bot, { ...bot, id: "other" }] }, dispatch: vi.fn() }) };
+  return { ...original, useStore: () => ({ state: { ...original.initialState, bots: [{ ...bot, notifications: !fixture.muted }, { ...bot, id: "other" }] }, dispatch: vi.fn() }) };
 });
 
 const { BotContextMenu } = await import("./Sidebar");
@@ -34,6 +35,7 @@ const listeners = new Map<string, () => void>();
 beforeEach(() => {
   fixture.effects = [];
   fixture.portal = null;
+  fixture.muted = false;
   listeners.clear();
   vi.stubGlobal("document", { body: {} });
   vi.stubGlobal("window", {
@@ -96,5 +98,15 @@ describe("bot actions menu viewport placement", () => {
     const negative = measuredMenu(228, 468);
     fixture.effects[0]!();
     expect(negative.style).toEqual({ top: "8px", left: "8px" });
+  });
+});
+
+describe("bot actions menu mute", () => {
+  it("offers mute for a bot that notifies, and unmute once it is muted", () => {
+    expect(render()).toContain(">Mute Notifications</button>");
+    fixture.muted = true;
+    const html = render();
+    expect(html).toContain(">Unmute Notifications</button>");
+    expect(html).not.toContain(">Mute Notifications</button>");
   });
 });

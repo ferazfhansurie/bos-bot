@@ -82,6 +82,7 @@ struct MascotActivityMark: View {
     var replay: Int = 0
     var eyeStyle: MascotEyeStyle = .classic
     var completedTurnID: String? = nil
+    var accessories: MascotAccessories? = nil
     @Environment(\.accessibilityReduceMotion) private var systemReduced
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.mascotPreviewViewport) private var viewport
@@ -144,6 +145,15 @@ struct MascotActivityMark: View {
                     eye.translateBy(x: -x - 3, y: -45)
                 }
                 eye.fill(Path(path), with: .color(Color(white: 0.082)))
+            }
+            // accessories move with the body and ride the eyes' own centre
+            if let accessories, !accessories.isEmpty {
+                let centre = CGPoint(x: anchor.x + searchingGaze * p.faceScale + 3.25 * p.faceScale,
+                                     y: anchor.y + p.gazeY * p.faceScale - p.faceScale)
+                var face = MascotFace.classic(centre: centre)
+                face.diameter *= p.faceScale
+                MascotAccessoryArt.draw(accessories, in: &context, box: CGRect(x: 0, y: 0, width: 100, height: 100),
+                                        bodyId: bodyID, color: color, face: face)
             }
         }.frame(width: size, height: size)
             .accessibilityLabel("\(activity.rawValue) mascot preview")

@@ -2,7 +2,7 @@
 // tests are mostly about the cases where the answer is "stay quiet".
 import { describe, expect, it } from "vitest";
 
-import { blockedTarget, buildNotification, summarize } from "./notify.ts";
+import { BLOCKED_ON_YOU, blockedTarget, botMuted, buildNotification, summarize } from "./notify.ts";
 
 const bot = { id: "bot-1", name: "Scout", threadId: "thread-1" };
 
@@ -25,14 +25,29 @@ describe("buildNotification", () => {
       .toBe("Scout couldn't start");
   });
 
-  it("stays silent for a bot whose notifications are off", () => {
+  it("stays silent for a muted bot's news, but not when it is blocked on you", () => {
     const quiet = { ...bot, notifications: false };
-    for (const kind of ["approval", "question", "done", "routine-failed", "turn-failed"] as const) {
+    for (const kind of ["done", "routine-failed", "routine-deferred", "turn-failed", "incident"] as const) {
       expect(buildNotification(kind, quiet, "thread-1", "anything")).toBeNull();
     }
+    // muting must not silently stall work: approvals, questions and a
+    // takeover still reach the owner
+    expect(buildNotification("approval", quiet, "thread-1", "rm -rf ./build")?.title).toBe("Scout needs approval");
+    expect(buildNotification("question", quiet, "thread-1", "which branch?")?.title).toBe("Scout has a question");
+    expect(buildNotification("takeover", quiet, "thread-1", "sign in please")?.title).toBe("Scout needs your hands");
+    // a muted bot asking for approval from a room still names the room
+    expect(buildNotification("approval", quiet, "room-thread", "x", { group: { id: "g", name: "Launch" } })?.title)
+      .toBe("Scout in Launch needs approval");
     // absent means "not turned off" — older bot records predate the flag
     expect(buildNotification("approval", { ...bot, notifications: undefined }, "thread-1", "x")).not.toBeNull();
     expect(buildNotification("approval", { ...bot, notifications: true }, "thread-1", "x")).not.toBeNull();
+  });
+
+  it("treats only an explicit false as muted", () => {
+    expect(botMuted({ notifications: false })).toBe(true);
+    expect(botMuted({ notifications: true })).toBe(false);
+    expect(botMuted({})).toBe(false);
+    expect([...BLOCKED_ON_YOU].sort()).toEqual(["approval", "question", "takeover"]);
   });
 
   it("does not buzz for a finish with nothing to say", () => {

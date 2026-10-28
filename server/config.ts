@@ -313,6 +313,9 @@ const featureConfigSchema = z.object({
   /** The same for Claude Code: Anthropic's standalone binary, checksum-checked
    * against its release manifest — see server/claude-managed.ts. */
   managedClaude: z.boolean().optional(),
+  /** Mirror of the desktop's bos bot 3.0 switch, so paired phones follow
+   * the mac. On unless the desktop turned it off (3.0.0) — see v3LabsEnabled. */
+  v3: z.boolean().optional(),
 });
 /** First-run progress. Kept in the workspace config rather than a browser so
  * it survives cleared site data and is shared by every paired client. Hint
@@ -555,7 +558,7 @@ export interface AppConfig {
    * separate container, durable workspace, viewer and lease. */
   localVm?: { mode?: "shared" | "per-bot"; maxInstances?: number };
   /** Opt-in product experiments. Every flag defaults to disabled. */
-  features?: { skillAuthoring?: boolean; autoSkills?: boolean; showToolCalls?: boolean; browser?: boolean; sharedComputers?: boolean; claudeUserMcp?: boolean; llmThreadTitles?: boolean; marketplacePublisher?: boolean; managedCodex?: boolean; managedClaude?: boolean };
+  features?: { skillAuthoring?: boolean; autoSkills?: boolean; showToolCalls?: boolean; browser?: boolean; sharedComputers?: boolean; claudeUserMcp?: boolean; llmThreadTitles?: boolean; marketplacePublisher?: boolean; managedCodex?: boolean; managedClaude?: boolean; v3?: boolean };
   /** First-run progress; see onboardingConfigSchema. */
   onboarding?: { pendingOffer?: "generic" | "digital-marketer"; marketerAssignment?: import("../shared/bos-onboarding.ts").FirstAssignment; marketerBrief?: import("../shared/bos-onboarding.ts").BusinessBrief; firstAssignment?: import("../shared/bos-onboarding.ts").FirstAssignment; businessBrief?: import("../shared/bos-onboarding.ts").BusinessBrief; completedAt?: string; version?: number; reelSeen?: boolean; hintsSeen?: string[]; chat?: import("../shared/onboarding-chat.ts").OnboardingChatState };
   /** Named browser sessions any bot can be pointed at. */
@@ -671,6 +674,12 @@ export function parseConfigPatch(value: JsonValue): ConfigPatch {
   return parsed.data;
 }
 
+/** The desktop's bos bot 3.0 switch, mirrored for phones. On by default
+ * since 3.0.0; only an explicit false (the person turned it off) is off. */
+export function v3LabsEnabled(cfg: Pick<AppConfig, "features">): boolean {
+  return cfg.features?.v3 !== false;
+}
+
 export function defaultApprovalMode(cfg: Pick<AppConfig, "approvals">): ApprovalMode {
   const mode = cfg.approvals?.defaultMode;
   return mode === "ask" || mode === "edits" || mode === "auto" || mode === "full" ? mode : "ask";
@@ -780,6 +789,15 @@ export function sharedComputersEnabled(cfg: AppConfig): boolean {
   return cfg.features?.sharedComputers === true;
 }
 
+/** 3.0 setting cards (propose_setting). Off unless the client's 3.0 toggle
+ * turned it on. */
+/** 3.0 "ask instead": bots may post one-tap setting cards (propose_setting)
+ * while the desktop's 3.0 switch is on (its features.v3 mirror); off means
+ * the tool and its prompt are absent. */
+export function v3SettingsEnabled(cfg: AppConfig): boolean {
+  return v3LabsEnabled(cfg);
+}
+
 /** Claude bots also see the MCP servers of this machine's own Claude Code
  * setup — the way Codex bots already read ~/.codex/config.toml. Off unless
  * the person switched it on under Plugins → MCP servers; the Claude driver
@@ -810,6 +828,13 @@ export function marketplacePublisherEnabled(cfg: AppConfig): boolean {
  * when no other codex is installed — see managedCodexWanted. */
 export function managedCodexRequested(cfg: AppConfig): boolean {
   return cfg.features?.managedCodex === true;
+}
+
+/** bos bot 3.0 cards follow the same labs switch: the card guide rides each
+ * turn, including ones with no window open (routines, whatsapp), and connect
+ * asks go through cards. */
+export function v3CardsEnabled(cfg: Pick<AppConfig, "features">): boolean {
+  return v3LabsEnabled(cfg);
 }
 
 /** `managedCodexRequested` for Claude Code (`features.managedClaude`). */

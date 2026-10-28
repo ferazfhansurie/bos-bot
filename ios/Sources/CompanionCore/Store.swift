@@ -22,6 +22,9 @@ public struct SidebarSection: Identifiable, Hashable, Sendable {
 public struct CompanionState: Sendable {
     /// An empty snapshot is different from a roster we have not received yet.
     public private(set) var rosterLoaded = false
+    /// The desktop's labs → bos bot 3.0 switch, from the fleet and live
+    /// config frames. Off unless a desktop that knows about it says on.
+    public private(set) var v3 = false
     public var bots: [Bot] = []
     // Transport baselines cannot be overwritten by late HTTP snapshots or UI rollback.
     private var streamTasks: [String: [BotTask]] = [:]
@@ -216,7 +219,8 @@ public struct CompanionState: Sendable {
     /// Visible conversations worth a badge. The bot-level flag is an
     /// aggregate, so it must not add another count beside its unread tasks.
     public var unreadCount: Int {
-        let botCount = bots.filter { $0.hidden != true }.reduce(0) { count, bot in
+        // a muted bot keeps its unread dots but stays off the app badge
+        let botCount = bots.filter { $0.hidden != true && $0.notifications }.reduce(0) { count, bot in
             if bot.tasks?.contains(where: { $0.unread != nil }) == true {
                 return count + bot.visibleTasks.filter { $0.unread == true }.count
             }
@@ -247,6 +251,7 @@ public struct CompanionState: Sendable {
     /// Replace everything from a `GET /api/bots` response.
     public mutating func hydrate(_ fleet: Fleet, waitingThreads: [String: ThreadPage] = [:]) {
         rosterLoaded = true
+        v3 = fleet.v3 == true
         bots = fleet.bots
         rooms = fleet.groups
         // The fleet carries only each thread's newest raw rows, and on a
@@ -334,7 +339,8 @@ public struct CompanionState: Sendable {
     /// Merge a search landing window into the pages already held.
     public mutating func merge(_ page: ThreadPage, intoThread threadId: String) {
         var byId = Dictionary(
-            uniqueKeysWithValues: (messages[threadId] ?? []).map { ($0.id, $0) }
+            (messages[threadId] ?? []).map { ($0.id, $0) },
+            uniquingKeysWith: { _, last in last }
         )
         for message in page.messages { byId[message.id] = message }
         messages[threadId] = byId.values.sorted {
@@ -557,9 +563,12 @@ public struct CompanionState: Sendable {
                 for entry in entries { activityFeed.apply(update: entry) }
             }
 
+        case let .labs(on):
+            v3 = on
+
         // Nothing to fold: config and provisioning state are not part of
         // this client's job yet.
-        case .computer, .config, .voiceRing, .unknown:
+        case .computer, .config, .voiceRing, .app, .workspaceOpen, .unknown:
             break
         }
     }

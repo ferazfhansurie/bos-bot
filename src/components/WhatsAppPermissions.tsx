@@ -12,11 +12,12 @@ export interface WhatsAppReplyPolicy {
   outreach?: boolean;
   readAll?: boolean;
   readOnly?: boolean;
+  draft?: boolean;
 }
 export interface WhatsAppPermissionChat { id: string; name: string | null; preview?: string; group?: boolean; lastAt?: number; fromMe?: boolean }
 
 export type WhatsAppReading = "all" | "chosen" | "off";
-export interface WhatsAppAccessChoice { reading: WhatsAppReading; replying: boolean; chatIds: string[]; outreach: boolean; autoDispatch: boolean }
+export interface WhatsAppAccessChoice { reading: WhatsAppReading; replying: boolean; chatIds: string[]; outreach: boolean; autoDispatch: boolean; draft?: boolean }
 
 const chatId = /^(\d{6,20}@c\.us|\d{6,25}@lid|[\d-]{6,40}@g\.us)$/;
 
@@ -30,7 +31,7 @@ export function whatsappPermissionGrant(accountId: string | null, choice: WhatsA
   if (choice.reading === "all" && !choice.replying) return { accountId, chatIds: [], autoDispatch: false, outreach: false, readAll: true };
   if (!unique.length) throw new Error(choice.replying ? "Choose at least one chat the bot can reply in." : "Choose at least one chat the bot can read.");
   if (!choice.replying) return { accountId, chatIds: unique, autoDispatch: false, outreach: false, readOnly: true };
-  return { accountId, chatIds: unique, autoDispatch: choice.autoDispatch, outreach: choice.outreach, ...(choice.reading === "all" ? { readAll: true } : {}) };
+  return { accountId, chatIds: unique, autoDispatch: choice.autoDispatch, outreach: choice.outreach, draft: choice.autoDispatch && choice.draft === true, ...(choice.reading === "all" ? { readAll: true } : {}) };
 }
 
 /** What the saved policy means, in the same terms as the controls. No policy
@@ -40,7 +41,7 @@ export function whatsappAccessChoice(policy: WhatsAppReplyPolicy | null): WhatsA
   const chatIds = policy.chatIds ?? [];
   const reading: WhatsAppReading = policy.readAll || policy.chatIds === null ? "all" : chatIds.length ? "chosen" : "off";
   const replying = reading !== "off" && policy.readOnly !== true && (policy.chatIds === null || chatIds.length > 0);
-  return { reading, replying, chatIds, outreach: replying && policy.outreach === true, autoDispatch: replying && policy.autoDispatch === true };
+  return { reading, replying, chatIds, outreach: replying && policy.outreach === true, autoDispatch: replying && policy.autoDispatch === true, draft: replying && policy.autoDispatch === true && policy.draft === true };
 }
 
 export function whatsappAccessSummary(bot: string, choice: WhatsAppAccessChoice, chatCount: number): string {
@@ -48,7 +49,7 @@ export function whatsappAccessSummary(bot: string, choice: WhatsAppAccessChoice,
   const n = choice.chatIds.length, chats = `${n} chat${n === 1 ? "" : "s"}`;
   const read = choice.reading === "all" ? `${bot} can read all your chats${chatCount ? ` (${chatCount} so far)` : ""}, including new ones.` : `${bot} can read ${chats}.`;
   if (!choice.replying) return `${read} Replies are off.`;
-  const extras = [choice.outreach && "start new messages", choice.autoDispatch && "reply on its own"].filter(Boolean).join(" and ");
+  const extras = [choice.outreach && "start new messages", choice.autoDispatch && (choice.draft ? "draft replies for you to send" : "reply on its own")].filter(Boolean).join(" and ");
   return `${read} It can reply in ${choice.reading === "all" ? chats : "them"} when asked${extras ? `, and ${extras}` : ""}.`;
 }
 
@@ -56,7 +57,7 @@ export function whatsappAccessSummary(bot: string, choice: WhatsAppAccessChoice,
 function canonical(c: WhatsAppAccessChoice): string {
   if (c.reading === "off") return "off";
   const ids = c.reading === "all" && !c.replying ? [] : [...c.chatIds].sort();
-  return JSON.stringify([c.reading, c.replying, ids, c.replying && c.outreach, c.replying && c.autoDispatch]);
+  return JSON.stringify([c.reading, c.replying, ids, c.replying && c.outreach, c.replying && c.autoDispatch, c.replying && c.autoDispatch && c.draft === true]);
 }
 
 function formatPhone(id: string): string | null {
@@ -204,7 +205,8 @@ export function WhatsAppPermissions() {
           onChange={(on) => update(on ? { replying: true } : { replying: false, outreach: false, autoDispatch: false })} />
         {choice.replying && <div className="mt-1 border-t border-hairline/30 pt-1">
           <ToggleRow label="Start new messages" hint="Follow up without waiting for them" checked={choice.outreach} disabled={busy} onChange={(on) => update({ outreach: on })} />
-          <ToggleRow label="Reply automatically" hint="Answer new messages without asking you" checked={choice.autoDispatch} disabled={busy} onChange={(on) => update({ autoDispatch: on })} />
+          <ToggleRow label="Reply automatically" hint="Answer new messages without asking you" checked={choice.autoDispatch} disabled={busy} onChange={(on) => update(on ? { autoDispatch: true } : { autoDispatch: false, draft: false })} />
+          {choice.autoDispatch && <ToggleRow label="Ask me before sending" hint="Prepares the reply and waits for your go" checked={choice.draft === true} disabled={busy} onChange={(on) => update({ draft: on })} />}
         </div>}
       </Section>
 

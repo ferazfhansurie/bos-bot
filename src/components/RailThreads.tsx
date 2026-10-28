@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type FocusEvent, type KeyboardEvent, type MouseEvent, type PointerEvent } from "react";
 import { createPortal } from "react-dom";
-import { Loader2, Plus } from "lucide-react";
+import { Loader2, Phone, Plus } from "lucide-react";
 import { type Bot, useStore } from "@/state/store";
 import { useActivityFeed, withLiveActivity } from "@/lib/activity-feed";
 import { cn } from "@/lib/cn";
 import { t } from "@/lib/i18n";
-import { compactThreads, readThreadPins, threadTime } from "./CompactBotThreads";
+import { callsAt, compactThreads, readThreadPins, threadTime } from "./CompactBotThreads";
 
 /** Hover long enough to mean it; a pass down the rail opens nothing. */
 export const RAIL_OPEN_DELAY = 250;
@@ -159,7 +159,7 @@ function RailThreadsPanel({ bot, anchor, panelRef, focusFirst, onEnter, onLeave,
         const task = withLiveActivity(bot.id, thread);
         const current = task.threadId === active;
         const working = task.activity === "working" || Boolean(task.busy);
-        const at = task.lastUserMessageAt ?? task.createdAt;
+        const at = callsAt(task);
         return <button key={task.threadId} type="button" role="menuitem" data-rail-thread={task.threadId} aria-current={current ? "page" : undefined}
           title={[task.title, task.activity === "waiting-on-you" ? t("task.waiting") : working ? t("chat.activity.working") : null, task.unread ? t("task.unread") : null].filter(Boolean).join(" · ")}
           onPointerEnter={bot.remote || bot.homeLink || current ? undefined : (event) => { if (event.pointerType !== "touch") dispatch({ type: "prefetchThread", threadId: task.threadId }); }}
@@ -167,6 +167,7 @@ function RailThreadsPanel({ bot, anchor, panelRef, focusFirst, onEnter, onLeave,
           onClick={() => { onClose(false); if (!(current && state.selectedId === bot.id && state.activeView === "chat")) dispatch({ type: "switchTask", botId: bot.id, threadId: task.threadId }); }}
           className={cn("flex min-h-8 w-full min-w-0 items-center gap-2 rounded-[10px] px-2 py-1 text-left text-[12.5px] font-medium text-ink outline-none",
             current ? "bg-raised" : "hover:bg-raised/50 focus-visible:bg-raised/50")}>
+          {task.voiceCalls && <Phone size={11} className="shrink-0 text-accent" aria-hidden />}
           <span className={cn("min-w-0 flex-1 truncate", task.unread && "font-semibold")}>{task.title}</span>
           {task.activity === "waiting-on-you" ? <span className="shrink-0 text-[12px] font-medium text-warning">{t("task.waiting")}</span>
             : working ? <Loader2 size={11} className="shrink-0 animate-spin text-accent" aria-label={t("chat.activity.working")} /> : null}

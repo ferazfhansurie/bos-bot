@@ -155,10 +155,12 @@ export function SecretRequestCard({
                 placeholder={secret.placeholder}
                 disabled={saving || savedLocally}
                 aria-label={secret.label}
+                data-v3-point="secret"
                 className="min-w-0 flex-1 rounded-lg border border-hairline bg-inset px-3 py-2 text-[13px] text-ink outline-none placeholder:text-ink-secondary/60 focus:border-accent disabled:opacity-60"
               />
               <button
                 type="submit"
+                data-v3-nod="secret"
                 disabled={saving || (!value.trim() && !savedLocally)}
                 className="flex items-center gap-1.5 rounded-lg bg-accent px-3 py-2 text-[12.5px] font-medium text-white hover:opacity-90 disabled:opacity-50"
               >

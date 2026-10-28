@@ -107,7 +107,12 @@ export function useNewTabApps(open: (kind: "canvas", options: { ref: string; tit
     return () => window.removeEventListener("bos-app-changed", onChanged);
   }, []);
   if (!target || !apps.length) return undefined;
-  return { apps, open: id => { const app = apps.find(a => a.id === id); if (app) open("canvas", { ref: APP_REF_PREFIX + app.id, title: app.name }); } };
+  return {
+    apps,
+    open: id => { const app = apps.find(a => a.id === id); if (app) open("canvas", { ref: APP_REF_PREFIX + app.id, title: app.name }); },
+    rename: (id, name) => appApi.update(id, { name }).then(() => setReload(n => n + 1)),
+    remove: id => appApi.destroy(id).then(() => setReload(n => n + 1)),
+  };
 }
 
 const pinKey = (pin: Pick<PinnedPage, "threadId" | "path">) => `${pin.threadId}:${pin.path}`;

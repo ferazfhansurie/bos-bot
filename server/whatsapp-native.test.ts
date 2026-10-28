@@ -189,13 +189,36 @@ describe("WhatsAppNative link state", () => {
     expect(native.snapshot().reason).toMatch(/browser is gone/);
   });
 
-  it("a hung probe times out into disconnected", async () => {
+  it("a probe that keeps hanging times out into disconnected", async () => {
     const { native, latest, timers } = harness();
     await native.connect();
     latest().handlers.onReady();
     latest().getState.mockImplementation(() => new Promise(() => {}));
     await timers.advance(30_000 + 15_000);
+    expect(native.snapshot().state).toBe("linked");
+    await timers.advance(2 * 30_000);
     expect(native.snapshot().state).toBe("disconnected");
+  });
+
+  it("a page reloading itself does not drop the link", async () => {
+    const { native, latest, timers } = harness();
+    await native.connect();
+    const client = latest();
+    client.handlers.onReady();
+    client.getState
+      .mockRejectedValueOnce(new Error("Execution context was destroyed, most likely because of a navigation."))
+      .mockRejectedValueOnce(new Error("Attempted to use detached Frame 'A1'."));
+    await timers.advance(2 * 30_000);
+    expect(native.snapshot().state).toBe("linked");
+    await timers.advance(30_000);
+    expect(native.snapshot().state).toBe("linked");
+    expect(latest()).toBe(client);
+    // the misses reset once the page answers: two more are still fine
+    client.getState
+      .mockRejectedValueOnce(new Error("Execution context was destroyed"))
+      .mockRejectedValueOnce(new Error("Execution context was destroyed"));
+    await timers.advance(2 * 30_000);
+    expect(native.snapshot().state).toBe("linked");
   });
 
   it("change_state and probe answers map onto the tile states", async () => {

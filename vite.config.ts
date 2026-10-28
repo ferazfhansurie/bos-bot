@@ -27,6 +27,9 @@ export default defineConfig({
     __APP_VERSION__: JSON.stringify(version),
     // Cloud rooms (bos 2.0) stay off unless the build opts in.
     __BOS_CLOUD_ROOMS__: JSON.stringify(compatEnv.BOS_CLOUD_ROOMS === "1"),
+    // bos bot 3.0: BOS_V3=1 forces it on, BOS_V3=0 forces it off, unset
+    // leaves it to the labs switch in settings.
+    __BOS_V3__: JSON.stringify(compatEnv.BOS_V3 === "1" ? true : compatEnv.BOS_V3 === "0" ? false : null),
   },
   test: {
     environment: "node",

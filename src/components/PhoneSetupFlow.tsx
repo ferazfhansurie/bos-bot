@@ -1006,6 +1006,7 @@ export function PhoneSetupFlowView({
         </div>
         <button
           onClick={c.start}
+          data-v3-nod="pair-phone"
           disabled={!c.state || c.busy || c.accountBusy}
           className="mt-5 w-full rounded-lg bg-accent py-2.5 text-[14px] font-medium text-white hover:opacity-90 disabled:cursor-wait disabled:opacity-40"
         >
@@ -1043,6 +1044,7 @@ export function PhoneSetupFlowView({
         <ValuePoints />
         <button
           onClick={c.start}
+          data-v3-nod="pair-phone"
           disabled={!c.state || c.busy || c.accountBusy}
           className={compactHeader
             ? "mt-5 w-full rounded-lg bg-accent py-2.5 text-[14px] font-medium text-white hover:opacity-90 disabled:cursor-wait disabled:opacity-40"

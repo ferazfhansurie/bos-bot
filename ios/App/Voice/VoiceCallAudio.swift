@@ -27,6 +27,13 @@ final class VoiceCallAudio: @unchecked Sendable {
     /// The engine was rebuilt (route change, interruption): every scheduled
     /// sample is gone and the playback clock restarted. Called on main.
     var onReset: (() -> Void)?
+    /// Which microphone the call listens on. `.phone` keeps the phone's own
+    /// mic even with a car or headset connected (their mics hear the road);
+    /// `.car` lets iOS pick, as before. Set before `start`, or via `setMic`.
+    private(set) var mic: VoiceMic = .phone
+    /// The live route's port types, for the call's metrics. Main thread.
+    private(set) var inputRoute: String?
+    private(set) var outputRoute: String?
 
     static let rate = RealtimeVoice.sampleRate
     private let engine = AVAudioEngine()
@@ -55,9 +62,10 @@ final class VoiceCallAudio: @unchecked Sendable {
     /// Configure the session and start capturing. Call from main.
     func start() throws {
         let session = AVAudioSession.sharedInstance()
-        try session.setCategory(.playAndRecord, mode: .voiceChat, options: [.defaultToSpeaker, .allowBluetoothHFP])
+        try session.setCategory(.playAndRecord, mode: .voiceChat, options: Self.categoryOptions(for: mic))
         try? session.setPreferredIOBufferDuration(0.02)
         try session.setActive(true)
+        applyMic()
         // Voice processing must be on before the engine starts. The simulator
         // (and some routes) refuse it; the call still works, just without AEC.
         try? engine.inputNode.setVoiceProcessingEnabled(true)
@@ -70,6 +78,45 @@ final class VoiceCallAudio: @unchecked Sendable {
         cursor = 0
         running = true
         observe()
+    }
+
+    /// The phone mic with a car connected: the car keeps the sound (A2DP),
+    /// the phone hears the caller. Echo cancellation stays on either way.
+    static func categoryOptions(for mic: VoiceMic) -> AVAudioSession.CategoryOptions {
+        mic == .phone ? [.defaultToSpeaker, .allowBluetoothHFP, .allowBluetoothA2DP] : [.defaultToSpeaker, .allowBluetoothHFP]
+    }
+
+    /// Change the mic mid-call (or before start). Call from main.
+    func setMic(_ mic: VoiceMic) {
+        guard mic != self.mic else { return }
+        self.mic = mic
+        guard running else { return }
+        try? AVAudioSession.sharedInstance().setCategory(.playAndRecord, mode: .voiceChat, options: Self.categoryOptions(for: mic))
+        applyMic()
+    }
+
+    /// `.phone`: the built-in mic, after activation and after every route
+    /// change (a car connecting mid-call grabs the input otherwise).
+    private func applyMic() {
+        let session = AVAudioSession.sharedInstance()
+        switch mic {
+        case .phone:
+            if session.currentRoute.inputs.first?.portType != .builtInMic,
+               let builtIn = session.availableInputs?.first(where: { $0.portType == .builtInMic }) {
+                try? session.setPreferredInput(builtIn)
+            }
+        case .car:
+            if session.preferredInput != nil { try? session.setPreferredInput(nil) }
+        }
+        noteRoute()
+    }
+
+    private func noteRoute() {
+        let route = AVAudioSession.sharedInstance().currentRoute
+        let input = route.inputs.map(\.portType.rawValue).joined(separator: ",")
+        let output = route.outputs.map(\.portType.rawValue).joined(separator: ",")
+        inputRoute = input.isEmpty ? nil : input
+        outputRoute = output.isEmpty ? nil : output
     }
 
     /// Stop everything and give the audio session back. Call from main.
@@ -117,6 +164,10 @@ final class VoiceCallAudio: @unchecked Sendable {
         let center = NotificationCenter.default
         observers.append(center.addObserver(forName: .AVAudioEngineConfigurationChange, object: engine, queue: .main) { [weak self] _ in
             self?.restart()
+        })
+        observers.append(center.addObserver(forName: AVAudioSession.routeChangeNotification, object: nil, queue: .main) { [weak self] _ in
+            guard let self, self.running else { return }
+            self.applyMic()
         })
         observers.append(center.addObserver(forName: AVAudioSession.interruptionNotification, object: nil, queue: .main) { [weak self] note in
             guard let raw = note.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt,

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { MoreHorizontal, Plus } from "lucide-react";
 import { t } from "@/lib/i18n";
+import { Glass } from "./Glass";
 
 /** Common visual shell for local and federated conversations. */
 export function ConversationHeader({ children, style }: { children: ReactNode; style?: CSSProperties }) {
@@ -8,7 +9,7 @@ export function ConversationHeader({ children, style }: { children: ReactNode; s
 }
 
 export function ConversationComposerFrame({ children }: { children: ReactNode }) {
-  return <div data-tour="composer" className="conversation-composer relative z-[1] rounded-[28px] bg-composer py-1.5 pe-1.5 ps-1.5 ring-1 ring-composer-ring">{children}</div>;
+  return <Glass data-tour="composer" bezel={18} className="conversation-composer relative z-[1] rounded-[28px] bg-composer py-1.5 pe-1.5 ps-1.5 ring-1 ring-composer-ring">{children}</Glass>;
 }
 
 export function conversationBubbleClass(mine: boolean) {

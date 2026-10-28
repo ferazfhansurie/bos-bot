@@ -1,6 +1,7 @@
 // Apps: blank-tab pages that keep their own data. The page is an html file
 // bos writes; its records live on the server, one json file per app, and
 // reach the page through the tab's bridge and bots through the app tools.
+import type { InstalledInfo } from "./mini-apps.ts";
 
 export const APP_ID_RE = /^a-[a-z0-9]{12}$/;
 /** contacts, leave_requests, cells */
@@ -48,6 +49,8 @@ export interface AppMeta {
   rev: number;
   /** rooms (group chats) the owner shared this app into */
   sharedRoomIds: string[];
+  /** set for a mini app installed from a link; its page lives with its data, not in a conversation folder */
+  installed?: InstalledInfo;
 }
 export interface AppSummary extends AppMeta { collections: Record<string, number>; bytes: number }
 

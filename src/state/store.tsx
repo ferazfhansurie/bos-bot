@@ -22,6 +22,7 @@ import type { TurnDigest } from "../../shared/digest";
 import type { ModelVariantOption, RuntimeEvent } from "../../shared/runtime-events";
 import type { MausColor, MausMotion } from "@/lib/mascot";
 import type { MascotEyes } from "../../shared/mascot-eyes";
+import type { MascotAccessories } from "../../shared/mascot-accessories";
 import type { BotAvatarCrop } from "../../shared/bot-avatar";
 import { approvalModeFor, type ApprovalMode } from "../../shared/approval-mode";
 import type { MascotBodyId } from "../../shared/mascot-bodies";
@@ -51,6 +52,7 @@ import { homeForRequest, homeProxyPath, installHomeFetch, type HomeLink, type Li
 import { remoteRoomFrame, remoteRoomListPatches, remoteRoomNeedsListing } from "@/lib/remote-room-frames";
 import { noteUpdateFrame } from "@/lib/bos-update";
 import { fetchInbox, inboxCountOf } from "@/lib/inbox";
+import { checkinsChanged } from "@/lib/checkins";
 import { withSendPriority, type SendPriority } from "@/lib/composer-priority";
 import { applyActivityFrame, loadActivityFeed } from "@/lib/activity-feed";
 
@@ -113,6 +115,8 @@ export interface OptionCardData {
   skillRequest?: SkillRequestCardData;
   /** Persisted profile proposal used by the server when the user confirms it. */
   profileRequest?: ProfileRequestCardData;
+  /** One-tap setting change with undo (propose_setting, 3.0). */
+  settingChange?: import("../../shared/setting-change").SettingChangeCardData;
   outboundReview?: import("../../shared/outbound-review").OutboundReview;
   teamSetupRequest?: import("../../shared/team-setup").TeamSetupRequest;
   /** The model's own questions and options (Claude's AskUserQuestion), so
@@ -127,6 +131,11 @@ export interface ConnectorCardData {
   status: "required" | "authorizing" | "connected" | "failed";
   resumeKey: string;
   alias?: string;
+  /** v3: the bot's one line on why it needs the app; the description
+   * already reads "<bot> needs <app> <reason>". */
+  reason?: string;
+  /** v3: the app was connected but its sign-in expired or was revoked. */
+  reconnect?: boolean;
   error?: string;
   dismissed?: boolean;
   resumed?: boolean;
@@ -155,6 +164,8 @@ export interface Message {
   /** digest messages: what the turn did, rendered in `text` and structured here. */
   digest?: TurnDigest;
   compaction?: import("../../shared/wire").WireMessage["compaction"];
+  /** A voice call's chat card (contract §10), written by the server at call end. */
+  voiceCall?: import("../../shared/voice-call").VoiceCallCard;
   /** Provider-generated files attached to this assistant response. */
   attachments?: Array<{ kind: "image"; path: string; mime: string }>;
   /** Federated media is room scoped and downloaded through its authorized transport. */
@@ -336,6 +347,8 @@ export interface Task {
   threadId: string;
   /** Internal routine execution; reachable through its run receipt, not history menus. */
   routineRunId?: string;
+  /** the bot's one calls thread: every voice call's card lands here */
+  voiceCalls?: true;
   projectId?: string;
   title: string;
   createdAt: number;
@@ -427,6 +440,8 @@ export interface Bot {
   mascotBody?: MascotBodyId | null;
   /** Eye style; null/absent means the glyph face. */
   mascotEyes?: MascotEyes | null;
+  /** What the mascot wears, one per slot; null/absent wears nothing. */
+  mascotAccessories?: MascotAccessories | null;
   /** App-owned image attachment used for this bot's profile. */
   avatarUrl?: string | null;
   /** Mascot, or the crop applied to avatarUrl. */
@@ -527,6 +542,23 @@ export function signInBeforeSend(state: { instances: InstanceInfo[]; bots: Bot[]
   const ready = instances.some((instance) => instance.snapshot?.state === "available" &&
     (instance.access === "custom" || instance.snapshot?.authenticated !== false));
   return !ready && instances.some((instance) => instance.snapshot?.state === "available" && instance.snapshot?.authenticated === false);
+}
+
+// Where the app lands when nothing is selected yet (launch) or the selection
+// went away: the owner's General chief of staff, then any chief, then a pinned
+// bot, then any visible bot. bots.json is newest-first, so bots[0] alone meant
+// opening on whatever bot was created last.
+export function defaultBotId(bots: ReadonlyArray<Pick<Bot, "id" | "hidden" | "chiefOfStaff" | "pinned" | "section" | "homeLink">>): string {
+  const visible = bots.filter((bot) => !bot.hidden);
+  const own = visible.filter((bot) => !bot.homeLink);
+  return (
+    own.find((bot) => bot.chiefOfStaff && !bot.section?.trim()) ??
+    own.find((bot) => bot.chiefOfStaff) ??
+    own.find((bot) => bot.pinned) ??
+    own[0] ??
+    visible[0] ??
+    bots[0]
+  )?.id ?? "";
 }
 
 export function currentTaskBot(bot: Bot, threadId = bot.threadId): Bot {
@@ -650,7 +682,7 @@ export interface ConfigStatus {
   /** UI language override; "" (or absent) follows the system language. */
   language?: string;
   /** Opt-in flags. Absent means off. */
-  features?: { skillAuthoring: boolean; autoSkills?: boolean; showToolCalls?: boolean; browser?: boolean; sharedComputers?: boolean; claudeUserMcp?: boolean; marketplacePublisher?: boolean };
+  features?: { skillAuthoring: boolean; autoSkills?: boolean; showToolCalls?: boolean; browser?: boolean; sharedComputers?: boolean; claudeUserMcp?: boolean; marketplacePublisher?: boolean; v3?: boolean };
   /** First-run progress: whether the welcome tour was finished and which
    * one-time hints were dismissed. Server-owned so it follows the workspace. */
   onboarding?: OnboardingStatus;
@@ -1516,7 +1548,7 @@ export function reducer(state: AppState, action: Action): AppState {
           return home && home.name !== bot.homeLink!.name ? { ...bot, homeLink: { ...bot.homeLink!, name: home.name } } : bot;
         });
       const selectedId = bots.some((bot) => bot.id === state.selectedId) || state.groups.some((group) => group.id === state.selectedId)
-        ? state.selectedId : (bots[0]?.id ?? "");
+        ? state.selectedId : defaultBotId(bots);
       const homes = action.homes.map((home) => ({ ...home, online: state.homes?.find((entry) => entry.id === home.id)?.online }));
       return { ...state, homes, bots, selectedId };
     }
@@ -1534,7 +1566,7 @@ export function reducer(state: AppState, action: Action): AppState {
       const local = state.bots.filter((bot) => bot.homeLink?.id !== link.id);
       const own = new Set(local.map((bot) => bot.id));
       const bots = [...local, ...incoming.filter((bot) => !own.has(bot.id))];
-      const selectedId = before.has(state.selectedId) && !ids.has(state.selectedId) ? (bots[0]?.id ?? "") : state.selectedId;
+      const selectedId = before.has(state.selectedId) && !ids.has(state.selectedId) ? defaultBotId(bots) : state.selectedId;
       return { ...state, bots, selectedId };
     }
     case "homeOnline":
@@ -1552,7 +1584,7 @@ export function reducer(state: AppState, action: Action): AppState {
       const homeBots = state.bots.filter((bot) => bot.homeLink && !action.bots.some((local) => local.id === bot.id));
       const known = (id: string) => action.bots.some((b) => b.id === id) || homeBots.some((b) => b.id === id) || action.groups.some((g) => g.id === id);
       const selectedId =
-        state.selectedId && known(state.selectedId) ? state.selectedId : (action.bots[0]?.id ?? "");
+        state.selectedId && known(state.selectedId) ? state.selectedId : defaultBotId(action.bots);
       const hydrated = {
         ...state,
         rosterLoaded: true,
@@ -1733,7 +1765,7 @@ export function reducer(state: AppState, action: Action): AppState {
     }
     case "groupDeleted": {
       const groups = state.groups.filter((g) => g.id !== action.groupId);
-      const selectedId = state.selectedId === action.groupId ? (state.bots[0]?.id ?? "") : state.selectedId;
+      const selectedId = state.selectedId === action.groupId ? defaultBotId(state.bots) : state.selectedId;
       return { ...state, groups, selectedId };
     }
     case "instances":
@@ -1807,7 +1839,7 @@ export function reducer(state: AppState, action: Action): AppState {
     case "deleteBot": {
       const bots = state.bots.filter((b) => b.id !== action.botId);
       const selectedId =
-        state.selectedId === action.botId ? (bots.find((b) => !b.hidden)?.id ?? bots[0]?.id ?? "") : state.selectedId;
+        state.selectedId === action.botId ? defaultBotId(bots) : state.selectedId;
       const { [action.botId]: _deleted, ...deletingBots } = state.deletingBots;
       return reconcileModelVariantSessions({ ...state, bots, selectedId, deletingBots });
     }
@@ -4270,6 +4302,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           inboxVersion += 1;
           rawDispatch({ type: "inboxCount", count: frame.count });
           break;
+        case "checkins":
+          checkinsChanged();
+          break;
         // a key changed and the fleet hot-reloaded — refresh the picker so
         // newly available providers un-dim immediately
         case "config":
@@ -4548,6 +4583,12 @@ export function useStore() {
   const ctx = useContext(StoreContext);
   if (!ctx) throw new Error("useStore outside provider");
   return ctx;
+}
+
+/** The store when there is one: for a card that also draws in a gallery or a
+ * test with no provider around it. */
+export function useOptionalStore() {
+  return useContext(StoreContext);
 }
 
 export function formatTime(at: number) {

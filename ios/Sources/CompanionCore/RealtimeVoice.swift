@@ -121,13 +121,25 @@ public struct VoiceCallPlan: Codable, Hashable, Sendable {
     public var tools: [JSONValue]
     public var receiptTurn: String
     public var maxRequestChars: Int
+    /// 3 on a v3 server; nil from an older one, which keeps the v2 flow.
+    public var v: Int?
+    /// Vocabulary hints for the transcriber (names, places, jargon).
+    public var keyterms: [String]
+    /// Bots a job may be routed to.
+    public var roster: [VoiceRosterEntry]
 
-    public init(instructions: String, greeting: Greeting, tools: [JSONValue], receiptTurn: String, maxRequestChars: Int = 2000) {
+    public var isV3: Bool { (v ?? 0) >= 3 }
+
+    public init(instructions: String, greeting: Greeting, tools: [JSONValue], receiptTurn: String, maxRequestChars: Int = 2000,
+                v: Int? = nil, keyterms: [String] = [], roster: [VoiceRosterEntry] = []) {
         self.instructions = instructions
         self.greeting = greeting
         self.tools = tools
         self.receiptTurn = receiptTurn
         self.maxRequestChars = maxRequestChars
+        self.v = v
+        self.keyterms = keyterms
+        self.roster = roster
     }
 
     public init(from decoder: any Decoder) throws {
@@ -138,6 +150,9 @@ public struct VoiceCallPlan: Codable, Hashable, Sendable {
         receiptTurn = try c.decodeIfPresent(String.self, forKey: .receiptTurn)
             ?? "The job is under way. Keep talking with a natural question or a suggestion. Do not announce that you started."
         maxRequestChars = try c.decodeIfPresent(Int.self, forKey: .maxRequestChars) ?? 2000
+        v = try? c.decodeIfPresent(Int.self, forKey: .v)
+        keyterms = (try? c.decodeIfPresent([String].self, forKey: .keyterms)) ?? []
+        roster = (try? c.decodeIfPresent([VoiceRosterEntry].self, forKey: .roster)) ?? []
     }
 }
 
@@ -175,11 +190,21 @@ public struct VoiceCallStart: Codable, Hashable, Sendable {
     public var credential: VoiceCallCredential
     public var plan: VoiceCallPlan
     public var options: VoiceCallOptions
+    /// Echoed by a v3 server.
+    public var callId: String?
+    public var brief: VoiceBrief?
+    /// The owner's "call me back when voice jobs finish" switch; nil from a
+    /// computer without call-backs.
+    public var callBack: Bool?
 
-    public init(credential: VoiceCallCredential, plan: VoiceCallPlan, options: VoiceCallOptions = .fallback) {
+    public init(credential: VoiceCallCredential, plan: VoiceCallPlan, options: VoiceCallOptions = .fallback,
+                callId: String? = nil, brief: VoiceBrief? = nil, callBack: Bool? = nil) {
         self.credential = credential
         self.plan = plan
         self.options = options
+        self.callId = callId
+        self.brief = brief
+        self.callBack = callBack
     }
 
     public init(from decoder: any Decoder) throws {
@@ -187,6 +212,9 @@ public struct VoiceCallStart: Codable, Hashable, Sendable {
         credential = try c.decode(VoiceCallCredential.self, forKey: .credential)
         plan = try c.decode(VoiceCallPlan.self, forKey: .plan)
         options = try c.decodeIfPresent(VoiceCallOptions.self, forKey: .options) ?? .fallback
+        callId = try? c.decodeIfPresent(String.self, forKey: .callId)
+        brief = try? c.decodeIfPresent(VoiceBrief.self, forKey: .brief)
+        callBack = try? c.decodeIfPresent(Bool.self, forKey: .callBack)
     }
 }
 
@@ -198,11 +226,24 @@ public struct VoiceCallSettings: Codable, Hashable, Sendable {
     public var voice: String
     public var speed: Double
     public var language: String
+    /// Which microphone the call prefers: the phone's own, or whatever the
+    /// route offers (car, headset).
+    public var mic: VoiceMic
 
-    public init(voice: String = VoiceCallSettings.defaultVoice, speed: Double = 1, language: String = VoiceCallSettings.autoLanguage) {
+    public init(voice: String = VoiceCallSettings.defaultVoice, speed: Double = 1, language: String = VoiceCallSettings.autoLanguage,
+                mic: VoiceMic = .phone) {
         self.voice = voice
         self.speed = speed
         self.language = language
+        self.mic = mic
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        voice = try c.decodeIfPresent(String.self, forKey: .voice) ?? Self.defaultVoice
+        speed = try c.decodeIfPresent(Double.self, forKey: .speed) ?? 1
+        language = try c.decodeIfPresent(String.self, forKey: .language) ?? Self.autoLanguage
+        mic = (try? c.decodeIfPresent(VoiceMic.self, forKey: .mic)) ?? .phone
     }
 
     /// Snap a speed to the nearest offered one, as the desktop does.
@@ -335,10 +376,34 @@ public enum RealtimeVoice {
 
     // MARK: Client frames
 
+    public static let maxKeyterms = 100
+    public static let maxKeytermChars = 50
+
+    /// The plan's keyterms, trimmed, deduplicated, at most 100 of at most 50
+    /// characters each (longer ones are dropped, not cut).
+    public static func keyterms(_ terms: [String]) -> [String] {
+        var seen = Set<String>()
+        var result: [String] = []
+        for term in terms {
+            let trimmed = term.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty, trimmed.count <= maxKeytermChars, seen.insert(trimmed.lowercased()).inserted else { continue }
+            result.append(trimmed)
+            if result.count == maxKeyterms { break }
+        }
+        return result
+    }
+
+    /// v2 (old server): `keep_context:false` on reconnect, the phone replays
+    /// the transcript. v3 (`plan.v == 3`): `resumption` on every session,
+    /// keyterms, and xAI keeps the conversation across the reconnect.
     public static func sessionUpdate(plan: VoiceCallPlan, settings: VoiceCallSettings, reconnect: Bool, chatContext: String = "") -> String {
         var transcription: [String: JSONValue] = ["model": .string(transcriptionModel)]
         if settings.language != VoiceCallSettings.autoLanguage, !settings.language.isEmpty {
             transcription["language_hint"] = .string(settings.language)
+        }
+        if plan.isV3 {
+            let terms = keyterms(plan.keyterms)
+            if !terms.isEmpty { transcription["keyterms"] = .array(terms.map { .string($0) }) }
         }
         let format: JSONValue = ["type": "audio/pcm", "rate": .number(sampleRate)]
         var session: [String: JSONValue] = [
@@ -351,7 +416,11 @@ public enum RealtimeVoice {
             "tools": .array(plan.tools),
         ]
         if !settings.voice.isEmpty { session["voice"] = .string(settings.voice) }
-        if reconnect { session["keep_context"] = false }
+        if plan.isV3 {
+            session["resumption"] = ["enabled": true]
+        } else if reconnect {
+            session["keep_context"] = false
+        }
         return JSONValue.object(["type": "session.update", "session": .object(session)]).jsonString()
     }
 
@@ -372,6 +441,15 @@ public enum RealtimeVoice {
         JSONValue.object([
             "type": "conversation.item.create",
             "item": ["type": "function_call_output", "call_id": .string(callId), "output": .string(output.jsonString())],
+        ]).jsonString()
+    }
+
+    /// A function_call_output whose output is already text (a server
+    /// tool's answer), sent as is rather than JSON-quoted.
+    public static func functionCallOutput(callId: String, text: String) -> String {
+        JSONValue.object([
+            "type": "conversation.item.create",
+            "item": ["type": "function_call_output", "call_id": .string(callId), "output": .string(text)],
         ]).jsonString()
     }
 
@@ -412,6 +490,7 @@ public enum RealtimeVoice {
 
     public enum ToolName: String, Sendable {
         case sendTask = "send_task"
+        case confirmJob = "confirm_job"
         case recallTextMessages = "recall_text_messages"
         case staySilent = "stay_silent"
         case endTheCall = "end_the_call"

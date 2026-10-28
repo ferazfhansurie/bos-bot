@@ -109,6 +109,11 @@ export interface WhatsAppNativeOptions {
 
 const RESCAN_DISCONNECTS = /^(LOGOUT|UNPAIRED|UNPAIRED_IDLE)$/i;
 const QR_EXHAUSTED = /max qr ?code retries/i;
+/** WhatsApp Web reloads its own page now and then (an update, a sync step).
+ * A probe that lands mid-reload sees one of these, or no answer at all, while
+ * the browser is fine; only this many misses in a row mean the page is gone. */
+const RELOAD_PROBE_ERRORS = /execution context was destroyed|cannot find context|detached frame|navigat/i;
+const PROBE_MISSES_ALLOWED = 3;
 
 export function sessionDirFor(authDir: string, clientId: string): string {
   return join(authDir, `session-${clientId}`);
@@ -197,6 +202,7 @@ export class WhatsAppNative {
   private probeTimer: unknown = null;
   private startTimer: unknown = null;
   private probing = false;
+  private probeMisses = 0;
   private stopped = false;
 
   constructor(options: WhatsAppNativeOptions) {
@@ -525,9 +531,18 @@ export class WhatsAppNative {
         this.fail(gen, "The WhatsApp page stopped answering.");
         return;
       }
+      this.probeMisses = 0;
       this.applyWaState(gen, state);
     } catch (error) {
-      if (gen === this.generation) this.fail(gen, `The WhatsApp browser is gone (${message(error)}).`);
+      if (gen !== this.generation) return;
+      const detail = message(error);
+      // a page reloading itself: give it a few probes to come back
+      const reloading = RELOAD_PROBE_ERRORS.test(detail) || detail.startsWith("no answer within");
+      if (reloading && ++this.probeMisses < PROBE_MISSES_ALLOWED) {
+        this.options.log(`probe missed while the page reloads (${detail}); checking again`);
+        return;
+      }
+      this.fail(gen, `The WhatsApp browser is gone (${detail}).`);
     } finally {
       if (timer) this.options.timers.clearTimeout(timer);
       this.probing = false;
@@ -571,6 +586,7 @@ export class WhatsAppNative {
     this.generation += 1;
     this.ready = false;
     this.qr = null;
+    this.probeMisses = 0;
     this.clearStartTimer();
     if (this.probeTimer) this.options.timers.clearInterval(this.probeTimer);
     this.probeTimer = null;

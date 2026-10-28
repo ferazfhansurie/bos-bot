@@ -405,7 +405,7 @@ export function Timeline({ timeline, media, botId, videoId, engine, selected, se
           {addMenu && (
             <>
               <div className="fixed inset-0 z-40" onPointerDown={() => setAddMenu(false)} />
-              <div className="absolute left-0 top-8 z-50 w-40 rounded-xl bg-menu p-1 shadow-[0_8px_28px_rgba(0,0,0,.35)] ring-1 ring-ink/10">
+              <div data-popover className="absolute left-0 top-8 z-50 w-40 rounded-xl bg-menu p-1 shadow-[0_8px_28px_rgba(0,0,0,.35)] ring-1 ring-ink/10">
                 {([["video", "Video track", Film], ["text", "Text track", Type], ["audio", "Audio track", AudioLines]] as const).map(([kind, label, Glyph]) => (
                   <button key={kind} type="button" onMouseDown={e => e.preventDefault()}
                     onClick={() => { setAddMenu(false); addTrack(kind); }}

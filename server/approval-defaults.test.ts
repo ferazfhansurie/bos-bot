@@ -84,3 +84,14 @@ describe("approval defaults", () => {
     expect(supportsApprovalMode("pi", "full")).toBe(false);
   });
 });
+
+describe("labs v3 mirror", () => {
+  it("is on unless the desktop said off", async () => {
+    const { v3LabsEnabled } = await import("./config.ts");
+    expect(v3LabsEnabled({})).toBe(true);
+    expect(v3LabsEnabled({ features: { v3: false } })).toBe(false);
+    expect(v3LabsEnabled({ features: { v3: true } })).toBe(true);
+    expect(parseConfigPatch({ features: { v3: true } })).toEqual({ features: { v3: true } });
+    expect(() => parseConfigPatch({ features: { v3: "yes" } })).toThrow();
+  });
+});

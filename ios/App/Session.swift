@@ -492,6 +492,10 @@ final class Session: ObservableObject {
 
     // MARK: - Pairing
 
+    /// The app's one primary session. The window owns it as a StateObject;
+    /// a CarPlay-only launch has no window, so the car scene reaches it here.
+    static let main = Session()
+
     init() {
         Self.removeStaleFilePreviews()
         _ = NotificationCoordinator.shared
@@ -515,6 +519,9 @@ final class Session: ObservableObject {
         }
         NotificationCoordinator.shared.responseHandler = { [weak self] target in
             Task { @MainActor in await self?.openNotification(target) }
+        }
+        NotificationCoordinator.shared.answerHandler = { [weak self] target, allow in
+            await self?.answerNotification(target, allow: allow)
         }
         NotificationCoordinator.shared.foregroundVoicePresentation = { [weak self] push, connectionId in
             self?.home(for: connectionId).voicePresentation(for: push) ?? .alert
@@ -573,6 +580,26 @@ final class Session: ObservableObject {
             state.hydrate(fleet); status = .live
             return
         }
+        // `-checkins-fixture-url http://127.0.0.1:PORT -checkins-fixture-token omb_sess_…`:
+        // the today card against an isolated fixture server, never a paired
+        // computer (docs/verification/checkins.md). Nothing is saved.
+        if let index = arguments.firstIndex(of: "-checkins-fixture-url"), index + 1 < arguments.count,
+           let url = URL(string: arguments[index + 1]), url.scheme == "http", url.host == "127.0.0.1", let port = url.port,
+           let t = arguments.firstIndex(of: "-checkins-fixture-token"), t + 1 < arguments.count {
+            let preview = Connection(id: "checkins-fixture", name: "Isolated check-ins fixture", host: "127.0.0.1", port: port)
+            connection = preview; connections = [preview]
+            let fixture = CompanionClient(connection: preview, token: arguments[t + 1])
+            client = fixture
+            Task { @MainActor in
+                if var fleet = try? await fixture.fleet() {
+                    fleet.v3 = true
+                    self.state.hydrate(fleet)
+                }
+                self.status = .live
+                await self.loadCheckins()
+            }
+            return
+        }
         if arguments.contains("-shared-chat-preview") {
             let preview = Connection(id: "shared-preview", name: "Offline alpha preview", host: "shared-preview.invalid", port: 8810)
             let configuration = URLSessionConfiguration.ephemeral
@@ -598,6 +625,19 @@ final class Session: ObservableObject {
                 fleet.bots[i].messages = []
                 fleet.bots[i].activeLeafId = nil
                 if let b = arguments.firstIndex(of: "-empty-thread-body"), b + 1 < arguments.count { fleet.bots[i].mascotBody = arguments[b + 1] }
+            }
+            // `-v3-preview`: bos bot 3.0 on, and the bots dressed up.
+            if arguments.contains("-v3-preview") {
+                fleet.v3 = true
+                let looks: [(body: String, wears: [String: String])] = [
+                    ("circle", ["head": "top-hat", "eyes": "round-glasses", "neck": "bow-tie"]),
+                    ("cat", ["head": "crown", "eyes": "sunglasses"]),
+                    ("bear", ["head": "beanie", "mouth": "mustache", "neck": "scarf"]),
+                ]
+                for (i, look) in looks.enumerated() where i < fleet.bots.count {
+                    if fleet.bots[i].mascotBody == nil { fleet.bots[i].mascotBody = look.body }
+                    fleet.bots[i].mascotAccessories = MascotAccessories(raw: look.wears)
+                }
             }
             let preview = Connection(
                 id: "preview-current",
@@ -654,6 +694,37 @@ final class Session: ObservableObject {
                     _ = await self.send(text: "recover this live stream", attachments: [], to: .bot(bot), durableSendID: "recovery-send-0001")
                 }
             }
+            // `-v3-preview`: bos bot 3.0 on, as the desktop's labs switch sends it.
+            if arguments.contains("-v3-preview") { fleet.v3 = true }
+            // `-cards-preview`: the first bot's thread holds every 3.0 card, a
+            // chart and table block and the connector card's states; taps go
+            // to a local stub that logs them (CardsPreviewProtocol).
+            if arguments.contains("-cards-preview"),
+               let url = Bundle.main.url(forResource: "CardsPreview", withExtension: "json"),
+               let data = try? Data(contentsOf: url),
+               let messages = try? JSONDecoder().decode([Message].self, from: data),
+               !fleet.bots.isEmpty {
+                var messages = messages
+                let now = Date().timeIntervalSince1970 * 1000
+                for index in messages.indices { messages[index].at = now - Double(messages.count - index) * 4000 }
+                fleet.bots[0].messages = messages
+                fleet.bots[0].activeLeafId = messages.last?.id
+                fleet.bots[0].busy = false
+                try? FileManager.default.removeItem(at: CardsPreviewProtocol.logURL)
+                let config = URLSessionConfiguration.ephemeral
+                config.protocolClasses = [CardsPreviewProtocol.self]
+                client = CompanionClient(connection: preview, token: "cards-fixture-token", session: URLSession(configuration: config))
+            }
+            // `-v3-island-fixture`: Forge mid-step and Scout waiting on its
+            // card, for the island's working and needs-you shots.
+            if arguments.contains("-v3-island-fixture") { Self.v3IslandFixture(&fleet) }
+            // `-v3-answered`: Scout's card already answered, so the roster's
+            // needs-you island stays shut over the list shots.
+            if arguments.contains("-v3-answered"), let i = fleet.bots.firstIndex(where: { $0.id == "preview-scout" }),
+               var messages = fleet.bots[i].messages {
+                for index in messages.indices where messages[index].card?.isPending == true { messages[index].card?.answered = "Allow" }
+                fleet.bots[i].messages = messages
+            }
             state.hydrate(fleet)
             if arguments.contains("-threads-preview"),
                let pagesURL = Bundle.main.url(forResource: "ThreadPreviewPages", withExtension: "json"),
@@ -685,6 +756,13 @@ final class Session: ObservableObject {
                let seconds = Double(arguments[i + 1]) { startEmptyThreadSendPreview(after: seconds) }
             if arguments.contains("-stream-preview-bots") { startMultiStreamPreview() }
             else if arguments.contains("-stream-preview") { startStreamPreview() }
+            // `-v3-done-after 2`: Forge's turn ends, for the island's done hop.
+            if let i = arguments.firstIndex(of: "-v3-done-after"), i + 1 < arguments.count,
+               let seconds = Double(arguments[i + 1]) { startV3DonePreview(after: seconds) }
+            // `-v3-steer-after 2`: a mid-turn send to Forge, then its next
+            // step, for the thread worker's noticed and read shots.
+            if let i = arguments.firstIndex(of: "-v3-steer-after"), i + 1 < arguments.count,
+               let seconds = Double(arguments[i + 1]) { startV3SteerPreview(after: seconds) }
             return
         }
 #endif
@@ -1528,6 +1606,84 @@ final class Session: ObservableObject {
     /// `-empty-thread-send-after n`: n seconds in, a message lands in
     /// Scout's empty thread and a turn starts, the way a real first send
     /// does, so the mascot's trip up into the header can be recorded.
+    /// Forge running a step for a minute now; Scout busy with its approval
+    /// card open, so its island needs you.
+    private static func v3IslandFixture(_ fleet: inout Fleet) {
+        func message(_ json: [String: Any]) -> Message? {
+            guard let data = try? JSONSerialization.data(withJSONObject: json) else { return nil }
+            return try? JSONDecoder().decode(Message.self, from: data)
+        }
+        let now = Date().timeIntervalSince1970 * 1000
+        func restamp(_ messages: inout [Message], startedAgo seconds: Double) {
+            for index in messages.indices {
+                messages[index].at = now - seconds * 1000 + Double(index) * 4000
+            }
+        }
+        if let i = fleet.bots.firstIndex(where: { $0.id == "preview-forge" }) {
+            var messages = fleet.bots[i].messages ?? []
+            restamp(&messages, startedAgo: 72)
+            if let step = message(["id": "forge-step", "role": "bot", "kind": "activity", "at": now - 6000,
+                                   "parentId": "forge-reply",
+                                   "tool": ["name": "Bash", "spoken": "checking the privacy manifest",
+                                            "summary": "plutil -lint PrivacyInfo.xcprivacy"]]) {
+                messages.append(step)
+                fleet.bots[i].activeLeafId = "forge-step"
+            }
+            fleet.bots[i].messages = messages
+            fleet.bots[i].busy = true
+        }
+        if let i = fleet.bots.firstIndex(where: { $0.id == "preview-scout" }) {
+            var messages = fleet.bots[i].messages ?? []
+            restamp(&messages, startedAgo: 34)
+            if let card = messages.firstIndex(where: { $0.card?.isPending == true }) {
+                messages[card].card?.title = "Upload build 1 to TestFlight?"
+                messages[card].card?.subtitle = "Internal testing only"
+            }
+            fleet.bots[i].messages = messages
+            fleet.bots[i].busy = true
+        }
+    }
+
+    private func startV3DonePreview(after seconds: Double) {
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(seconds))
+            guard let self, var bot = self.state.bot("preview-forge") else { return }
+            bot.busy = false
+            bot.messages = nil
+            self.state.apply(.bot(bot))
+            let message: [String: Any] = ["id": "forge-done", "role": "bot", "kind": "text", "parentId": "forge-step",
+                                          "at": Date().timeIntervalSince1970 * 1000,
+                                          "text": "The signed archive is ready and the privacy manifest checks out."]
+            if let data = try? JSONSerialization.data(withJSONObject: ["kind": "message", "threadId": bot.threadId, "message": message]),
+               let frame = try? JSONDecoder().decode(StreamFrame.self, from: data) {
+                self.state.apply(frame.frame)
+            }
+        }
+    }
+
+    private func startV3SteerPreview(after seconds: Double) {
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(seconds))
+            guard let self, let bot = self.state.bot("preview-forge") else { return }
+            let now = Date().timeIntervalSince1970 * 1000
+            @MainActor func send(_ message: [String: Any]) {
+                if let data = try? JSONSerialization.data(withJSONObject: ["kind": "message", "threadId": bot.threadId, "message": message]),
+                   let frame = try? JSONDecoder().decode(StreamFrame.self, from: data) {
+                    self.state.apply(frame.frame)
+                }
+            }
+            send(["id": "forge-steer", "role": "user", "kind": "text", "parentId": "forge-step", "at": now,
+                  "text": "Bump the build number too", "steered": true, "steerDelivery": "provider_accepted"])
+            try? await Task.sleep(for: .seconds(2.5))
+            send(["id": "forge-step", "role": "bot", "kind": "activity", "parentId": "forge-reply", "at": now - 6000,
+                  "tool": ["name": "Bash", "spoken": "checking the privacy manifest", "ok": true,
+                           "summary": "plutil -lint PrivacyInfo.xcprivacy"]])
+            send(["id": "forge-step-2", "role": "bot", "kind": "activity", "parentId": "forge-steer",
+                  "at": Date().timeIntervalSince1970 * 1000,
+                  "tool": ["name": "Edit", "spoken": "bumping the build number"]])
+        }
+    }
+
     private func startEmptyThreadSendPreview(after seconds: Double) {
         Task { @MainActor [weak self] in
             try? await Task.sleep(for: .seconds(seconds))
@@ -1746,7 +1902,7 @@ final class Session: ObservableObject {
         // so which threads are typing has to be announced; the tokens in
         // between reach only the open bubble.
         let typingChanged = Self.typingThreads(in: next) != Self.typingThreads(in: state)
-        let quiet = batch.allSatisfy(\.frame.isLiveTextOnly) && !typingChanged
+        let quiet = batch.allSatisfy { $0.frame.isLiveTextOnly || $0.frame.isAppChange } && !typingChanged
         let now = ContinuousClock.now
         let held = !quiet && !typingChanged
             && lastLoudPublish.map { now - $0 < Self.loudPublishInterval } == true
@@ -1769,9 +1925,12 @@ final class Session: ObservableObject {
             for index in NotificationPresentation.coalescedIndices(notices.map { ($0.0.threadId, $0.0.isBlocking) }) {
                 let (notification, sequence) = notices[index]
                 if notification.kind == "voice_work_done" {
-                    // Asked out loud: it reports whatever the bot's switch
-                    // says, except while that call is still live and says it.
-                    if let callId = notification.callId, callId == VoiceCallCenter.shared.liveCallId {
+                    // Asked out loud: a live call says it, any call's work
+                    // (the computer skips the call-back ring meanwhile).
+                    let spoken = VoiceCallCenter.shared.reportSettled(notification)
+                    // It reports whatever the bot's switch says, except
+                    // while that call is still live and says it.
+                    if spoken, let callId = notification.callId, callId == VoiceCallCenter.shared.liveCallId {
                         Self.clearVoiceDone(callId: callId)
                         continue
                     }
@@ -1784,6 +1943,16 @@ final class Session: ObservableObject {
         }
         for case let .voiceRing(ring) in batch.map(\.frame) {
             receivedRing(ring, connectionId: client?.connection.id)
+        }
+        for case let .app(change) in batch.map(\.frame) {
+            appChanges.send(change)
+        }
+        for case let .workspaceOpen(_, threadId, tab) in batch.map(\.frame) where tab == "canvas" {
+            pageTabsOpened.send(threadId)
+        }
+        // 3.0 check-ins changed on the computer: refresh the today card.
+        if checkins != nil, batch.contains(where: { if case .unknown("checkins") = $0.frame { return true }; return false }) {
+            Task { await loadCheckins() }
         }
         // Runtime-only batches cannot change unread flags. Avoid walking
         // every bot and task to recompute an unchanged badge on each token.
@@ -2566,9 +2735,46 @@ final class Session: ObservableObject {
 
     /// Mint a realtime voice call for a bot. Throws the server's own message
     /// (409 means no xAI key on the computer).
+    func setVoiceCallBack(_ enabled: Bool) async throws -> Bool {
+        guard let client else { throw APIError.transport("This computer is offline.") }
+        return try await client.setVoiceCallBack(enabled)
+    }
+
+    func voiceCallSummary(_ request: VoiceCallSummaryRequest) async throws -> VoiceCallSummary {
+        guard let client else { throw APIError.transport("This computer is offline.") }
+        return try await client.voiceCallSummary(request)
+    }
+
     func startVoiceCall(botId: String, language: String?, callId: String) async throws -> VoiceCallStart {
         guard let client else { throw APIError.transport("This computer is offline.") }
         return try await client.voiceCall(botId: botId, language: language, callId: callId)
+    }
+
+    /// v3: mint the default bot's call ahead of a tap (app open, action
+    /// button), so the line opens without waiting on the computer. Only a
+    /// computer that answered a v3 plan before is asked.
+    func prewarmDefaultVoiceCall(botId: String? = nil, name: String? = nil) {
+        guard let client else { return }
+        let bots = state.bots.filter { $0.hidden != true && $0.remote == nil }
+        let wanted = (name ?? "bos").lowercased().trimmingCharacters(in: .whitespaces)
+        let bot = botId.flatMap { id in bots.first { $0.id == id } }
+            ?? bots.first { $0.name.lowercased() == wanted }
+            ?? (botId == nil && name == nil ? bots.first : nil)
+        guard let bot else { return }
+        let settings = RealtimeVoiceCall.savedSettings(botId: bot.id)
+        let language = settings.language == VoiceCallSettings.autoLanguage ? nil : settings.language
+        VoiceCallWarmer.shared.prewarm(botId: bot.id, language: language, client: client)
+    }
+
+    /// Good / bad on a voice chat card.
+    func rateVoiceCall(_ card: VoiceCallCard, good: Bool) async -> Bool {
+        guard let client else { return false }
+        do {
+            try await client.postVoiceEvent(VoiceCallEventRequest(callId: card.callId, botId: card.botId, event: .rating(good: good)))
+            return true
+        } catch {
+            return false
+        }
     }
 
     /// Book how long a call was connected. Best effort: a miss only leaves
@@ -3192,6 +3398,27 @@ final class Session: ObservableObject {
         }
     }
 
+    /// Every unread thread on this computer and the ones beside it, so the
+    /// app badge can reach zero without opening each routine run in turn.
+    func markAllRead() async {
+        for home in [self] + satellites { await home.markEverythingHereRead() }
+    }
+
+    private func markEverythingHereRead() async {
+        let threads = state.bots.filter { $0.hidden != true }.flatMap { bot -> [(String, String?)] in
+            if bot.tasks?.contains(where: { $0.unread != nil }) == true {
+                return bot.visibleTasks.filter { $0.unread == true }.map { (bot.id, $0.threadId) }
+            }
+            return bot.unread ? [(bot.id, nil)] : []
+        }
+        let rooms = state.rooms.filter(\.unread).map(\.id)
+        guard !threads.isEmpty || !rooms.isEmpty else { return }
+        await perform(quietly: true) { client in
+            for (bot, thread) in threads { try? await client.markRead(botId: bot, threadId: thread) }
+            for room in rooms { try? await client.markRead(roomId: room) }
+        }
+    }
+
     /// One older page above what is held. Pages are counted in whole turns
     /// so a tool-heavy turn arrives with its prompt; the row floor keeps a
     /// pre-2.0 server (which ignores `turns`) paging at the old size.
@@ -3739,10 +3966,144 @@ final class Session: ObservableObject {
         return try? await client.updateStatus()
     }
 
+    // MARK: - Apps
+
+    /// Every app change on the stream (a bot, the desktop, another phone);
+    /// an open app and the apps grid each listen for their own.
+    let appChanges = PassthroughSubject<AppChange, Never>()
+
+    /// Reads and writes go to the computer only while the stream is live;
+    /// otherwise an app opens from its last loaded copy, read-only.
+    var appsOnline: Bool { client != nil && status == .live }
+
+    /// The last loaded copy of each app, one folder per computer.
+    var appCache: MiniAppCache? {
+        guard let id = connection?.id, id.utf8.allSatisfy({ (48...57).contains($0) || (65...90).contains($0) || (97...122).contains($0) || $0 == 45 || $0 == 95 }),
+              let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first
+        else { return nil }
+        return MiniAppCache(root: caches.appendingPathComponent("MiniApps", isDirectory: true).appendingPathComponent(id, isDirectory: true))
+    }
+
+    /// Every bot's apps, in roster order. A bot whose list fails is skipped
+    /// rather than failing the grid; with nothing reachable it throws.
+    func loadApps() async throws -> [AppSummary] {
+        guard let client, appsOnline else { throw APIError.transport("Your computer is offline.") }
+        let bots = state.bots.filter { $0.hidden != true }.map(\.id)
+        var lists: [String: [AppSummary]] = [:]
+        var failure: Error?
+        // Plain tasks, not a task group: on iOS 26 (build 156) a group
+        // child finishing with a non-empty list aborted the app inside
+        // swift::AsyncTask::completeFuture (__cxa_pure_virtual) every time
+        // the grid opened. The requests still run side by side.
+        let requests = bots.map { bot in (bot, Task { try await client.apps(botId: bot) }) }
+        for (bot, request) in requests {
+            do { lists[bot] = try await request.value } catch {
+                failure = error
+                if MiniAppProbe.appId != nil { MiniAppProbe.log("bot \(bot) apps failed: \(error)") }
+            }
+        }
+        if MiniAppProbe.appId != nil { MiniAppProbe.log("\(bots.count) bots, \(lists.count) lists") }
+        if lists.isEmpty, let failure, !bots.isEmpty { throw failure }
+        let apps = bots.flatMap { lists[$0] ?? [] }
+        appCache?.saveList(apps)
+        return apps
+    }
+
+    // MARK: - Pages beside a conversation
+
+    /// A thread whose bot just opened a page (open_tab, app_create).
+    let pageTabsOpened = PassthroughSubject<String, Never>()
+
+    func loadPageTabs(botId: String, threadId: String) async throws -> [PageTab] {
+        guard let client, appsOnline else { throw APIError.transport("Your computer is offline.") }
+        return try await client.pageTabs(botId: botId, threadId: threadId)
+    }
+
+    func loadPageTab(botId: String, threadId: String, path: String) async throws -> PageTabHTML {
+        guard let client else { throw APIError.transport("Your computer is offline.") }
+        return try await client.pageTab(botId: botId, threadId: threadId, path: path)
+    }
+
+    func loadAppPage(_ appId: String) async throws -> AppPage {
+        guard let client else { throw APIError.transport("Your computer is offline.") }
+        let page = try await client.appPage(appId: appId)
+        appCache?.savePage(page)
+        return page
+    }
+
+    func appRecords(_ appId: String, collection: String) async throws -> [JSONValue] {
+        guard let client else { throw APIError.transport("Your computer is offline.") }
+        let records = try await client.appRecords(appId: appId, collection: collection)
+        appCache?.saveRecords(records, appId: appId, collection: collection)
+        return records
+    }
+
+    func appRecord(_ appId: String, collection: String, id: String) async throws -> JSONValue {
+        guard let client else { throw APIError.transport("Your computer is offline.") }
+        return try await client.appRecord(appId: appId, collection: collection, id: id)
+    }
+
+    func appWrite(_ appId: String, ops: [[String: JSONValue]]) async throws -> [JSONValue] {
+        guard let client, appsOnline else { throw APIError.transport("offline: read only") }
+        return try await client.appWrite(appId: appId, ops: ops)
+    }
+
+    func previewAppInstall(url: String) async throws -> InstallPreviewResponse {
+        guard let client, appsOnline else { throw APIError.transport("Your computer is offline.") }
+        return try await client.previewAppInstall(url: url)
+    }
+
+    func installApp(token: String, botId: String) async throws -> InstallResult {
+        guard let client, appsOnline else { throw APIError.transport("Your computer is offline.") }
+        return try await client.installApp(token: token, botId: botId)
+    }
+
+    // MARK: - Owner's bosbot.my data
+
+    /// False on any phone that isn't the owner's, or a computer without the
+    /// bosbot.my data token, so the entry never shows there.
+    func loadSiteDataAvailable() async -> Bool {
+        guard let client else { return false }
+        return (try? await client.siteDataAvailable()) ?? false
+    }
+
+    func loadSiteData(fresh: Bool = false) async throws -> SiteDataResponse {
+        guard let client else { throw APIError.transport("Not connected to your computer.") }
+        return try await client.siteData(fresh: fresh)
+    }
+
     // MARK: - Job inbox
 
     /// A pure read: the server scopes plans to this device and never resumes
     /// or dispatches anything because the inbox was opened.
+    /// The 3.0 today list (check-ins). Nil until read, and on a device that
+    /// isn't the owner's or a computer without check-ins: the card hides.
+    @Published private(set) var checkins: CheckinsSnapshot?
+    @Published private(set) var checkinBusy: Set<String> = []
+
+    func loadCheckins() async {
+        guard state.v3, let client else { return }
+        if let next = try? await client.checkins() { checkins = next }
+    }
+
+    func actOnCheckin(_ item: CheckinItem, action: String) async {
+        guard let client, !checkinBusy.contains(item.id) else { return }
+        checkinBusy.insert(item.id)
+        defer { checkinBusy.remove(item.id) }
+        do {
+            checkins = try await client.checkinAction(id: item.id, action: action)
+            Haptics.success()
+        } catch {
+            actionError = error.localizedDescription
+            await loadCheckins()
+        }
+    }
+
+    func setupCheckins() async {
+        guard let client else { return }
+        do { checkins = try await client.setupCheckins() } catch { actionError = error.localizedDescription }
+    }
+
     func loadJobs() async throws -> [JobInboxItem] {
         guard let client else { throw APIError.transport("Computer is offline") }
         return orderedJobs(try await client.jobInbox().items)
@@ -3849,6 +4210,19 @@ final class Session: ObservableObject {
         let visible = UIApplication.shared.applicationState == .active && notificationVisibleThreads.contains((target.connectionId ?? "") + ":thread:" + target.threadId)
         return .resolve(enabled: notificationEnabled(botId: target.botId, threadId: target.threadId),
                         visible: visible, blocking: target.isBlocking)
+    }
+
+    /// bos bot 3.0: Allow or Deny straight from an approval banner. The
+    /// answer goes only to the computer the push came from; anything that
+    /// cannot be answered here opens the chat instead, so nothing is lost.
+    func answerNotification(_ target: NotificationTarget, allow: Bool) async {
+        let home = home(for: target.connectionId)
+        if home !== self { return await home.answerNotification(target, allow: allow) }
+        let ownID = isSatellite ? connection?.id : client?.connection.id ?? registry.activeConnectionID
+        guard target.belongs(to: ownID), let requestId = target.requestId, client != nil else {
+            return await openNotification(target)
+        }
+        await answer(threadId: target.threadId, requestId: requestId, choice: allow ? "Allow" : "Deny", isPermission: true)
     }
 
     func openNotification(_ target: NotificationTarget, requirePending: Bool = false) async {
@@ -4044,7 +4418,7 @@ final class Session: ObservableObject {
             }
             guard let bot = await botAfterLaunch(ring.botId) else { return }
             VoiceCallCenter.shared.start(bot: bot, threadId: threadId ?? bot.threadId, session: self,
-                                         opener: RealtimeVoice.ringOpener(reason: ring.reason))
+                                         opener: RealtimeVoice.opener(for: ring))
         }
     }
 
@@ -4236,6 +4610,26 @@ final class Session: ObservableObject {
         guard let client else { return nil }
         do { return try await client.authorizeConnector(slug: slug, alias: alias) }
         catch { actionError = error.localizedDescription; return nil }
+    }
+
+    func authorizeConnectorCard(botId: String, threadId: String, messageId: String) async throws -> ConnectorCardAuthorization {
+        guard let client else { throw APIError.transport("Computer is offline") }
+        return try await client.authorizeConnectorCard(botId: botId, threadId: threadId, messageId: messageId)
+    }
+
+    func connectorCardStatus(botId: String, threadId: String, messageId: String) async throws -> ConnectorCardStatus {
+        guard let client else { throw APIError.transport("Computer is offline") }
+        return try await client.connectorCardStatus(botId: botId, threadId: threadId, messageId: messageId)
+    }
+
+    func resumeConnectorCard(botId: String, threadId: String, messageId: String) async throws {
+        guard let client else { throw APIError.transport("Computer is offline") }
+        try await client.resumeConnectorCard(botId: botId, threadId: threadId, messageId: messageId)
+    }
+
+    func dismissConnectorCard(botId: String, threadId: String, messageId: String) async throws {
+        guard let client else { throw APIError.transport("Computer is offline") }
+        try await client.dismissConnectorCard(botId: botId, threadId: threadId, messageId: messageId)
     }
 
     func botRuntime(botId: String, threadId: String) async throws -> BotRuntimeStatus {

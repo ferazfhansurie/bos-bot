@@ -108,6 +108,7 @@ export function NewBotDialog() {
             type="button"
             disabled={creating}
             onClick={() => create()}
+            data-v3-nod="hire"
             className="flex min-h-[112px] flex-col items-start gap-1.5 rounded-xl border border-dashed border-hairline/60 bg-raised/40 p-4 text-left hover:border-accent/50 hover:bg-raised disabled:opacity-50"
           >
             <span className="flex items-center gap-2 text-[14px] font-medium text-ink">

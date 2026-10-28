@@ -29,7 +29,7 @@ function catalogModels(instance: InstanceInfo | undefined) {
   return instance?.models.options.filter(option => isFreeCloud(instance) || !option.custom) ?? [];
 }
 
-function modelLabel(instance: InstanceInfo | undefined, model: string): string {
+export function modelLabel(instance: InstanceInfo | undefined, model: string): string {
   return instance?.models.options.find((option) => option.id === model)?.label ?? model;
 }
 

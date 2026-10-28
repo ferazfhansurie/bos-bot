@@ -17,10 +17,10 @@ import UIKit
 
 /// What one row's face is doing right now.
 @MainActor @Observable final class ListFacePose {
-    /// Eye glyphs instead of the state's own; nil is the state's face.
-    var left: String?
-    var right: String?
-    var accent: String?
+    /// A table face worn instead of the state's own; nil is the state's face.
+    var face: GlyphFaceState?
+    /// Drops the worn face's accent, for when something else draws it.
+    var hidesAccent = false
     /// In body diameters, before the face's tilt.
     var gaze: CGSize = .zero
     /// 1 open, ~0.1 shut.
@@ -36,8 +36,14 @@ import UIKit
     fileprivate(set) var hopHeight: CGFloat = 1
 
     var look: GlyphLook {
-        GlyphLook(left: left, right: right, accent: accent, anchor: accent == nil ? nil : .topRight,
-                  hidesAccent: left != nil, eyeShift: gaze, eyeSquash: squash)
+        GlyphLook(hidesAccent: face != nil && hidesAccent, eyeShift: gaze, eyeSquash: squash, face: face)
+    }
+
+    /// Wears `face` (its accent hidden unless `accent`); nil goes back to
+    /// the state's own.
+    func wear(_ face: GlyphFaceState?, accent: Bool = false) {
+        self.face = face
+        hidesAccent = !accent
     }
 }
 
@@ -57,16 +63,14 @@ import UIKit
     @ObservationIgnored private var greetingPending = true
     @ObservationIgnored private var greeting: Task<Void, Never>?
     @ObservationIgnored private var lastHaptic = Date.distantPast
-    /// When the app last went to the background, and when it came back:
-    /// bots that finished in between look proud until they are opened.
+    /// When the app last went to the background, so a long absence can
+    /// put the faces back to sleep for the greeting.
     @ObservationIgnored private(set) var awayAt: Double
-    @ObservationIgnored private(set) var returnedAt: Double
 
     private static let awayKey = "bos.listFaces.awayAt"
 
     init() {
         awayAt = UserDefaults.standard.double(forKey: Self.awayKey)
-        returnedAt = Date().timeIntervalSince1970 * 1000
     }
 
     func pose(_ id: String) -> ListFacePose {
@@ -100,7 +104,6 @@ import UIKit
         sceneActive = active
         let now = Date().timeIntervalSince1970 * 1000
         if active {
-            returnedAt = now
             // back after a long while: the faces dozed off, wake them again
             if awayAt > 0, now - awayAt > 10 * 60 * 1000 {
                 greetingPending = true
@@ -112,11 +115,6 @@ import UIKit
             UserDefaults.standard.set(now, forKey: Self.awayKey)
         }
         updateLoop()
-    }
-
-    /// A bot that finished while the app was closed, not yet opened.
-    func isProud(_ chat: Chat, lastActivity: Double) -> Bool {
-        awayAt > 0 && chat.isBot && chat.unread && !chat.busy && lastActivity > awayAt && lastActivity <= returnedAt + 5000
     }
 
     private func updateLoop() {
@@ -190,12 +188,12 @@ import UIKit
     /// Eyes open wide toward the bot that's working, then back to resting.
     private func notice(_ pose: ListFacePose, below: Bool) {
         withAnimation(.spring(response: 0.3, dampingFraction: 0.65)) {
-            pose.left = "ring"; pose.right = "ring"
+            pose.wear(.listening)
             pose.gaze = CGSize(width: 0.02, height: below ? 0.06 : -0.07)
         }
         after(1.4) {
             withAnimation(.spring(response: 0.45, dampingFraction: 0.8)) {
-                pose.left = nil; pose.right = nil; pose.gaze = .zero
+                pose.wear(nil); pose.gaze = .zero
             }
         }
     }
@@ -204,15 +202,15 @@ import UIKit
 
     /// A curious look around: eyes open, a little hop, settle.
     private func peek(_ pose: ListFacePose) {
-        pose.left = "ring"; pose.right = "ring"
+        pose.wear(.curious)
         hop(pose, height: 0.45)
-        after(0.8) { pose.left = nil; pose.right = nil }
+        after(0.8) { pose.wear(nil) }
     }
 
     /// After midnight a face nods off for a moment.
     private func doze(_ pose: ListFacePose) {
-        withAnimation(.easeInOut(duration: 0.8)) { pose.squash = 0.35; pose.gaze = CGSize(width: 0, height: 0.04) }
-        after(2.2) { withAnimation(.spring(response: 0.3, dampingFraction: 0.6)) { pose.squash = 1; pose.gaze = .zero } }
+        withAnimation(.easeInOut(duration: 0.8)) { pose.wear(.drowsy); pose.gaze = CGSize(width: 0, height: 0.04) }
+        after(2.2) { withAnimation(.spring(response: 0.3, dampingFraction: 0.6)) { pose.wear(nil); pose.gaze = .zero } }
     }
 
     private func hop(_ pose: ListFacePose, height: CGFloat) {
@@ -230,8 +228,8 @@ import UIKit
             lastEvent[id] = Date()
             if reduceMotion { blink(pose) } else {
                 hop(pose, height: 1)
-                pose.left = "ring"; pose.right = "ring"
-                after(0.9) { pose.left = nil; pose.right = nil }
+                pose.wear(.noticed)
+                after(0.9) { pose.wear(nil) }
             }
         }
         let now = Date()
@@ -240,20 +238,35 @@ import UIKit
         BotHaptics.shared.play(botID: botID)
     }
 
+    /// Tapped: it looks up at you with a small hop, then settles. Under
+    /// reduce motion only the look changes.
+    func tapped(_ id: String) {
+        guard let pose = poses[id], onScreen.contains(id) else { return }
+        lastEvent[id] = Date()
+        withAnimation(.spring(response: 0.25, dampingFraction: 0.65)) {
+            pose.wear(.noticed)
+            pose.gaze = CGSize(width: 0, height: -0.07)
+        }
+        if !reduceMotion { hop(pose, height: 0.4) }
+        after(0.9) {
+            withAnimation(.spring(response: 0.45, dampingFraction: 0.8)) { pose.wear(nil); pose.gaze = .zero }
+        }
+    }
+
     /// A thread just marked done: the face squints happily as the check
     /// pops on, hops as it lands, and bounces higher on a streak.
     func cheer(_ id: String, level: Int) {
         let pose = pose(id)
         lastEvent[id] = Date().addingTimeInterval(5)
         withAnimation(.spring(response: 0.2, dampingFraction: 0.6)) {
-            pose.left = "caret"; pose.right = "caret"; pose.gaze = .zero; pose.squash = 1
+            pose.wear(.nailedIt); pose.gaze = .zero; pose.squash = 1
         }
         if !reduceMotion {
             after(DoneMoments.landsAt - 0.08) { self.hop(pose, height: 1.25 + 0.3 * CGFloat(level)) }
             if level >= 2 { after(DoneMoments.landsAt + 0.62) { self.hop(pose, height: 0.5) } }
         }
         after(1.45) {
-            withAnimation(.spring(response: 0.4, dampingFraction: 0.8)) { pose.left = nil; pose.right = nil }
+            withAnimation(.spring(response: 0.4, dampingFraction: 0.8)) { pose.wear(nil) }
         }
     }
 
@@ -261,8 +274,8 @@ import UIKit
 
     private func sleep(_ pose: ListFacePose) {
         pose.asleep = true
-        pose.left = "dash"; pose.right = "dash"
-        pose.squash = 0.55
+        pose.wear(.asleep, accent: true)
+        pose.squash = 1
         pose.gaze = CGSize(width: 0, height: 0.05)
     }
 
@@ -296,32 +309,32 @@ import UIKit
                     pose.stretch += 1
                     self.after(0.7) {
                         withAnimation(.spring(response: 0.35, dampingFraction: 0.6)) {
-                            pose.asleep = false; pose.left = "ring"; pose.right = "ring"; pose.squash = 1; pose.gaze = .zero
+                            pose.asleep = false; pose.wear(.yawn); pose.squash = 1; pose.gaze = .zero
                         }
-                        self.after(0.6) { withAnimation(.easeOut(duration: 0.25)) { pose.left = nil; pose.right = nil } }
+                        self.after(0.6) { withAnimation(.easeOut(duration: 0.25)) { pose.wear(nil) } }
                     }
                 } else if lateNight {
                     withAnimation(.easeInOut(duration: 0.7)) {
-                        pose.asleep = false; pose.left = "ring"; pose.right = "ring"; pose.squash = 0.5
+                        pose.asleep = false; pose.wear(.waking)
                     }
                     self.after(1.1) {
                         withAnimation(.easeInOut(duration: 0.6)) {
-                            pose.left = nil; pose.right = nil; pose.squash = 0.7; pose.gaze = CGSize(width: 0, height: 0.03)
+                            pose.wear(.drowsy); pose.gaze = CGSize(width: 0, height: 0.03)
                         }
                     }
                 } else {
                     withAnimation(.spring(response: 0.3, dampingFraction: 0.55)) {
-                        pose.asleep = false; pose.left = "ring"; pose.right = "ring"; pose.squash = 1; pose.gaze = .zero
+                        pose.asleep = false; pose.wear(.waking); pose.squash = 1; pose.gaze = .zero
                     }
                     self.hop(pose, height: 0.7)
-                    self.after(0.55) { withAnimation(.easeOut(duration: 0.25)) { pose.left = nil; pose.right = nil } }
+                    self.after(0.55) { withAnimation(.easeOut(duration: 0.25)) { pose.wear(nil) } }
                 }
             }
         }
     }
 
     private func wakeQuietly(_ pose: ListFacePose) {
-        pose.asleep = false; pose.left = nil; pose.right = nil; pose.squash = 1; pose.gaze = .zero
+        pose.asleep = false; pose.wear(nil); pose.squash = 1; pose.gaze = .zero
     }
 
     private func after(_ seconds: Double, _ work: @escaping @MainActor () -> Void) {
@@ -352,7 +365,12 @@ struct ListFace: View {
     let size: CGFloat
     var state: MausState = .idle
     let pose: ListFacePose
-    var proud = false
+    /// Nothing from it for a long while: heavy eyes until something happens.
+    var drowsy = false
+
+    /// How long a quiet bot waits before its eyes get heavy in the list
+    /// (the desktop sidebar's long-idle drowsy, about 20 minutes).
+    static let drowsyAfter: TimeInterval = 20 * 60
 
     @EnvironmentObject private var session: Session
     @Environment(\.colorScheme) private var scheme
@@ -367,11 +385,12 @@ struct ListFace: View {
     var body: some View {
         var look = pose.look
         // a turn that just finished plays its finish beat, like everywhere else
-        if finishing, look.left == nil { look = GlyphLook(left: "gt", right: "lt", accent: "spark", anchor: .split, eyeShift: look.eyeShift, eyeSquash: look.eyeSquash) }
-        else if proud, look.left == nil { look = GlyphLook(left: "gt", right: "lt", accent: "spark", anchor: .topRight, eyeShift: look.eyeShift, eyeSquash: look.eyeSquash) }
+        if finishing, look.face == nil { look.face = .finished; look.hidesAccent = false }
+        else if drowsy, look.face == nil, state == .idle { look.face = .drowsy }
         return PosedGlyphFace(color: bot.color, bodyId: bot.mascotBody, eyeStyle: MascotEyeStyle(stored: bot.mascotEyes),
                               state: state.glyphState, look: look, scheme: scheme, size: size,
-                              gazeX: look.eyeShift.width, gazeY: look.eyeShift.height, squash: look.eyeSquash)
+                              gazeX: look.eyeShift.width, gazeY: look.eyeShift.height, squash: look.eyeSquash,
+                              accessories: bot.mascotAccessories)
             .frame(width: size, height: size)
             .accessibilityHidden(true)
             .task(id: completedTurnID) {
@@ -396,6 +415,7 @@ private struct PosedGlyphFace: View, Animatable {
     var gazeX: CGFloat
     var gazeY: CGFloat
     var squash: CGFloat
+    var accessories: MascotAccessories? = nil
 
     var animatableData: AnimatablePair<CGFloat, AnimatablePair<CGFloat, CGFloat>> {
         get { AnimatablePair(gazeX, AnimatablePair(gazeY, squash)) }
@@ -407,23 +427,27 @@ private struct PosedGlyphFace: View, Animatable {
         look.eyeShift = CGSize(width: gazeX, height: gazeY)
         look.eyeSquash = max(0.08, squash)
         let color = color, bodyId = bodyId, state = state, scheme = scheme, eyeStyle = eyeStyle
-        let gx = gazeX, gy = gazeY, open = squash
+        let gx = gazeX, gy = gazeY, open = squash, accessories = accessories
         return Canvas { context, canvas in
             let slot = CGRect(x: canvas.width / 4, y: canvas.height / 4, width: canvas.width / 2, height: canvas.height / 2)
             if eyeStyle == .glyph {
                 GlyphMark.draw(in: &context, slot: slot, color: color, bodyId: bodyId, state: state,
-                               scheme: scheme, look: look)
+                               scheme: scheme, look: look, accessories: accessories)
             } else {
                 // the classic eye shapes: the same body, eyes that open and look
                 let body = FlatMascotBodies.body(bodyId)
                 context.translateBy(x: slot.minX, y: slot.minY)
                 context.scaleBy(x: slot.width / 100, y: slot.height / 100)
                 context.fill(Path(FlatMascotBodies.outline(bodyId)), with: .color(MausPalette.color(color)))
+                var worn = context
                 context.translateBy(x: body.faceX * 0.5 + gx * 100, y: body.faceY + gy * 100)
-                let closed = look.left == "caret" || look.left == "gt"
+                let closed = ["arc", "gt", "lid", "caret"].contains(look.resolve(state).left.first?.glyph ?? "")
                 for path in eyeStyle.paths(openness: Double(closed ? 0.3 : open)) {
                     context.fill(Path(path), with: .color(Color(hex: "#151515")))
                 }
+                MascotAccessoryArt.draw(accessories, in: &worn, box: CGRect(x: 0, y: 0, width: 100, height: 100),
+                                        bodyId: bodyId, color: color,
+                                        face: .classic(centre: CGPoint(x: 53.25 + body.faceX * 0.5 + gx * 100, y: 45 + body.faceY + gy * 100)))
             }
         }
         .frame(width: size * 2, height: size * 2)
@@ -536,6 +560,21 @@ struct ListFaceMotion: ViewModifier {
     }
 }
 
+/// The chats on screen right now, so the roster can leave an empty seat:
+/// a bot whose chat is open is the face in that chat (3.0 one face on
+/// screen), and its row keeps only a faint ring in its colour. Counted, so
+/// the same chat open in two panes stays out until both close.
+@MainActor @Observable final class OpenChats {
+    static let shared = OpenChats()
+    private(set) var counts: [String: Int] = [:]
+    func open(_ id: String) { counts[id, default: 0] += 1 }
+    func close(_ id: String) {
+        guard let count = counts[id] else { return }
+        counts[id] = count > 1 ? count - 1 : nil
+    }
+    func contains(_ id: String) -> Bool { counts[id] != nil }
+}
+
 /// A roster avatar the director can pose: an idle mascot gets the moving
 /// face, anything else (a photo, a room, a bot at work with its own live
 /// face) keeps its usual avatar and only moves as a whole.
@@ -573,13 +612,21 @@ struct LiveChatAvatar: View {
                 }
             }
             .animation(reduceMotion ? nil : .spring(response: 0.32, dampingFraction: 0.86), value: checking)
+            .animation(.easeOut(duration: 0.25), value: OpenChats.shared.contains(chat.id))
             .accessibilityElement(children: .ignore)
             .accessibilityLabel(chat.name)
             .accessibilityValue(checking ? "Checking connection" : state == .sleeping ? "Asleep" : "Awake")
     }
 
     @ViewBuilder private var face: some View {
-        if checking {
+        if case .bot = chat, OpenChats.shared.contains(chat.id) {
+            // stepped out into its open chat: an empty seat
+            Circle()
+                .stroke(MausPalette.color(chat.color).opacity(0.45), lineWidth: 2)
+                .frame(width: size * 0.84, height: size * 0.84)
+                .frame(width: size, height: size)
+                .transition(.opacity)
+        } else if checking {
             // A neutral squint and a separate ring mean checking, not work
             // and not asleep. Freeze idle poses until the result lands.
             ChatAvatarView(chat: chat, size: size, state: .drowsy, animated: false)
@@ -588,12 +635,15 @@ struct LiveChatAvatar: View {
             Group {
                 if !state.showsActivity && ListFace.drawsMascot(bot) {
                     ListFace(bot: bot, size: size, state: state, pose: pose,
-                             proud: director.isProud(chat, lastActivity: at))
+                             drowsy: at > 0 && Date().timeIntervalSince1970 - at / 1000 > ListFace.drowsyAfter)
                 } else {
                     ChatAvatarView(chat: chat, size: size, state: state, animated: animated)
                 }
             }
             .modifier(ListFaceMotion(pose: pose))
+            // no tap gesture here: inside a Button it swallows the tap, so a
+            // tapped face hopped and the chat never opened. The row and pinned
+            // buttons call director.tapped themselves before opening.
             .onAppear { director.appear(chat.id) }
             .onDisappear { director.disappear(chat.id) }
         } else {

@@ -27,6 +27,27 @@ describe("inbox", () => {
     expect(inboxItemFor(thread({ waiting: true }))).toMatchObject({ kind: "waiting-on-you", preview: "Waiting on you", at: now - 5_000 });
   });
 
+  it("v3: an open connect card is a question row, settled only in the card; flag off it is nothing", () => {
+    const connect = (extra: Partial<NonNullable<NeedsMeMessage["connector"]>> = {}) =>
+      msg({ at: now - 50, kind: "connector", connector: { slug: "gmail", label: "Gmail", status: "required", ...extra } });
+    expect(inboxItemFor(thread({ messages: [connect()] }))).toBeNull();
+    const row = inboxItemFor(thread({ connectCards: true, messages: [connect()] }));
+    expect(row).toMatchObject({ id: "question:t1", kind: "question", preview: "Connect Gmail", at: now - 50, connect: { slug: "gmail", label: "Gmail" } });
+    expect(row && inboxItemClearable(row)).toBe(true);
+    expect(inboxItemFor(thread({ connectCards: true, messages: [connect({ reconnect: true, status: "failed" })] })))
+      .toMatchObject({ preview: "Sign in to Gmail again", connect: { reconnect: true } });
+    for (const done of [{ status: "connected" as const }, { dismissed: true }, { resumed: true }]) {
+      expect(inboxItemFor(thread({ connectCards: true, messages: [connect(done)] }))).toBeNull();
+    }
+    // a plain card still wins, and a running turn's connect card still waits on the person
+    expect(inboxItemFor(thread({ connectCards: true, messages: [connect(), card(now)] }))).toMatchObject({ preview: "Pick one — A or B" });
+    expect(inboxItemFor(thread({ connectCards: true, working: true, messages: [connect()] }))).toMatchObject({ connect: { slug: "gmail" } });
+    // a newer failed run outranks it; it outranks a plain unread reply
+    const failed = msg({ at: now - 10, role: "bot", turnTerminal: true, turnOutcome: { ok: false, stopReason: "boom" } });
+    expect(inboxItemFor(thread({ connectCards: true, messages: [connect(), failed] }))).toMatchObject({ kind: "failed" });
+    expect(inboxItemFor(thread({ connectCards: true, unread: true, messages: [connect()] }))).toMatchObject({ connect: { slug: "gmail" } });
+  });
+
   it("answered and dismissed cards are not questions", () => {
     expect(inboxItemFor(thread({ messages: [card(now, { answered: "A" })] }))).toBeNull();
     expect(inboxItemFor(thread({ messages: [card(now, { dismissed: true })] }))).toBeNull();

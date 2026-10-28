@@ -38,6 +38,12 @@ import { WindowCaptionButtons } from "@/components/WindowCaptionButtons";
 import { RoutinesPage } from "@/components/RoutinesPage";
 import { NoEngines } from "@/components/NoEngines";
 import { CommandPalette } from "@/components/CommandPalette";
+import { HomeBoard } from "@/components/HomeBoard";
+import { useV3, v3Enabled } from "@/lib/v3";
+import { NodHost } from "@/components/v3/Teach";
+import { UndoToastHost } from "@/components/v3/UndoToast";
+import { navigationKey, setHomeOpen, useHomeOpen } from "@/lib/v3-home";
+import { firstVisit } from "@/lib/v3-faststart";
 import { KeyboardShortcutsModal } from "@/components/KeyboardShortcutsModal";
 import { LocalVmWorkspace } from "@/components/LocalVmWorkspace";
 import { TeamMapPage } from "@/components/TeamMapPage";
@@ -46,14 +52,13 @@ import { setLocale, t } from "@/lib/i18n";
 import { shouldOpenKeyboardShortcuts } from "@/lib/keyboard-shortcuts";
 import { readThreadPins, stepThread } from "@/components/CompactBotThreads";
 import { NotchFeed } from "@/notch/NotchFeed";
+import { unreadBadgeCount } from "@/lib/unread-badge";
 
 function Shell() {
   const { state, dispatch } = useStore();
   const { capabilities } = useDesktopCapabilities();
-  const unreadCount =
-    state.bots.filter((bot) => !bot.hidden && bot.unread).length +
-    // a muted room keeps its sidebar dot but stays off the Dock badge (B18)
-    state.groups.filter((group) => group.unread && group.notifications !== "muted").length;
+  // muted rooms (B18) and muted bots keep their sidebar dot, off the Dock badge
+  const unreadCount = unreadBadgeCount(state.bots, state.groups);
   const remoteClient = window.ogb?.remoteClient?.active === true;
   useEffect(() => {
     if (!window.ogb?.environments) return;
@@ -98,6 +103,27 @@ function Shell() {
   const group = state.groups.find((g) => g.id === state.selectedId);
   const bot = group ? undefined : (state.bots.find((b) => b.id === state.selectedId) ?? state.bots[0]);
   const calendarFocus = state.activeView === "routines";
+  // 3.0: the home board stands in for the chat until the person goes
+  // somewhere. The first place after the roster loads is where the app
+  // opened, not a navigation, so it sets the baseline instead of closing.
+  const v3 = useV3();
+  const homeIsOpen = useHomeOpen();
+  const navKey = navigationKey({ activeView: state.activeView, selectedId: state.selectedId, threadId: bot?.threadId, sharedRoomId: state.selectedSharedRoomId });
+  const navBaseline = useRef<string | null>(null);
+  useEffect(() => {
+    if (!v3 || !state.rosterLoaded) return;
+    if (navBaseline.current !== null && navBaseline.current !== navKey) setHomeOpen(false);
+    navBaseline.current = navKey;
+  }, [v3, state.rosterLoaded, navKey]);
+  // The web's first visit lands in bos's chat, not an empty board: the
+  // 60-second start and a ready composer wait there. Once, so "today" still opens.
+  const webFirstVisit = v3 && !window.ogb && state.rosterLoaded && Boolean(bot) && firstVisit(true, state.config, bot?.threadId, bot?.messages ?? []);
+  const landedFirstVisit = useRef(false);
+  useEffect(() => {
+    if (!webFirstVisit || landedFirstVisit.current) return;
+    landedFirstVisit.current = true;
+    setHomeOpen(false);
+  }, [webFirstVisit]);
 
   // Nothing on this machine can run a bot. A missing cloud login does not
   // count — that CLI can still host a local model. Wait for the first
@@ -310,6 +336,8 @@ function Shell() {
         />
       ) : noEngines ? (
         <NoEngines />
+      ) : v3 && homeIsOpen && (bot || group) ? (
+        <HomeBoard />
       ) : group ? (
         <SplitWorkspace><GroupView key={group.id} group={group} /></SplitWorkspace>
       ) : bot ? (
@@ -421,6 +449,14 @@ function WelcomeGate() {
   const chatStarting = useRef(false);
   const latest = useRef(state);
   latest.current = state;
+  const pendingOpen = useRef<{ botId: string; threadId: string } | null>(null);
+  useEffect(() => {
+    const target = pendingOpen.current;
+    if (!target || !state.bots.some((bot) => bot.id === target.botId)) return;
+    pendingOpen.current = null;
+    openThread(dispatch, target, state);
+    setHomeOpen(false);
+  }, [state, dispatch]);
   const chatFirstRun = due && !marketerOpen && !state.welcomeOpen && !chatFailed;
   useEffect(() => {
     if (!chatFirstRun || chatStarting.current) return;
@@ -432,7 +468,13 @@ function WelcomeGate() {
         dispatch({ type: "configStatus", config });
         setDismissed(true);
         const now = latest.current;
-        if (now.bots.some((bot) => bot.id === chat.botId)) openThread(dispatch, { botId: chat.botId, threadId: chat.threadId }, now);
+        if (now.bots.some((bot) => bot.id === chat.botId)) {
+          openThread(dispatch, { botId: chat.botId, threadId: chat.threadId }, now);
+          // 3.0: the greeting is the first screen, not the home board behind it
+          if (v3Enabled()) setHomeOpen(false);
+        }
+        // 3.0: a fresh workspace often has no roster yet; open the greeting once it lands
+        else if (v3Enabled()) pendingOpen.current = { botId: chat.botId, threadId: chat.threadId };
       } catch {
         setChatFailed(true);
       } finally {
@@ -462,6 +504,12 @@ function WelcomeGate() {
   }} />;
 }
 
+/** 3.0 only: the first-time nods (v3/Teach). */
+function V3NodHost() {
+  const v3 = useV3();
+  return v3 ? <><NodHost /><UndoToastHost /></> : null;
+}
+
 function Application() {
   useEffect(() => {
     initAnalytics();
@@ -479,6 +527,7 @@ function Application() {
         <WelcomeGate />
         <GuidedTour />
         <FirstConversationTour />
+        <V3NodHost />
         <HostedNextStep />
         <WebPushHost />
       </StoreProvider>

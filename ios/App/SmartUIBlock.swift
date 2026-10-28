@@ -48,6 +48,12 @@ private struct SmartUIActionsKey: EnvironmentKey {
     static let defaultValue: SmartUIActions? = nil
 }
 
+/// bos bot 3.0 is on (the mac's features.v3 mirror): blocks get the
+/// desktop's card polish. Cards draw either way.
+private struct SmartUIV3Key: EnvironmentKey {
+    static let defaultValue = false
+}
+
 extension EnvironmentValues {
     var smartUIThread: SmartUIThread? {
         get { self[SmartUIThreadKey.self] }
@@ -57,6 +63,11 @@ extension EnvironmentValues {
     var smartUIActions: SmartUIActions? {
         get { self[SmartUIActionsKey.self] }
         set { self[SmartUIActionsKey.self] = newValue }
+    }
+
+    var smartUIV3: Bool {
+        get { self[SmartUIV3Key.self] }
+        set { self[SmartUIV3Key.self] = newValue }
     }
 }
 
@@ -103,11 +114,12 @@ struct SmartUIBlock<Fallback: View>: View {
 
     @Environment(\.colorScheme) private var scheme
     @Environment(\.smartUIActions) private var actions
+    @Environment(\.smartUIV3) private var v3
     @Environment(\.openURL) private var openURL
     @State private var height: CGFloat?
     @State private var failed = false
 
-    private var cacheKey: String { "\(scheme == .dark ? "d" : "l")\(language)\(SmartUI.stableHash(code))" }
+    private var cacheKey: String { "\(scheme == .dark ? "d" : "l")\(v3 ? "3" : "")\(language)\(SmartUI.stableHash(code))" }
 
     var body: some View {
         if failed || SmartUI.page == nil {
@@ -139,6 +151,8 @@ struct SmartUIBlock<Fallback: View>: View {
             "streaming": streaming,
             "theme": scheme == .dark ? "dark" : "light",
             "states": states,
+            "cards": true,
+            "v3": v3,
         ]
     }
 

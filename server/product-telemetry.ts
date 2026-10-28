@@ -10,6 +10,8 @@ const ONCE = new Set(["install", "first_bot", "first_message", "first_job_done"]
 export class ProductTelemetry {
   private queue: ProductEvent[] = [];
   private seen = new Set<string>();
+  /** when this install's first event was queued; time to first message runs from here */
+  private installedAt?: number;
   private loaded = false;
   private stopped = false;
   private flushing?: Promise<void>;
@@ -33,6 +35,7 @@ export class ProductTelemetry {
     try {
       const state = JSON.parse(readFileSync(join(this.options.dataDir, "product-events.json"), "utf8"));
       this.seen = new Set(Array.isArray(state.seen) ? state.seen.filter((name: unknown) => typeof name === "string" && ONCE.has(name)) : []);
+      if (Number.isSafeInteger(state.installedAt) && state.installedAt > 0) this.installedAt = state.installedAt;
       this.queue = Array.isArray(state.queue) ? state.queue.slice(-500).flatMap((event: ProductEvent) => {
         const clean = productEvent(event?.name, event?.props, Date.parse(event?.at)); return clean ? [clean] : [];
       }) : [];
@@ -42,16 +45,23 @@ export class ProductTelemetry {
     try {
       mkdirSync(this.options.dataDir, { recursive: true, mode: 0o700 });
       const file = join(this.options.dataDir, "product-events.json");
-      writeFileSync(`${file}.tmp`, JSON.stringify({ seen: [...this.seen], queue: this.queue }), { mode: 0o600 }); renameSync(`${file}.tmp`, file);
+      writeFileSync(`${file}.tmp`, JSON.stringify({ seen: [...this.seen], queue: this.queue, ...(this.installedAt ? { installedAt: this.installedAt } : {}) }), { mode: 0o600 }); renameSync(`${file}.tmp`, file);
       return true;
     } catch { return false; }
   }
   track(name: string, props?: Record<string, unknown>): boolean {
     if (!this.enabled() || !this.installId()) return false;
-    const event = productEvent(name, props, (this.options.now ?? Date.now)());
-    if (!event) return false;
+    const now = (this.options.now ?? Date.now)();
     this.load();
     if (ONCE.has(name) && this.seen.has(name)) return false;
+    // 3.0 only (the caller passes v3: true), and installs from before this
+    // field never get one: no guessed durations. Clamped to the schema's cap
+    // so a slow first message still reports, as "at least that long".
+    const since = name === "first_message" && props?.v3 === true && this.installedAt && now >= this.installedAt
+      ? { duration_ms: Math.min(now - this.installedAt, 1_000_000_000) } : {};
+    const event = productEvent(name, { ...props, ...since }, now);
+    if (!event) return false;
+    if (name === "install") this.installedAt = now;
     if (ONCE.has(name)) this.seen.add(name);
     if (this.queue.length >= 500) this.queue.shift();
     this.queue.push(event);

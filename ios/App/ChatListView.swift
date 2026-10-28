@@ -29,6 +29,9 @@ struct ChatListView: View {
     @State private var searching = false
     @State private var searchOpen = false
     @State private var showingUpdates = false
+    @State private var showingApps = false
+    @State private var showingNotifications = false
+    @State private var showingToday = false
     @State private var showingWalkie = false
     @State private var showingNewGroup = false
     @State private var showingNewBot = false
@@ -115,6 +118,8 @@ struct ChatListView: View {
                     session.consumeNotificationChat()
                 }
             }
+            // `-open-app a-…`: devicectl's check that an app opens on a real phone
+            .task { if MiniAppProbe.appId != nil { showingApps = true } }
 #if DEBUG
             // Preview-only routes let the screenshot harness reach screens
             // that normally require a paired computer and a tap.
@@ -127,6 +132,12 @@ struct ChatListView: View {
                 }
                 if ProcessInfo.processInfo.arguments.contains("-open-walkie") {
                     showingWalkie = true
+                }
+                if ProcessInfo.processInfo.arguments.contains("-open-today") {
+                    showingToday = true
+                }
+                if ProcessInfo.processInfo.arguments.contains("-open-notifications") {
+                    showingNotifications = true
                 }
                 if ProcessInfo.processInfo.arguments.contains("-open-first"),
                    path.isEmpty, let first = chats.first {
@@ -146,6 +157,21 @@ struct ChatListView: View {
                 if Autopilot.scenario == "switch" { Task { await runSwitchAutopilot() } }
             }
 #endif
+            .fullScreenCover(isPresented: $showingApps) {
+                AppsView().session(session)
+            }
+            .sheet(isPresented: $showingNotifications) {
+                NotificationsView { chat in
+                    showingNotifications = false
+                    open(chat)
+                }
+            }
+            .sheet(isPresented: $showingToday) {
+                TodayView { chat in
+                    showingToday = false
+                    open(chat)
+                }
+            }
             .sheet(isPresented: $showingUpdates) {
                 UpdatesSheet { chat in
                     showingUpdates = false
@@ -434,6 +460,7 @@ struct ChatListView: View {
                 // this computer's stream only (they cost 4–14s on the hosted
                 // tunnel when the pull waited on them).
                 Task { await refreshShared() }
+                Task { await session.loadCheckins() }
                 await session.refreshHomes()
 #if DEBUG
                 PerfProbe.mark("homes.done")
@@ -446,6 +473,9 @@ struct ChatListView: View {
             .onAppear { listFaces.setListVisible(true) }
             .onDisappear { listFaces.setListVisible(false) }
             .onChange(of: scenePhase, initial: true) { _, phase in listFaces.setScene(phase) }
+            .task(id: "\(session.state.v3)-\(scenePhase == .active)") {
+                if scenePhase == .active { await session.loadCheckins() }
+            }
             .onChange(of: reduceMotion, initial: true) { _, reduce in listFaces.reduceMotion = reduce }
             .onChange(of: rosterFaceOrder, initial: true) { _, ids in listFaces.setOrder(ids) }
             .onChange(of: workingBotIDs, initial: true) { _, ids in listFaces.setWorkers(ids) }
@@ -520,6 +550,44 @@ struct ChatListView: View {
     /// The paired computer's profile on the left, one settings action on the
     /// right, and where you are in between. The avatar is identity, not a
     /// second hidden route to the same screen.
+    /// Unread across every paired computer: what the app badge counts.
+    private var unreadTotal: Int {
+        session.state.unreadCount + session.satellites.reduce(0) { $0 + $1.state.unreadCount }
+    }
+
+    /// Notifications, Today and Apps behind one ⋯, rightmost in the header.
+    /// A system menu, so on iOS 26 it opens as Liquid Glass.
+    private var moreMenu: some View {
+        Menu {
+            Button { Haptics.selection(); showingNotifications = true } label: {
+                Label(unreadTotal > 0 ? "Notifications (\(unreadTotal))" : "Notifications", systemImage: "bell")
+            }
+            .accessibilityIdentifier("chat-list-notifications")
+            Button { Haptics.selection(); showingToday = true } label: {
+                Label("Today", systemImage: "sun.max")
+            }
+            .accessibilityIdentifier("chat-list-today")
+            Button { Haptics.selection(); showingApps = true } label: {
+                Label("Apps", systemImage: "square.grid.2x2")
+            }
+            .accessibilityIdentifier("chat-list-apps")
+        } label: {
+            Image(systemName: "ellipsis")
+                .font(.system(size: 20, weight: .semibold))
+                .foregroundStyle(Color.primary)
+                .frame(width: 48, height: 48)
+                .contentShape(Circle())
+                .overlay(alignment: .topTrailing) {
+                    if unreadTotal > 0 {
+                        Circle().fill(Color.red).frame(width: 9, height: 9).offset(x: -9, y: 9)
+                    }
+                }
+        }
+        .buttonStyle(.plain)
+        .glassCapsule()
+        .accessibilityLabel("More")
+    }
+
     private var header: some View {
         HStack {
             Button { showingProfile = true } label: { personalAvatarView }
@@ -546,6 +614,7 @@ struct ChatListView: View {
                 GlassButton(systemImage: "plus", size: 48, weight: .medium, action: openNewGroup)
                     .accessibilityLabel("New group")
             }
+            moreMenu
         }
         .padding(.horizontal, 20).padding(.top, 8).padding(.bottom, 20)
         .sheet(isPresented: $showingProfile) {
@@ -566,6 +635,15 @@ struct ChatListView: View {
                         }
                     } footer: {
                         Text("Changes the owner photo on \(session.connection?.name ?? "this computer") only.")
+                    }
+                    if unreadTotal > 0 {
+                        Section {
+                            Button("Mark all as read", systemImage: "checkmark.circle") {
+                                Task { await session.markAllRead(); Haptics.success() }
+                            }
+                        } footer: {
+                            Text("Clears \(unreadTotal) unread and the app badge.")
+                        }
                     }
                     Section {
                         NavigationLink("Settings & computers") { SettingsView() }
@@ -745,6 +823,12 @@ struct ChatListView: View {
 
     @ViewBuilder
     private var rosterSections: some View {
+        if session.state.v3, let checkins = session.checkins, checkins.setUp == false || !checkins.items.isEmpty || checkins.counts.done > 0 {
+            TodayCard(snapshot: checkins)
+                .padding(.horizontal, 16)
+                .padding(.top, 10)
+        }
+
         if !attention.isEmpty {
             sectionLabel(Text("Needs attention"))
                 .padding(.top, 10)
@@ -877,7 +961,7 @@ struct ChatListView: View {
     }
 
     private var pinnedConversations: [ConversationEntry] {
-        let byID = Dictionary(uniqueKeysWithValues: orderedConversations.map { ($0.id, $0) })
+        let byID = Dictionary(orderedConversations.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         return pinnedChats.visibleIDs(available: Set(byID.keys)).compactMap { byID[$0] }
     }
 
@@ -893,48 +977,95 @@ struct ChatListView: View {
     }
 
     private var pinnedConversationGrid: some View {
-        LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: min(3, pinnedConversations.count)), spacing: 20) {
+        let waiting = waitingChats
+        return LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: min(3, pinnedConversations.count)), spacing: 20) {
             ForEach(pinnedConversations) { entry in
-                Button { openConversation(entry) } label: {
-                    VStack(spacing: 7) {
-                        ZStack(alignment: .topTrailing) {
-                            pinnedAvatar(entry).frame(width: 82, height: 82)
-                            if let worker = pinnedWorker(entry) {
-                                // a room's photo can't move, so the member
-                                // working in it wears the live face instead
-                                BotAvatarView(bot: worker.bot, size: 30, state: worker.face, animated: true)
-                                    .padding(2).background(.background, in: Circle())
-                            } else if conversationBusy(entry), !pinnedAnimates(entry) {
-                                ProgressView().controlSize(.small)
-                                    .padding(5).background(.background, in: Circle())
-                            } else if conversationUnread(entry) {
-                                Circle().fill(Color.accentColor).frame(width: 11, height: 11)
-                                    .overlay(Circle().stroke(.background, lineWidth: 2))
-                            }
-                        }
-                        Text(conversationName(entry)).font(.subheadline).foregroundStyle(.primary)
+                let busy = conversationBusy(entry)
+                let unread = conversationUnread(entry)
+                let needsYou = pinnedNeedsYou(entry, waiting: waiting)
+                Button {
+                    Haptics.selection()
+                    if let (summary, _) = botEntry(entry) { listFaces.tapped(summary.chat.id) }
+                    openConversation(entry)
+                } label: {
+                    VStack(spacing: 6) {
+                        pinnedAvatar(entry)
+                            .frame(width: 82, height: 82)
+                            .overlay { pinnedBadge(entry, busy: busy, unread: unread) }
+                        Text(conversationName(entry))
+                            .font(.subheadline.weight(unread || needsYou ? .semibold : .regular))
+                            .foregroundStyle(.primary)
                             .lineLimit(2).multilineTextAlignment(.center)
+                        pinnedStatus(entry, busy: busy, needsYou: needsYou)
                     }
                     .frame(maxWidth: .infinity, minHeight: 118, alignment: .top)
                     .contentShape(Rectangle())
                 }
-                .buttonStyle(.plain)
-                .accessibilityLabel("\(conversationName(entry)), pinned chat\(conversationBusy(entry) ? ", working" : conversationUnread(entry) ? ", unread" : "")")
+                .buttonStyle(PinnedPressStyle())
+                .accessibilityLabel("\(conversationName(entry)), pinned chat\(needsYou ? ", waiting on you" : busy ? ", working" : unread ? ", unread" : "")")
                 .contextMenu {
                     if let (summary, home) = botEntry(entry) { threadMenu(summary.chat, in: home) }
                     pinButton(entry)
                     if let (summary, _) = botEntry(entry) { OpenBesideButton(chat: homeChat(summary.chat)) }
                     if pinnedChats.ids.first != entry.id {
                         Button("Move to front", systemImage: "arrow.up.to.line") {
-                            pinnedChats.moveToFront(entry.id)
+                            withAnimation(.smooth(duration: 0.3)) { pinnedChats.moveToFront(entry.id) }
                             pinnedChats.save(scope: session.connection?.id ?? "")
                         }
                     }
                 }
+                .transition(.scale(scale: 0.8).combined(with: .opacity))
             }
         }
         .padding(.horizontal, 24).padding(.top, 20).padding(.bottom, 6)
+        .animation(.smooth(duration: 0.3), value: pinnedChats.ids)
         .accessibilityIdentifier("pinned-chats")
+    }
+
+    /// Sits on the face's rim at one o'clock, not out in the frame's corner.
+    @ViewBuilder private func pinnedBadge(_ entry: ConversationEntry, busy: Bool, unread: Bool) -> some View {
+        let rim = CGPoint(x: 41 + 41 * 0.7071, y: 41 - 41 * 0.7071)
+        Group {
+            if let worker = pinnedWorker(entry) {
+                // a room's photo can't move, so the member
+                // working in it wears the live face instead
+                BotAvatarView(bot: worker.bot, size: 30, state: worker.face, animated: true)
+                    .padding(2).background(.background, in: Circle())
+            } else if busy, !pinnedAnimates(entry) {
+                ProgressView().controlSize(.small)
+                    .padding(5).background(.background, in: Circle())
+            } else if unread {
+                Circle().fill(pinnedColor(entry)).frame(width: 13, height: 13)
+                    .overlay(Circle().stroke(.background, lineWidth: 2.5))
+                    .transition(.scale.combined(with: .opacity))
+            }
+        }
+        .position(rim)
+        .animation(.spring(response: 0.3, dampingFraction: 0.7), value: unread)
+        .allowsHitTesting(false)
+    }
+
+    /// One short line under the name, only when there is something to say.
+    @ViewBuilder private func pinnedStatus(_ entry: ConversationEntry, busy: Bool, needsYou: Bool) -> some View {
+        if needsYou {
+            Label("needs you", systemImage: "hand.raised.fill")
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(.white)
+                .padding(.horizontal, 7).padding(.vertical, 2)
+                .background(Capsule().fill(pinnedColor(entry)))
+        } else if busy {
+            Text("working…").font(.caption).foregroundStyle(.secondary)
+        }
+    }
+
+    private func pinnedNeedsYou(_ entry: ConversationEntry, waiting: Set<String>) -> Bool {
+        if case let .local(summary) = entry { return waiting.contains(summary.chat.id) }
+        return false
+    }
+
+    private func pinnedColor(_ entry: ConversationEntry) -> Color {
+        if let (summary, _) = botEntry(entry), case .bot = summary.chat { return MausPalette.color(summary.chat.color) }
+        return .accentColor
     }
 
     @ViewBuilder private func pinnedAvatar(_ entry: ConversationEntry) -> some View {
@@ -1245,7 +1376,10 @@ struct ChatListView: View {
 
     private func botRow(_ summary: ChatSummary, in home: Session? = nil, waiting: Bool, last: Bool) -> some View {
         let owner = home ?? session
-        return Button { open(homeChat(summary.chat)) } label: {
+        return Button {
+            listFaces.tapped(summary.chat.id)
+            open(homeChat(summary.chat))
+        } label: {
             ChatRow(
                 chat: summary.chat,
                 preview: summary.chat.busy ? String(localized: "Working…") : summary.preview,
@@ -1761,6 +1895,13 @@ struct ChatRow: View {
                             .foregroundStyle(Color.primary)
                             .lineLimit(1)
                             .layoutPriority(1)
+
+                        if chat.muted {
+                            Image(systemName: "bell.slash")
+                                .font(.caption)
+                                .foregroundStyle(Color.secondary)
+                                .accessibilityLabel("Muted")
+                        }
 
                         if let home {
                             Text(home)

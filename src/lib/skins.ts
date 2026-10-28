@@ -40,9 +40,32 @@ export const SKINS: readonly Skin[] = [
   { id: "velvet", name: "Velvet", tagline: "Deep plum with pink accents." },
 ];
 
+/** The skins the picker offers. Glass is a layer over any of them, not a skin. */
+export function pickableSkins(_v3?: boolean): readonly Skin[] {
+  return SKINS;
+}
+
 export const DEFAULT_SKIN: SkinId = "midnight";
 
 const KEY = "omb-skin";
+/** The flat skin someone wore before an early 3.0 build put them in a glass
+ * skin. Read only to migrate those builds' "glass-dark"/"glass-light". */
+const FLAT_KEY = "bos-v3-flat-skin";
+/** Liquid glass under 3.0: "1" on, "0" off. Absent means 3.0 has never run
+ * here, and the first run turns it on over whatever skin is worn. */
+const GLASS_KEY = "bos-glass";
+
+const LIGHT_FLAT: readonly SkinId[] = ["atelier", "lagoon", "linen", "daylight", "blossom"];
+const DARK_FLAT: readonly SkinId[] = ["midnight", "foundry", "graphite", "dusk", "velvet"];
+
+/** An early 3.0 build stored a glass skin. Glass is now a layer, so it
+ * becomes the flat skin worn before it when that one has the same light or
+ * dark, else Midnight or Daylight. */
+export function migrateGlassSkin(legacy: string, stash: string | null | undefined): SkinId {
+  const light = legacy === "glass-light";
+  if (isSkinId(stash) && (light ? LIGHT_FLAT : DARK_FLAT).includes(stash)) return stash;
+  return light ? "daylight" : "midnight";
+}
 
 // The input is whatever localStorage handed back — a string this app wrote
 // on an earlier run, a value edited by hand, or a leftover from a renamed
@@ -65,13 +88,56 @@ function getStore(): Storage | undefined {
   }
 }
 
-export function readSkin(): SkinId {
+/**
+ * The skin to wear. A glass skin left by an early 3.0 build becomes its flat
+ * skin here, once. With v3 on, the first run turns liquid glass on.
+ */
+export function readSkin(v3 = false): SkinId {
   try {
-    const stored = getStore()?.getItem(KEY);
+    const store = getStore();
+    let stored = store?.getItem(KEY);
+    if (stored === "glass-dark" || stored === "glass-light") {
+      stored = migrateGlassSkin(stored, store?.getItem(FLAT_KEY));
+      store?.setItem(KEY, stored);
+    }
+    if (v3 && store && store.getItem(GLASS_KEY) === null) store.setItem(GLASS_KEY, "1");
     return isSkinId(stored) ? stored : DEFAULT_SKIN;
   } catch {
     return DEFAULT_SKIN;
   }
+}
+
+/** Is liquid glass on? Only meaningful while v3 is on; a fresh install
+ * counts as on, since its first 3.0 run puts it there. */
+export function glassOn(): boolean {
+  try {
+    return getStore()?.getItem(GLASS_KEY) !== "0";
+  } catch {
+    return true;
+  }
+}
+
+/** The liquid glass switch: remember it and frost (or unfrost) the skin
+ * being worn. Never changes the skin or v3. */
+export function setGlass(on: boolean): void {
+  try {
+    getStore()?.setItem(GLASS_KEY, on ? "1" : "0");
+  } catch {
+    /* the switch still applies for this session */
+  }
+  applyGlass(on);
+}
+
+/** Stamp glass on the document, over whichever skin is worn. Glass exists
+ * only under v3, so callers pass `v3 && glassOn()`. */
+export function applyGlass(on: boolean): void {
+  if (on) document.documentElement.dataset.liquidGlass = "";
+  else delete document.documentElement.dataset.liquidGlass;
+}
+
+/** A pick from the picker: just the skin. Glass stays as it was. */
+export function pickSkin(id: SkinId): void {
+  applySkin(id);
 }
 
 /**
@@ -94,7 +160,8 @@ export function applySkin(id: SkinId): void {
   try {
     const chrome = id === "sakura"
       ? (window.matchMedia("(prefers-color-scheme: dark)").matches ? "dusk" : "daylight")
-      : id === "blossom" ? "daylight" : id === "velvet" ? "dusk" : id;
+      : id === "blossom" ? "daylight"
+      : id === "velvet" ? "dusk" : id;
     void window.ogb?.applySkin?.(chrome)?.catch(() => undefined);
   } catch {
     /* no bridge */

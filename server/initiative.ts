@@ -117,6 +117,46 @@ export interface NudgeLedger {
   mutedUntil?: number;
   /** ask key → when it was offered */
   offered: Record<string, number>;
+  /** Check-in item kinds the person keeps saying no to. */
+  kinds?: Record<string, KindLedger>;
+  /** When this bot was first offered the daily check-ins, so it is offered once. */
+  checkinOfferedAt?: number;
+}
+
+export interface KindLedger {
+  /** No's since the last yes; a check-in item left untouched counts half. */
+  no: number;
+  mutedUntil?: number;
+}
+
+/** Three no's on one kind of check-in item and the bot stops proposing that
+ * kind for two weeks. A yes clears the count, so it is no's in a row. */
+export const CHECKIN_NO_LIMIT = 3;
+export const CHECKIN_MUTE_MS = 14 * 24 * 60 * 60_000;
+
+export function kindMuted(ledger: NudgeLedger, kind: string, now: number): boolean {
+  const until = ledger.kinds?.[kind]?.mutedUntil;
+  return until != null && now < until;
+}
+
+/** Fold the person's answer to one check-in item into the bot's ledger. */
+export function recordKindAnswer(
+  ledger: NudgeLedger,
+  kind: string,
+  answer: "yes" | "no" | "ignored",
+  now: number,
+): NudgeLedger {
+  const kinds = { ...(ledger.kinds ?? {}) };
+  const current: KindLedger = { ...(kinds[kind] ?? { no: 0 }) };
+  if (current.mutedUntil != null && now >= current.mutedUntil) delete current.mutedUntil;
+  if (answer === "yes") current.no = 0;
+  else current.no += answer === "no" ? 1 : 0.5;
+  if (current.no >= CHECKIN_NO_LIMIT) {
+    current.mutedUntil = now + CHECKIN_MUTE_MS;
+    current.no = 0;
+  }
+  kinds[kind] = current;
+  return { ...ledger, kinds };
 }
 
 export const emptyLedger = (): NudgeLedger => ({ ignored: 0, offered: {} });

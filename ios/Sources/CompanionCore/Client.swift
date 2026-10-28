@@ -1361,6 +1361,91 @@ public struct CompanionClient: Sendable {
         try await send(try makeRequest("GET", "/api/jobs"), as: JobInboxResponse.self)
     }
 
+    /// The owner's check-in list (3.0). Other devices get 403 and show nothing.
+    public func checkins() async throws -> CheckinsSnapshot {
+        try await send(try makeRequest("GET", "/api/checkins"), as: CheckinsSnapshot.self)
+    }
+
+    /// One tap on a check-in item: approve · done · not-now · no. Returns the fresh list.
+    public func checkinAction(id: String, action: String) async throws -> CheckinsSnapshot {
+        let path = "/api/checkins/\(id.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? id)/\(action)"
+        return try await send(try makeRequest("POST", path, body: [:]), as: CheckinActionResponse.self).snapshot
+    }
+
+    /// Turn on the chief's three daily check-ins.
+    public func setupCheckins() async throws -> CheckinsSnapshot {
+        try await send(try makeRequest("POST", "/api/checkins/setup", body: [:]), as: CheckinsSnapshot.self)
+    }
+
+    /// Only the computer's owner, on a computer that holds a bosbot.my data
+    /// token, gets `true`; every other phone and install hides the screen.
+    public func siteDataAvailable() async throws -> Bool {
+        try await send(try makeRequest("GET", "/api/site-data/available"), as: SiteDataAvailability.self).available
+    }
+
+    /// The owner's bosbot.my numbers. The computer asks the site with its own
+    /// token and caches for a minute; `fresh` lets a pull skip that cache.
+    public func siteData(fresh: Bool = false) async throws -> SiteDataResponse {
+        let query = fresh ? [URLQueryItem(name: "fresh", value: "1")] : []
+        return try await send(try makeRequest("GET", "/api/site-data", query: query), as: SiteDataResponse.self)
+    }
+
+    // MARK: - Apps
+
+    /// One bot's apps: the pages it made with app_create and the mini apps installed for it.
+    public func apps(botId: String) async throws -> [AppSummary] {
+        guard Self.validRouteID(botId) else { throw APIError.badURL }
+        return try await send(try makeRequest("GET", "/api/apps", query: [URLQueryItem(name: "botId", value: botId)]),
+                              as: AppList.self, retrySafe: true).apps.compactMap(\.value)
+    }
+
+    /// The pages a bot opened beside one conversation, newest first. Owner only.
+    public func pageTabs(botId: String, threadId: String) async throws -> [PageTab] {
+        guard Self.validRouteID(botId), Self.validRouteID(threadId) else { throw APIError.badURL }
+        return try await send(try makeRequest("GET", "/api/page-tabs", query: [URLQueryItem(name: "botId", value: botId), URLQueryItem(name: "threadId", value: threadId)]),
+                              as: PageTabList.self, retrySafe: true).pages
+    }
+
+    /// One opened page's html, read fresh from the bot's folder.
+    public func pageTab(botId: String, threadId: String, path: String) async throws -> PageTabHTML {
+        guard Self.validRouteID(botId), Self.validRouteID(threadId), !path.isEmpty else { throw APIError.badURL }
+        return try await send(try makeRequest("GET", "/api/page-tabs/page", query: [URLQueryItem(name: "botId", value: botId), URLQueryItem(name: "threadId", value: threadId), URLQueryItem(name: "path", value: path)]),
+                              as: PageTabHTML.self, retrySafe: true)
+    }
+
+    public func appPage(appId: String) async throws -> AppPage {
+        guard MiniApps.validAppId(appId) else { throw APIError.badURL }
+        return try await send(try makeRequest("GET", "/api/apps/\(appId)/page"), as: AppPage.self, retrySafe: true)
+    }
+
+    public func appRecords(appId: String, collection: String) async throws -> [JSONValue] {
+        guard MiniApps.validAppId(appId), MiniApps.validCollection(collection) else { throw APIError.badURL }
+        return try await send(try makeRequest("GET", "/api/apps/\(appId)/data/\(collection)"), as: AppRecords.self, retrySafe: true).records
+    }
+
+    public func appRecord(appId: String, collection: String, id: String) async throws -> JSONValue {
+        guard MiniApps.validAppId(appId), MiniApps.validCollection(collection), MiniApps.validRecordId(id) else { throw APIError.badURL }
+        return try await send(try makeRequest("GET", "/api/apps/\(appId)/data/\(collection)/\(id)"), as: AppOneRecord.self, retrySafe: true).record ?? .null
+    }
+
+    /// One batch of put / patch / delete ops; returns the stored records in op order.
+    public func appWrite(appId: String, ops: [[String: JSONValue]]) async throws -> [JSONValue] {
+        guard MiniApps.validAppId(appId) else { throw APIError.badURL }
+        return try await send(try makeRequest("POST", "/api/apps/\(appId)/data", encodedBody: AppWriteBody(ops: ops)), as: AppRecords.self).records
+    }
+
+    /// Fetches a bosbot.my/a/… link on the computer and says what the app asks for.
+    public func previewAppInstall(url: String) async throws -> InstallPreviewResponse {
+        guard let link = MiniApps.normalizeInstallURL(url) else { throw APIError.status(code: 400, message: "use an https link, like bosbot.my/a/crm") }
+        return try await send(try makeRequest("POST", "/api/apps/install/preview", body: ["url": link]), as: InstallPreviewResponse.self)
+    }
+
+    /// Installs exactly what the preview behind `token` described.
+    public func installApp(token: String, botId: String) async throws -> InstallResult {
+        guard Self.validRouteID(botId) else { throw APIError.badURL }
+        return try await send(try makeRequest("POST", "/api/apps/install", body: ["token": token, "botId": botId]), as: InstallResult.self)
+    }
+
     public func updateStatus() async throws -> UpdateStatusResponse {
         try await send(try makeRequest("GET", "/api/update/status"), as: UpdateStatusResponse.self)
     }
@@ -1977,11 +2062,60 @@ public struct CompanionClient: Sendable {
     /// computer has no xAI key; its message says where to add one.
     /// `callId` stays the same across reconnects so the computer books the
     /// call once.
-    public func voiceCall(botId: String, language: String?, callId: String? = nil) async throws -> VoiceCallStart {
-        var body: [String: Any] = ["botId": botId]
+    /// `prewarm` (v3) mints ahead of a tap without booking the call; the
+    /// socket opening books it with event `start`.
+    public func voiceCall(botId: String, language: String?, callId: String? = nil, prewarm: Bool = false) async throws -> VoiceCallStart {
+        // `v: 3` asks for the v3 plan; an older computer ignores it and
+        // answers v2, which this app still speaks.
+        var body: [String: Any] = ["botId": botId, "v": 3]
         if let language, !language.isEmpty { body["language"] = language }
         if let callId { body["callId"] = callId }
+        if prewarm { body["prewarm"] = true }
         return try await send(try makeRequest("POST", "/api/voice/call", body: body), as: VoiceCallStart.self)
+    }
+
+    /// A counter for the computer's voice card. Fire and forget.
+    public func postVoiceEvent(_ event: VoiceCallEventRequest) async throws {
+        var request = try makeRequest("POST", "/api/voice/call/event", encodedBody: event)
+        request.timeoutInterval = 10
+        _ = try await send(request, as: JSONValue.self)
+    }
+
+    /// Confirmed jobs from a call. Idempotent on jobId, so retried.
+    public func sendVoiceJobs(_ jobs: VoiceJobsRequest) async throws -> VoiceJobsResponse {
+        var request = try makeRequest("POST", "/api/voice/jobs", encodedBody: jobs)
+        request.timeoutInterval = 20
+        return try await send(request, as: VoiceJobsResponse.self, retrySafe: true)
+    }
+
+    /// The owner's "call me back when voice jobs finish" switch. Returns the
+    /// computer's value after the change.
+    public func setVoiceCallBack(_ enabled: Bool) async throws -> Bool {
+        struct Answer: Decodable { var callBack: Bool }
+        var request = try makeRequest("POST", "/api/voice/callback", body: ["enabled": enabled])
+        request.timeoutInterval = 10
+        return try await send(request, as: Answer.self, retrySafe: true).callBack
+    }
+
+    /// The end-of-call screen: cost, credits left, the call's jobs.
+    public func voiceCallSummary(_ request: VoiceCallSummaryRequest) async throws -> VoiceCallSummary {
+        var urlRequest = try makeRequest("POST", "/api/voice/call/summary", encodedBody: request)
+        urlRequest.timeoutInterval = 15
+        return try await send(urlRequest, as: VoiceCallSummary.self, retrySafe: true)
+    }
+
+    /// A fast read tool answered on the call. One attempt, `timeout` seconds.
+    public func voiceTool(_ tool: VoiceToolRequest, timeout: TimeInterval = 8) async throws -> VoiceToolResponse {
+        var request = try makeRequest("POST", "/api/voice/tool", encodedBody: tool)
+        request.timeoutInterval = timeout
+        return try await send(request, as: VoiceToolResponse.self)
+    }
+
+    /// The end report. Idempotent on callId, so retried.
+    public func endVoiceCall(_ report: VoiceCallEndRequest) async throws -> VoiceCallEndResponse {
+        var request = try makeRequest("POST", "/api/voice/call/end", encodedBody: report)
+        request.timeoutInterval = 20
+        return try await send(request, as: VoiceCallEndResponse.self, retrySafe: true)
     }
 
     /// This phone is showing the ring on its own screen, so the computer
@@ -2176,6 +2310,39 @@ public struct CompanionClient: Sendable {
               url.host != nil
         else { throw APIError.badURL }
         return url
+    }
+
+    // MARK: Connector cards in a chat
+
+    private func connectorCardPath(botId: String, messageId: String, _ action: String) -> String {
+        "/api/bots/\(botId)/connector-cards/\(messageId)/\(action)"
+    }
+
+    public func authorizeConnectorCard(botId: String, threadId: String, messageId: String) async throws -> ConnectorCardAuthorization {
+        let response = try await send(
+            try makeRequest("POST", connectorCardPath(botId: botId, messageId: messageId, "authorize"), body: ["threadId": threadId]),
+            as: ConnectorCardAuthorizeResponse.self
+        )
+        if response.native == true { return .native }
+        guard let raw = response.url, let url = URL(string: raw), url.scheme == "https", url.host != nil
+        else { throw APIError.badURL }
+        return .signIn(url)
+    }
+
+    public func connectorCardStatus(botId: String, threadId: String, messageId: String) async throws -> ConnectorCardStatus {
+        try await send(
+            try makeRequest("GET", connectorCardPath(botId: botId, messageId: messageId, "status"),
+                            query: [URLQueryItem(name: "threadId", value: threadId)]),
+            as: ConnectorCardStatus.self
+        )
+    }
+
+    public func resumeConnectorCard(botId: String, threadId: String, messageId: String) async throws {
+        try await send(try makeRequest("POST", connectorCardPath(botId: botId, messageId: messageId, "resume"), body: ["threadId": threadId]))
+    }
+
+    public func dismissConnectorCard(botId: String, threadId: String, messageId: String) async throws {
+        try await send(try makeRequest("POST", connectorCardPath(botId: botId, messageId: messageId, "dismiss"), body: ["threadId": threadId]))
     }
 
     /// Matches the companion's `[\w-]+` toolkit route component. JavaScript

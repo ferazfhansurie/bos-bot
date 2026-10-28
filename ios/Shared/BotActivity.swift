@@ -93,6 +93,37 @@ enum BotActivityLink {
         parts.queryItems = [URLQueryItem(name: "bot", value: bot)]
         return parts.url
     }
+
+    /// "Call me" on a done card: a call that opens with the result.
+    static func callBack(botId: String, threadId: String?, result: String) -> URL? {
+        guard let threadId, !threadId.isEmpty else { return call(botId) }
+        var parts = URLComponents()
+        parts.scheme = "bosbot"
+        parts.host = "call"
+        parts.queryItems = [URLQueryItem(name: "bot", value: botId), URLQueryItem(name: "thread", value: threadId),
+                            URLQueryItem(name: "result", value: String(result.prefix(160)))]
+        return parts.url
+    }
+}
+
+/// "Peek" on a working card: the card shows the plan and the last few steps
+/// for a moment, without opening the app. Runs in the app's process.
+struct PeekBotIntent: LiveActivityIntent {
+    static var title: LocalizedStringResource = "Peek"
+    static var isDiscoverable = false
+
+    @Parameter(title: "Bot") var botId: String
+
+    init() {}
+    init(botId: String) { self.botId = botId }
+
+    /// Set by the app at launch. Nil in the widget extension.
+    nonisolated(unsafe) static var handler: ((_ botId: String) async -> Void)?
+
+    func perform() async throws -> some IntentResult {
+        await Self.handler?(botId)
+        return .result()
+    }
 }
 
 /// The Control Center / lock screen control's action. It only opens the app

@@ -97,7 +97,7 @@ export function SidebarActiveThreads({ entries, density }: { entries: AttentionT
     </button>
     {open && <>
       <div className="fixed inset-0 z-30" onMouseDown={() => setOpen(false)} />
-      <div role="dialog" aria-label={t("attention.title")}
+      <div data-popover role="dialog" aria-label={t("attention.title")}
         className={cn("absolute bottom-full z-40 mb-1 overflow-hidden rounded-xl border border-hairline/50 bg-menu py-1 shadow-2xl shadow-black/60", iconOnly ? "left-2 w-72" : "inset-x-3")}>
         {entries.map((entry) => <ActiveThreadRow key={`${entry.botId}-${entry.task.threadId}`} entry={entry}
           bot={state.bots.find((bot) => bot.id === entry.botId)}

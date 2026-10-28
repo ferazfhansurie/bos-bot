@@ -1,6 +1,6 @@
 /** Process entry for the people hub (pm2 behind a cloudflared tunnel).
  * Env: PEOPLE_HUB_PORT, PEOPLE_HUB_DATA, PEOPLE_HUB_ORIGIN, RESEND_API_KEY
- * (or RESEND_API_KEY_FILE), PEOPLE_HUB_FROM. The Resend key is read here and
+ * (or RESEND_API_KEY_FILE), PEOPLE_HUB_FROM, PEOPLE_HUB_FOUNDER (the founder's home id). The Resend key is read here and
  * never logged. */
 import { readFileSync } from "node:fs";
 import { startHub } from "./hub.ts";
@@ -21,5 +21,6 @@ const sendEmail = key ? async (to: string, subject: string, html: string, text: 
   if (!response.ok) throw new Error(`invite email failed (${response.status})`);
 } : undefined;
 
-startHub({ port, dataDir: process.env.PEOPLE_HUB_DATA ?? `${process.env.HOME}/bos-people-hub/data`, publicOrigin: origin, sendEmail });
+startHub({ port, dataDir: process.env.PEOPLE_HUB_DATA ?? `${process.env.HOME}/bos-people-hub/data`, publicOrigin: origin, sendEmail,
+  founderHomeId: process.env.PEOPLE_HUB_FOUNDER?.trim() || undefined });
 console.log(`people hub listening on 127.0.0.1:${port} as ${origin} (email ${sendEmail ? "on" : "off"})`);

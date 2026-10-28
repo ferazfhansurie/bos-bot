@@ -3,11 +3,12 @@
 // bot-settings/; this dialog owns only the fetches (overview, system-prompt,
 // history) and which accordion row is expanded.
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ChevronDown, Search, X } from "lucide-react";
+import { ChevronDown, ChevronLeft, Search, X } from "lucide-react";
 
 import { api, useStore, type Bot } from "@/state/store";
 import type { BotOverview } from "@/lib/bot-overview-types";
 import { cn } from "@/lib/cn";
+import { useV3 } from "@/lib/v3";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { BOT_SECTIONS, BOT_SECTION_GROUPS } from "./bot-settings/sections";
 import { useBotSettingsDerived } from "./bot-settings/useBotSettingsDerived";
@@ -16,6 +17,8 @@ import { ReadinessPanel } from "./bot-settings/ReadinessPanel";
 import { IdentitySection } from "./bot-settings/IdentitySection";
 import { SoulSection } from "./bot-settings/SoulSection";
 import { SkillsSection } from "./bot-settings/SkillsSection";
+import { SkillCards } from "./bot-settings/SkillCards";
+import { BotProfileSheet } from "./bot-settings/BotProfileSheet";
 import { MemorySection } from "./bot-settings/MemorySection";
 import { RoutinesSection } from "./bot-settings/RoutinesSection";
 import { AccessSection } from "./bot-settings/AccessSection";
@@ -45,6 +48,11 @@ export function BotSettingsDialog({ bot }: { bot: Bot }) {
   const activeGroup = BOT_SECTION_GROUPS.find(group => (group.sections as readonly string[]).includes(section)) ?? BOT_SECTION_GROUPS[0];
   const inGroup = (id: string) => Boolean(q) || (activeGroup.sections as readonly string[]).includes(id);
   const visibleSections = BOT_SECTIONS.filter((entry) => inGroup(entry.id) && sectionMatches(entry, q));
+  // 3.0: a bare open shows the profile sheet; a deep link, a search or
+  // "All settings" shows the grouped accordion below, unchanged.
+  const v3 = useV3();
+  const [allSettings, setAllSettings] = useState(false);
+  const showProfile = v3 && collapsed && !q && !allSettings;
 
   const [overview, setOverview] = useState<BotOverview | null>(null);
   const [overviewError, setOverviewError] = useState(false);
@@ -107,7 +115,7 @@ export function BotSettingsDialog({ bot }: { bot: Bot }) {
   // returning from either editor must reload their overview/prompt too.
   // Await the existing write queue instead of racing a second debounce.
   useEffect(() => {
-    if (section !== "overview") return;
+    if (section !== "overview" && !showProfile) return;
     let cancelled = false;
     const fetchOverviewAndPrompt = async () => {
       await flushBotPatches(bot.id);
@@ -136,7 +144,10 @@ export function BotSettingsDialog({ bot }: { bot: Bot }) {
     return () => {
       cancelled = true;
     };
-  }, [bot.id, section, factsSignature, state.routines, state.webhooks, flushBotPatches]);
+  }, [bot.id, section, showProfile, factsSignature, state.routines, state.webhooks, flushBotPatches]);
+
+  // a different bot opens on its profile again
+  useEffect(() => { setAllSettings(false); }, [bot.id]);
 
   // Read the file-backed history only when its section is opened. A newer
   // load (or leaving History) invalidates older rows, revision, and errors.
@@ -268,7 +279,7 @@ export function BotSettingsDialog({ bot }: { bot: Bot }) {
       case "soul":
         return <SoulSection bot={bot} patch={derived.patch} />;
       case "skills":
-        return <SkillsSection bot={bot} />;
+        return v3 ? <SkillCards bot={bot} advanced={<SkillsSection bot={bot} />} /> : <SkillsSection bot={bot} />;
       case "memory":
         // Memory has an explicit Save button; preserve its unsaved draft
         // while the user consults another section. It fetches when it
@@ -321,7 +332,18 @@ export function BotSettingsDialog({ bot }: { bot: Bot }) {
         className="animate-panel-in absolute inset-0 z-40 flex h-full min-w-0 flex-col border-l border-hairline/40 bg-panel outline-none lg:static lg:z-auto lg:w-[min(420px,42vw)] lg:shrink-0"
       >
         <div className="flex shrink-0 items-center justify-between px-4 py-3">
-          <span id="bot-settings-title" className="truncate text-[15px] font-semibold text-ink">
+          {v3 && !showProfile && (
+            <button
+              type="button"
+              onClick={() => { setQuery(""); setAllSettings(false); dispatch({ type: "toggleSettings", open: true }); }}
+              aria-label="Back to profile"
+              data-testid="bot-settings-back"
+              className="-ms-1 me-1 rounded-md p-1 text-ink-secondary hover:bg-control hover:text-ink"
+            >
+              <ChevronLeft size={18} className="pointer-events-none" />
+            </button>
+          )}
+          <span id="bot-settings-title" className={cn("truncate text-[15px] font-semibold text-ink", v3 && "flex-1")}>
             {bot.name}
           </span>
           <button
@@ -334,6 +356,20 @@ export function BotSettingsDialog({ bot }: { bot: Bot }) {
           </button>
         </div>
 
+        {showProfile && (
+          <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
+            <BotProfileSheet
+              bot={bot}
+              derived={derived}
+              overview={overview}
+              onSection={(id) => dispatch({ type: "toggleSettings", open: true, section: id })}
+              onAllSettings={() => setAllSettings(true)}
+            />
+          </div>
+        )}
+        {/* display:contents keeps the flag-off layout exactly as it was; the
+            profile only hides it (Memory's draft stays mounted) */}
+        <div className={showProfile ? "hidden" : "contents"}>
         <div role="group" aria-label="Settings categories" className="mx-4 mb-3 flex shrink-0 gap-1 rounded-full bg-control/50 p-1">
           {BOT_SECTION_GROUPS.map(group => (
             <button key={group.label} type="button" aria-pressed={activeGroup === group && !q}
@@ -374,7 +410,8 @@ export function BotSettingsDialog({ bot }: { bot: Bot }) {
               even when search filters its row out of view. Other unmatched
               rows are omitted entirely. */}
           {BOT_SECTIONS.map((entry) => {
-            const { id, label, icon: Icon } = entry;
+            const { id, icon: Icon } = entry;
+            const label = v3 && id === "soul" ? "Instructions" : entry.label;
             const matched = inGroup(id) && sectionMatches(entry, q);
             if (!matched && id !== "memory") return null;
             const open = !collapsed && section === id;
@@ -423,11 +460,12 @@ export function BotSettingsDialog({ bot }: { bot: Bot }) {
             );
           })}
         </div>
+        </div>
       </aside>
       <ConfirmDialog
         open={rollbackTarget !== null}
         title="Restore previous instructions?"
-        body="Replaces current SOUL with the version before this change. Current version stays in History."
+        body={v3 ? "Replaces the current instructions with the version before this change. The current version stays in History." : "Replaces current SOUL with the version before this change. Current version stays in History."}
         confirmLabel="Restore instructions"
         tone="neutral"
         returnFocusRef={dialogRef}

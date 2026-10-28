@@ -1,11 +1,12 @@
 // One quiet row for consecutive work, including a truthful live state.
 // Failed tools and recovery reviews remain outside this disclosure.
-import { useEffect, useId, useState } from "react";
+import { useContext, useEffect, useId, useState } from "react";
 import { ChevronRight } from "lucide-react";
 import type { Message } from "@/state/store";
 import { describeRun } from "@/lib/activity-runs";
 import { t } from "@/lib/i18n";
 import { WorkingDots } from "./WorkingIndicator";
+import { SteerReadContext } from "./v3/ThreadWorker";
 
 export function ActivityRun({
   messages,
@@ -24,7 +25,10 @@ export function ActivityRun({
   }, [forceOpen]);
   const running = messages.filter(message => message.tool?.ok === undefined);
   const label = describeRun(messages);
-  const liveLabel = running.length
+  // 3.0: the bot at the end of the thread says what it is doing, so the run
+  // stays its quiet summary instead of a second "working" line
+  const workerShows = useContext(SteerReadContext) !== null;
+  const liveLabel = running.length && !workerShows
     ? t("toolDetail.working")
     : null;
   return (

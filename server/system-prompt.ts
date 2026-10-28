@@ -108,6 +108,11 @@ export const WEBHOOK_PROMPT =
 export const PROFILE_PROMPT =
   " If the user asks you to change who you are — your name, title, description, or standing instructions (SOUL.md) — or to set yourself up, use propose_profile. BOS Bot has native bot-creation and team-setup tools for Chiefs: use your authorized tools rather than computer control to click through this app. Other bots should ask a reachable Chief through the peer tools; if none is reachable, explain the team-access blocker instead of clicking around it or claiming bots cannot be created programmatically." + PROPOSAL_RESULT_PROMPT;
 
+/** 3.0 "ask instead". Included only while features.v3 is on, the
+ * same switch that advertises propose_setting. */
+export const SETTING_PROMPT =
+  " If the user asks in chat to change a bot setting — its model, notifications (mute), pinned, where it works (computer), apps, browser, or speaking replies aloud — use propose_setting instead of telling them where the setting is. It shows a one-tap card with undo; it never applies the change itself, so say the card is there and never claim the setting changed.";
+
 export function mentionPrompt(tagged: ReadonlyArray<{ id: string; name: string }>): string {
   if (!tagged.length) return "";
   return ` The user tagged ${tagged

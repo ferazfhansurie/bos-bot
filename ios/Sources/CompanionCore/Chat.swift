@@ -74,6 +74,15 @@ public enum Chat: Identifiable, Hashable {
         }
     }
 
+    /// The owner muted this chat: its unread dot stays, the app badge and
+    /// banners skip it. A muted bot still alerts for approvals and questions.
+    public var muted: Bool {
+        switch self {
+        case let .bot(bot): return !bot.notifications
+        case let .room(room): return room.notifications == "muted"
+        }
+    }
+
     public var threadTitle: String {
         switch self {
         case let .bot(bot): return bot.tasks?.first { $0.threadId == bot.threadId }?.displayTitle ?? "Untitled thread"

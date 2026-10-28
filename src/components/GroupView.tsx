@@ -27,7 +27,9 @@ import { ToolActivity } from "./ToolActivity";
 import { ThreadRefText } from "./ThreadRefs";
 import { TurnPresence } from "./TurnPresence";
 import { ActivityMascot } from "./ActivityMascot";
-import { turnGesture } from "../../shared/mascot-choreography";
+import { derivePresence, gestureForPresence } from "../../shared/mascot-presence";
+import { useV3 } from "@/lib/v3";
+import { Glass } from "./Glass";
 import { showToolCallsEnabled } from "@/lib/feature-flags";
 import { useToolCallsToggle } from "@/hooks/use-tool-calls-toggle";
 import { CompactionChip, DigestChip } from "./DigestChip";
@@ -1044,6 +1046,14 @@ const RoomStreamBubble = memo(function RoomStreamBubble({ threadId, member, memb
 
 // The room title: avatar stack + name in one soft centered pill.
 const ROOM_NAME_PILL = "flex min-w-0 max-w-full items-center gap-2 rounded-full bg-panel/80 py-1 pl-1 pr-3.5 text-[14px] font-semibold text-ink ring-1 ring-hairline/40";
+// 3.0: the room's name pill floats in the same glass as a bot's; the pill
+// itself goes clear so the frost shows through
+const ROOM_NAME_PILL_V3 = cn(ROOM_NAME_PILL, "bg-transparent ring-0");
+
+function RoomPillFrame({ glass, children }: { glass: boolean; children: React.ReactNode }) {
+  if (!glass) return <>{children}</>;
+  return <Glass bezel={12} className="flex min-w-0 max-w-full rounded-full border border-hairline/50 shadow-[0_6px_24px_rgba(0,0,0,0.35)]">{children}</Glass>;
+}
 
 export function GroupView({ group }: { group: Group }) {
   const { state, dispatch } = useStore();
@@ -1159,12 +1169,17 @@ export function GroupView({ group }: { group: Group }) {
     lastGroupMessage?.kind,
     lastGroupMessage?.from?.botId,
   ]);
+  const v3 = useV3();
+  const roomPill = v3 ? ROOM_NAME_PILL_V3 : ROOM_NAME_PILL;
+  // the member whose reply just landed: one more think before 3.0, the
+  // finished beat in it
+  const poppingGesture = gestureForPresence(derivePresence({ surface: "island", ...(v3 ? { finishing: true } : { turn: {} }) }));
   const presenceRows = useMemo(() => {
     const rows = working.map(({ bot, since, tool }) => ({
       bot, since, label: `${bot.name} · ${liveActivityLabel(tool ?? undefined)}`,
-      gesture: turnGesture({ toolInFlight: tool !== null, toolName: tool?.tool?.name }),
+      gesture: gestureForPresence(derivePresence({ surface: "island", turn: { toolInFlight: tool !== null, toolName: tool?.tool?.name } })),
     }));
-    if (awaited) rows.push({ bot: awaited, since: null, label: liveActivityLabel(lastGroupMessage), gesture: turnGesture({ waiting: true }) });
+    if (awaited) rows.push({ bot: awaited, since: null, label: liveActivityLabel(lastGroupMessage), gesture: gestureForPresence(derivePresence({ surface: "island", turn: { waiting: true } })) });
     return rows;
   }, [working, awaited, lastGroupMessage]);
   // the member whose reply just landed hands its row to that reply
@@ -1317,7 +1332,7 @@ export function GroupView({ group }: { group: Group }) {
   };
 
   const roomFields = group as Group & RoomViewFields;
-  const memberMauses = <RoomRoster room={roomFields} members={members} max={5} showWorking={false} />;
+  const memberMauses = <RoomRoster room={roomFields} members={members} max={5} showWorking={false} alive={v3} />;
 
   return (
     <main className="relative flex h-full min-w-0 flex-1 flex-col bg-app">
@@ -1339,8 +1354,9 @@ export function GroupView({ group }: { group: Group }) {
           {!setupPending && !group.dm && !group.home && <GroupTaskPicker group={group} />}
         </div>
         <div className="flex min-w-0 justify-center" style={headerNoDragStyle}>
+          <RoomPillFrame glass={v3}>
           {group.dm || remoteClient ? (
-            <span className={ROOM_NAME_PILL}>
+            <span className={roomPill}>
               {memberMauses}
               <span className="truncate">{group.name}</span>
             </span>
@@ -1356,12 +1372,13 @@ export function GroupView({ group }: { group: Group }) {
                   ? t("room.members.ariaOne")
                   : t("room.members.ariaMany", { count: members.length })
               }`}
-              className={cn(ROOM_NAME_PILL, "transition-colors duration-150 hover:bg-raised")}
+              className={cn(roomPill, "transition-colors duration-150 hover:bg-raised")}
             >
               {memberMauses}
               <span className="truncate">{group.name}</span>
             </button>
           )}
+          </RoomPillFrame>
         </div>
         <div
           className="flex items-center justify-end gap-1"
@@ -1590,7 +1607,7 @@ export function GroupView({ group }: { group: Group }) {
           {poppingMember && (
             <TurnPresence
               key={poppingMember.id}
-              avatar={<ActivityMascot bot={poppingMember} gesture="thinking" />}
+              avatar={<ActivityMascot bot={poppingMember} gesture={poppingGesture} />}
               visible
               answering
             />

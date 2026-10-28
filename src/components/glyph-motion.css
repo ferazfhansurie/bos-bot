@@ -1,0 +1,73 @@
+/* Per-face motion from the B sharp-dots sheet (bos-pages/2026-10-27-smart-eyes.html).
+   Distances are the sheet's px on a 64px body, times --g (the body diameter / 64
+   in the svg's own units), so a 16px avatar and a 120px stage face move alike.
+   Like the sheet, lean/drift/bob are absolute offsets on top of the face's gaze.
+   transform and opacity only; reduced motion holds the face still. */
+.bos-gm { transform-box: view-box; }
+.bos-gm-e-look { animation: bos-gm-look 3.2s ease-in-out infinite; }
+.bos-gm-e-lean { animation: bos-gm-lean 2s ease-in-out infinite; }
+.bos-gm-e-drift { animation: bos-gm-drift 3s ease-in-out infinite; }
+.bos-gm-e-scan { animation: bos-gm-scan 2.2s ease-in-out infinite; }
+.bos-gm-e-read { animation: bos-gm-read 2.4s steps(1) infinite; }
+.bos-gm-e-bob { animation: bos-gm-bob .9s ease-in-out infinite; }
+.bos-gm-e-pulse { animation: bos-gm-pulse 1.6s ease-in-out infinite; }
+.bos-gm-e-pop { animation: bos-gm-pop 2.4s cubic-bezier(.3,1.6,.5,1) infinite; }
+.bos-gm-e-shake { animation: bos-gm-shake .45s linear infinite; }
+.bos-gm-e-breathe { animation: bos-gm-breathe 3.6s ease-in-out infinite; }
+.bos-gm-e-slow { animation: bos-gm-slowblink 5s ease-in-out infinite; }
+.bos-gm-e-tilt { animation: bos-gm-tilt 2.6s ease-in-out infinite; }
+.bos-gm-e-giggle { animation: bos-gm-giggle .35s ease-in-out infinite; }
+/* these turn each eye about its own centre */
+.bos-gm-e-spin .bos-gm-eye, .bos-gm-e-twinkle .bos-gm-eye, .bos-gm-e-beat .bos-gm-eye { transform-box: fill-box; transform-origin: center; }
+.bos-gm-e-spin .bos-gm-eye { animation: bos-gm-spin 1.4s linear infinite; }
+.bos-gm-e-twinkle .bos-gm-eye { animation: bos-gm-twinkle 1.2s ease-in-out infinite; }
+.bos-gm-e-beat .bos-gm-eye { animation: bos-gm-beat 1s ease-in-out infinite; }
+
+.bos-gm-a-fly { animation: bos-gm-fly 2s ease-in infinite; }
+.bos-gm-a-float { animation: bos-gm-float 2.6s ease-in-out infinite; }
+.bos-gm-a-burst { animation: bos-gm-accburst 2.4s ease-out infinite; transform-box: fill-box; transform-origin: center; }
+.bos-gm-a-pulse { animation: bos-gm-accpulse 1s ease-in-out infinite; }
+.bos-gm-a-ring { animation: bos-gm-accring .5s linear infinite; transform-box: fill-box; transform-origin: center; }
+.bos-gm-a-slide { animation: bos-gm-accslide 1.6s ease-in-out infinite; }
+
+.bos-gm-b-hop, .bos-gm-b-squish, .bos-gm-b-stretch, .bos-gm-b-giggle, .bos-gm-b-tap { transform-box: fill-box; transform-origin: 50% 100%; }
+.bos-gm-b-hop { animation: bos-gm-hop 2.4s cubic-bezier(.3,1.4,.5,1) infinite; }
+.bos-gm-b-squish { animation: bos-gm-squish 3.6s ease-in-out infinite; }
+.bos-gm-b-stretch { animation: bos-gm-stretch 3.2s ease-in-out infinite; }
+.bos-gm-b-giggle { animation: bos-gm-bgiggle .35s ease-in-out infinite; }
+.bos-gm-b-tap { animation: bos-gm-btap 1.2s ease-in-out infinite; }
+
+@keyframes bos-gm-look { 0%,20%,100% { transform: translate(0,0); } 30%,45% { transform: translate(calc(var(--g) * -5),0); } 55%,75% { transform: translate(calc(var(--g) * 5),calc(var(--g) * -1)); } }
+@keyframes bos-gm-lean { 0%,100% { transform: translate(calc(var(--g) * 2),calc(var(--g) * 4)); } 50% { transform: translate(calc(var(--g) * 3),calc(var(--g) * 5)); } }
+@keyframes bos-gm-drift { 0%,100% { transform: translate(calc(var(--g) * 4),calc(var(--g) * -5)); } 50% { transform: translate(calc(var(--g) * 1),calc(var(--g) * -6)); } }
+@keyframes bos-gm-scan { 0%,100% { transform: translateX(calc(var(--g) * -5)); } 50% { transform: translateX(calc(var(--g) * 5)); } }
+@keyframes bos-gm-read {
+  0% { transform: translate(calc(var(--g) * -5),calc(var(--g) * -2)); } 16% { transform: translate(0,calc(var(--g) * -2)); } 33% { transform: translate(calc(var(--g) * 5),calc(var(--g) * -2)); }
+  50% { transform: translate(calc(var(--g) * -5),calc(var(--g) * 2)); } 66% { transform: translate(0,calc(var(--g) * 2)); } 83% { transform: translate(calc(var(--g) * 5),calc(var(--g) * 2)); }
+}
+@keyframes bos-gm-bob { 0%,100% { transform: translate(0,calc(var(--g) * 4)); } 50% { transform: translate(calc(var(--g) * 1),calc(var(--g) * 5.5)); } }
+@keyframes bos-gm-pulse { 0%,100% { transform: scale(1); } 50% { transform: scale(1.14); } }
+@keyframes bos-gm-pop { 0%,60%,100% { transform: scale(1); } 70% { transform: scale(1.35); } }
+@keyframes bos-gm-shake { 0%,100% { transform: translateX(0); } 25% { transform: translateX(calc(var(--g) * -1.5)); } 75% { transform: translateX(calc(var(--g) * 1.5)); } }
+@keyframes bos-gm-breathe { 0%,100% { transform: translateY(0); } 50% { transform: translateY(calc(var(--g) * 1.5)); } }
+@keyframes bos-gm-slowblink { 0%,40%,100% { transform: scaleY(.45); } 60%,70% { transform: scaleY(.1); } }
+@keyframes bos-gm-tilt { 0%,100% { transform: rotate(0); } 50% { transform: rotate(-10deg); } }
+@keyframes bos-gm-giggle { 0%,100% { transform: translateY(0); } 50% { transform: translateY(calc(var(--g) * -2)); } }
+@keyframes bos-gm-spin { to { transform: rotate(360deg); } }
+@keyframes bos-gm-twinkle { 0%,100% { transform: scale(1) rotate(0); } 50% { transform: scale(.8) rotate(30deg); } }
+@keyframes bos-gm-beat { 0%,100% { transform: scale(1); } 15% { transform: scale(1.25); } 30% { transform: scale(1); } 45% { transform: scale(1.18); } }
+@keyframes bos-gm-fly { 0% { transform: translate(calc(var(--g) * -14),calc(var(--g) * 10)); opacity: 0; } 20% { opacity: 1; } 100% { transform: translate(calc(var(--g) * 14),calc(var(--g) * -14)); opacity: 0; } }
+@keyframes bos-gm-float { 0%,100% { transform: translateY(0); } 50% { transform: translateY(calc(var(--g) * -4)); } }
+@keyframes bos-gm-accburst { 0%,55% { transform: scale(.3); opacity: 0; } 70% { transform: scale(1.1); opacity: 1; } 100% { transform: scale(1.4); opacity: 0; } }
+@keyframes bos-gm-accpulse { 0%,100% { opacity: .4; } 50% { opacity: 1; } }
+@keyframes bos-gm-accring { 0%,100% { transform: rotate(-12deg); } 50% { transform: rotate(12deg); } }
+@keyframes bos-gm-accslide { 0% { transform: translateX(calc(var(--g) * -6)); opacity: 0; } 40% { opacity: 1; } 100% { transform: translateX(calc(var(--g) * 10)); opacity: 0; } }
+@keyframes bos-gm-hop { 0%,55%,100% { transform: translateY(0) scale(1,1); } 62% { transform: translateY(0) scale(1.1,.88); } 72% { transform: translateY(calc(var(--g) * -9)) scale(.94,1.06); } 84% { transform: translateY(0) scale(1.06,.94); } }
+@keyframes bos-gm-squish { 0%,100% { transform: scale(1,1); } 50% { transform: scale(1.03,.97); } }
+@keyframes bos-gm-stretch { 0%,30%,100% { transform: scale(1,1); } 50%,65% { transform: scale(.9,1.16); } 75% { transform: scale(1.08,.92); } }
+@keyframes bos-gm-bgiggle { 0%,100% { transform: scale(1,1); } 50% { transform: scale(1.04,.96); } }
+@keyframes bos-gm-btap { 0%,40%,100% { transform: translateY(0); } 20% { transform: translateY(calc(var(--g) * -3)); } }
+
+@media (prefers-reduced-motion: reduce) {
+  .bos-gm, .bos-gm *, [class*="bos-gm-"] { animation: none !important; }
+}

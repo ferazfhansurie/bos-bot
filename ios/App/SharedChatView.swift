@@ -555,7 +555,7 @@ struct SharedChatView: View {
             guard !Task.isCancelled else { return }
             if sequence == 0 { hasMore = page.hasMore ?? false }
             version = page.version ?? version
-            let changes = Dictionary(uniqueKeysWithValues: (page.changes ?? []).map { ($0.id, $0) })
+            let changes = Dictionary((page.changes ?? []).map { ($0.id, $0) }, uniquingKeysWith: { _, last in last })
             messages = messages.map { changes[$0.id] ?? $0 }
             if let last = next.last { sequence = last.sequence }
             let existing = Set(messages.map(\.id))
@@ -588,7 +588,7 @@ struct SharedChatView: View {
             let after = sequence
             let page = try await session.sharedMessagePage(roomId: room.id, after: sequence, version: version)
             try Task.checkCancellation()
-            let changes = Dictionary(uniqueKeysWithValues: (page.changes ?? []).map { ($0.id, $0) })
+            let changes = Dictionary((page.changes ?? []).map { ($0.id, $0) }, uniquingKeysWith: { _, last in last })
             messages = messages.map { changes[$0.id] ?? $0 }
             let ids = Set(messages.map(\.id))
             messages.append(contentsOf: page.messages.filter { !ids.contains($0.id) })

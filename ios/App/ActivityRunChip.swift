@@ -13,12 +13,19 @@
 import SwiftUI
 import CompanionCore
 
+extension EnvironmentValues {
+    /// 3.0: the thread worker stands at the end of this transcript and says
+    /// what the bot is doing, so runs and steps above it do not shimmer too.
+    @Entry var threadWorkerShows = false
+}
+
 struct ActivityRunChip: View {
     let items: [Message]
     /// Where an "Opened thread" chip inside the run goes once unfolded.
     var openThread: ((ThreadRef) -> Void)? = nil
     @State private var expanded = false
     @State private var showingDetail = false
+    @Environment(\.threadWorkerShows) private var workerShows
 
     /// Unfolding inline stops here; the sheet has every step.
     private static let inlineCap = 30
@@ -36,7 +43,9 @@ struct ActivityRunChip: View {
                 ActivityDisclosureRow(
                     symbol: steps.first?.symbol ?? "wrench.and.screwdriver",
                     label: label,
-                    status: steps.contains(where: { $0.status == .running }) ? .running : .ok,
+                    // 3.0: the bot at the end of the thread says what it is
+                    // doing, so the run stays its quiet summary
+                    status: !workerShows && steps.contains(where: { $0.status == .running }) ? .running : .ok,
                     count: steps.count,
                     expanded: expanded
                 )
@@ -288,6 +297,7 @@ struct ToolStepRow: View {
     var openThread: ((ThreadRef) -> Void)? = nil
     var dimmed = false
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.threadWorkerShows) private var workerShows
     @State private var expanded = false
 
     private var hasDetail: Bool {
@@ -313,7 +323,7 @@ struct ToolStepRow: View {
                         .frame(width: 16)
 
                     VStack(alignment: .leading, spacing: 1) {
-                        if step.status == .running {
+                        if step.status == .running && !workerShows {
                             GPTShimmer(text: step.isTool ? step.label : step.name, size: 15).lineLimit(1)
                         } else {
                             Text(step.isTool ? step.label : step.name)

@@ -296,6 +296,8 @@ export const CLIENT_ALLOW: ReadonlyArray<{ methods: readonly string[]; path: Reg
   { methods: ["POST"], path: /^\/api\/tts\/prepare$/ },
   { methods: ["POST"], path: /^\/api\/tts\/speak$/ },
   { methods: ["POST"], path: /^\/api\/voice\/call$/ },
+  // v3 call work; server/index.ts refuses everyone but the owner
+  { methods: ["POST"], path: /^\/api\/voice\/(?:call\/(?:event|end|usage|summary)|jobs|tool|callback)$/ },
   // routines: the owner's own paired device only. server/index.ts refuses
   // every other client actor (welcome guests, password and team members),
   // since a routine runs a bot with its full permissions.

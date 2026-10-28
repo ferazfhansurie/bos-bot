@@ -155,20 +155,16 @@ posixOnly("routine failure notification wiring", () => {
 
         const receipts = await api("GET", "/api/routines");
         const receipt = receipts.body.runs.find((run: { id: string }) => run.id === launched.body.run.id);
-        expect(receipt).toMatchObject({
-          status: "failed",
-          botId: bot.id,
-          resultsThreadId: frame.notification.threadId,
-        });
-        expect(receipt.threadId).not.toBe(frame.notification.threadId);
+        // The failed run is its own thread, shown with the failure line in it.
+        expect(receipt).toMatchObject({ status: "failed", botId: bot.id, threadId: frame.notification.threadId });
         const report = await api("GET", `/api/threads/${frame.notification.threadId}/messages?limit=20`);
         expect(report.status).toBe(200);
         expect(report.body.messages.find((message: any) => message.routineRun?.runId === receipt.id)?.routineRun)
           .toMatchObject({ status: "failed", executionThreadId: receipt.threadId });
         const currentBot = (await api("GET", "/api/bots")).body.bots.find((candidate: any) => candidate.id === bot.id);
-        expect(currentBot.tasks.find((task: any) => task.threadId === receipt.resultsThreadId).routineRunId).toBeUndefined();
         expect(currentBot.tasks.find((task: any) => task.threadId === receipt.threadId))
-          .toMatchObject({ routineRunId: receipt.id, unread: false });
+          .toMatchObject({ unread: true });
+        expect(currentBot.tasks.find((task: any) => task.threadId === receipt.threadId).routineRunId).toBeUndefined();
 
         // A unique bot patch is an SSE ordering barrier: by the time it is
         // observed, every notification emitted by the failed turn is already

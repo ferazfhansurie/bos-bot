@@ -12,6 +12,8 @@ struct BotAvatarView: View {
     /// Opt-in, mirroring MausAvatar: an animated face is a 30fps canvas.
     var animated = false
     var comets = false
+    /// A glyph face that wins over `state` (see MausAvatar.glyph).
+    var glyph: GlyphFaceState? = nil
 
     @Environment(\.sessionActions) private var sessionActions
     private var session: Session { sessionActions! }
@@ -98,7 +100,7 @@ struct BotAvatarView: View {
             color: bot.color, size: size, bodyId: bot.mascotBody,
             state: state, eyeStyle: MascotEyeStyle(stored: bot.mascotEyes),
             completedTurnID: session.mascotCompletionIDs[bot.threadId],
-            animated: animated, comets: comets)
+            animated: animated, comets: comets, accessories: bot.mascotAccessories, glyph: glyph)
     }
 
     private var mask: AnyShape {

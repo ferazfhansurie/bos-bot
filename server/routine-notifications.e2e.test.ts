@@ -31,16 +31,18 @@ it("enforces saved notification choices on real runs, report cards, unread and S
       const done = await state();
       expect(done.notificationPolicy).toBe(policy);
       const currentBot = (await api("GET", "/api/bots")).bots.find((candidate: any) => candidate.id === bot.id);
-      expect(Boolean(currentBot.tasks.find((task: any) => task.threadId === done.resultsThreadId)?.unread)).toBe(surfaced);
-      const messages = (await api("GET", `/api/threads/${done.resultsThreadId}/messages?limit=100`)).messages;
-      // v2: a surfaced run speaks as a text message; anything else posts nothing.
-      const delivered = messages.find((message: any) => message.routineRun?.runId === run.id);
-      if (surfaced) expect(delivered).toMatchObject({ kind: "text", text: done.output, routineRun: { status: "completed" } });
-      else expect(delivered).toBeUndefined();
+      // Each run is its own thread: a surfaced run shows up as a new unread
+      // thread holding the reply; anything else stays hidden.
+      const execution = currentBot.tasks.find((task: any) => task.threadId === done.threadId);
+      expect(Boolean(execution?.unread)).toBe(surfaced);
+      expect(execution?.routineRunId).toBe(surfaced ? undefined : run.id);
+      const messages = (await api("GET", `/api/threads/${done.threadId}/messages?limit=100`)).messages;
+      expect(messages.some((message: any) => message.routineRun)).toBe(false);
+      if (surfaced) expect(messages.filter((message: any) => message.role === "bot" && message.kind === "text").at(-1)?.text).toBe(done.output);
       if (index < 3) expect(done.output).toBe("ordinary check");
       if (index === 3) { expect(done.output).toBe("build is broken"); expect(done.important).toBe(true); expect(JSON.stringify(JSON.parse(readFileSync(fixture.fixtureDumpPath, "utf8")).prompt)).toContain("IMPORTANT_UPDATE:"); }
       await expect.poll(() => frames.slice(before).some(frame => frame.kind === "routine.run" && frame.run?.id === run.id && frame.run.status === "completed")).toBe(true);
-      const notifications = frames.slice(before).filter(frame => frame.kind === "notify" && frame.notification?.threadId === done.resultsThreadId && frame.notification.kind === "done");
+      const notifications = frames.slice(before).filter(frame => frame.kind === "notify" && frame.notification?.threadId === done.threadId && frame.notification.kind === "done");
       expect(notifications.length).toBe(surfaced ? 1 : 0);
     }
   } finally { abort.abort(); await reading; await fixture.close(); rmSync(dir, { recursive: true, force: true }); }

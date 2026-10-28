@@ -23,6 +23,8 @@ export interface LiveActivityPush {
   staleDate?: number; dismissalDate?: number;
   /** 10 interrupts (start, needs you, end); 5 is a quiet progress update. */
   priority?: 5 | 10;
+  /** Rank among several activities (higher first); CarPlay shows the top one. */
+  relevance?: number;
 }
 interface Credential { teamId: string; keyId: string; privateKey: string }
 const TOKEN = /^[a-f0-9]{64}$/i;
@@ -39,9 +41,13 @@ const CONNECT_OPTIONS = { autoSelectFamilyAttemptTimeout: 2_000 } as SecureClien
 export interface PushTarget {
   roomId?: string; botId?: string; threadId?: string; senderId?: string;
   senderName?: string; kind?: string; requestId?: string; messageId?: string;
+  /** "permission": the phone may offer allow/deny on the notification. */
+  answer?: "permission";
   /** Typed push data the phone acts on (voice_work_done); callId names the call. */
   type?: string; callId?: string;
   ringId?: string; reason?: string;
+  /** voice_ring: "job_done" for a voice call-back */
+  purpose?: string;
   /** Caller name CallKit shows; a VoIP-launched app has no roster yet. */
   botName?: string;
 }
@@ -215,6 +221,7 @@ export class ApnsPush {
         ...(event === "start" ? { "attributes-type": "BotActivityAttributes", attributes: push.attributes } : {}),
         ...(push.alert ? { alert: { title: push.alert.title, body: push.alert.body, sound: "default" } } : {}),
         ...(push.staleDate ? { "stale-date": push.staleDate } : {}),
+        ...(push.relevance !== undefined ? { "relevance-score": push.relevance } : {}),
         ...(event === "end" ? { "dismissal-date": push.dismissalDate ?? now } : {}),
       } });
       const host = device.environment === "development" ? "https://api.sandbox.push.apple.com" : "https://api.push.apple.com";

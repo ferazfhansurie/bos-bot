@@ -22,9 +22,11 @@ import { FLAT_MASCOT_BODIES, FLAT_MASCOT_GROUPS, flatMascotBody } from "../../sh
 import { BotAvatar, MausAvatar } from "./Avatar";
 import { AvatarImageGenerator } from "./AvatarImageGenerator";
 import { useOrganizationBranding } from "@/lib/use-organization-branding";
+import { useV3 } from "@/lib/v3";
+import { MascotAccessoryPicker } from "./MascotAccessoryPicker";
 
 type AvatarPatch = Partial<
-  Pick<Bot, "avatarCrop" | "avatarUrl" | "color" | "mascotExpression" | "mascotBody">
+  Pick<Bot, "avatarCrop" | "avatarUrl" | "color" | "mascotExpression" | "mascotBody" | "mascotAccessories">
 >;
 
 const CROP_LABEL = {
@@ -47,6 +49,7 @@ export function BotProfileAvatarCard({
 }) {
   const { flushBotPatches } = useStore();
   const organization = useOrganizationBranding();
+  const v3 = useV3();
   const fileRef = useRef<HTMLInputElement>(null);
   const [uploading, setUploading] = useState(false);
   const [savingConnection, setSavingConnection] = useState(false);
@@ -123,7 +126,7 @@ export function BotProfileAvatarCard({
         <span className="rounded-lg bg-control px-3 py-1.5 text-[14px] font-medium text-ink">Avatar</span>
         <button
           disabled={busy}
-          onClick={() => onPatch({ avatarCrop: "mascot", color: "green", mascotExpression: null, mascotBody: "circle" })}
+          onClick={() => onPatch({ avatarCrop: "mascot", color: "green", mascotExpression: null, mascotBody: "circle", ...(v3 ? { mascotAccessories: null } : {}) })}
           className="rounded-md px-2 py-1.5 text-[13px] text-ink-secondary hover:bg-control hover:text-ink disabled:opacity-50"
         >
           Reset mascot
@@ -266,6 +269,17 @@ export function BotProfileAvatarCard({
                 </div>
               </div>
             ))}
+
+            {v3 && (
+              <MascotAccessoryPicker
+                color={shownBot.color}
+                bodyId={flatMascotBody(bot.mascotBody).id}
+                eyes={bot.mascotEyes}
+                value={bot.mascotAccessories}
+                disabled={busy}
+                onChange={mascotAccessories => onPatch({ mascotAccessories })}
+              />
+            )}
           </>
         )}
 

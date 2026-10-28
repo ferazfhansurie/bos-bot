@@ -12,6 +12,7 @@ import { videoApi } from "@/components/videos/video-api";
 import { Menu, anchorOf, type MenuAnchor, type MenuEntry } from "@/components/workbench/Menu";
 import { useWorkspace } from "@/components/workspace/WorkspaceContext";
 import { cn } from "@/lib/cn";
+import { useV3 } from "@/lib/v3";
 import type { TerminalTarget } from "@/lib/terminal";
 import { fetchRaw, statPath, WorkspaceFilesError } from "@/lib/workspace-files-client";
 import { useStore } from "@/state/store";
@@ -20,7 +21,9 @@ import type { AppSummary } from "../../../shared/apps";
 import { AppApiError, appApi, appRefId, APP_REF_PREFIX } from "./app-api";
 import { appIcon } from "./app-icons";
 import { appMeta, parseBridgeRequest, type BridgeRequest } from "./app-kit";
+import { miniAppHostDocument } from "./mini-app";
 import { CanvasLibrary, RoomApps } from "./CanvasLibrary";
+import { InstallAppSheet, type InstallFrom } from "./InstallAppSheet";
 import { isPinned, pinPage, unpinPage, usePins } from "./pins";
 import { CANVAS_STARTERS, COMPOSER_INSERT_EVENT, type ComposerInsertDetail, type LibraryItem, type LibraryKind, canvasDocument, htmlTitle } from "./canvas";
 
@@ -59,6 +62,9 @@ export function CanvasTab({ tab, target, active, setTab, replace, room }: Props)
 
 function BlankPrompt({ target, setTab, replace }: { target: TerminalTarget } & Pick<Props, "setTab" | "replace">) {
   const [error, setError] = useState("");
+  const v3 = useV3();
+  const [link, setLink] = useState("");
+  const [installing, setInstalling] = useState<InstallFrom | null>(null);
   const open = (item: LibraryItem) => {
     if (item.kind === "app") setTab({ ref: APP_REF_PREFIX + item.id, title: item.title });
     else if (item.kind === "page") setTab({ ref: item.id, title: item.title });
@@ -96,10 +102,24 @@ function BlankPrompt({ target, setTab, replace }: { target: TerminalTarget } & P
           })}
         </div>
         {error && <p role="alert" className="text-center text-[13px] text-danger">{error}</p>}
+        {v3 && (
+          <div className="mt-2 flex w-full max-w-[460px] flex-col items-center gap-2" data-testid="add-app-from-link">
+            <div className="flex h-[42px] w-full items-center gap-1 rounded-full border border-hairline ps-4 pe-1 focus-within:border-ink/30">
+              <input value={link} onChange={e => setLink(e.target.value)} onKeyDown={e => { if (e.key === "Enter" && link.trim()) setInstalling({ url: link.trim() }); }}
+                placeholder="paste an app link" aria-label="App link" spellCheck={false} autoCapitalize="off"
+                className="min-w-0 flex-1 bg-transparent text-[14px] text-ink outline-none placeholder:text-ink/40" />
+              <button type="button" disabled={!link.trim()} onClick={() => setInstalling({ url: link.trim() })}
+                className="h-[34px] shrink-0 rounded-full bg-ink px-4 text-[13px] font-medium text-app transition-opacity disabled:opacity-30">add app</button>
+            </div>
+            <button type="button" onClick={() => setInstalling({ builtin: "crm" })} className="text-[13px] text-ink/55 hover:text-ink">or add the crm bos ships with</button>
+          </div>
+        )}
       </div>
       <div className="mt-[8vh] w-full max-w-[1100px]">
         <CanvasLibrary target={target} onOpen={open} onNew={onNew} />
       </div>
+      {installing && <InstallAppSheet from={installing} botId={target.botId} onClose={() => setInstalling(null)}
+        onInstalled={app => { setInstalling(null); setLink(""); setTab({ ref: APP_REF_PREFIX + app.id, title: app.name }); }} />}
     </div>
   );
 }
@@ -145,6 +165,9 @@ function CanvasView({ path, title, target: here, from, active, setTab }: { path:
   const { openTab } = useWorkspace();
   const { state } = useStore();
   const [html, setHtml] = useState<string | null>(null);
+  // an app installed from a link: someone else's code, so it gets the stricter sandbox
+  const [installed, setInstalled] = useState(false);
+  const v3 = useV3();
   const [missing, setMissing] = useState(false);
   const [error, setError] = useState("");
   const [presenting, setPresenting] = useState(false);
@@ -162,8 +185,8 @@ function CanvasView({ path, title, target: here, from, active, setTab }: { path:
   const presentingRef = useRef(false); presentingRef.current = presenting;
   const slideRef = useRef(0); slideRef.current = slide.at;
   const frameId = useMemo(() => `canvas-${++frameCounter}`, []);
-  const isApp = useMemo(() => html !== null && appMeta(html) !== null, [html]);
-  const srcDoc = useMemo(() => html === null ? "" : canvasDocument(html, frameId, isApp), [html, frameId, isApp]);
+  const isApp = useMemo(() => html !== null && (installed || appMeta(html) !== null), [html, installed]);
+  const srcDoc = useMemo(() => html === null ? "" : installed ? miniAppHostDocument(html, frameId) : canvasDocument(html, frameId, isApp), [html, frameId, isApp, installed]);
   const titleRef = useRef(title); titleRef.current = title;
   // setTab is a fresh function on every dock render; holding it in a ref keeps
   // load stable, so the frame isn't torn down (white flash, scroll to top)
@@ -179,7 +202,7 @@ function CanvasView({ path, title, target: here, from, active, setTab }: { path:
         const got = await appApi.page(appRef);
         setMissing(false); setApp(got.app); setOwner(got.owner);
         if (!force && got.mtime === mtime.current) return;
-        mtime.current = got.mtime; setHtml(got.html); setError("");
+        mtime.current = got.mtime; setInstalled(Boolean(got.app.installed)); setHtml(got.html); setError("");
         if (got.app.name !== titleRef.current) setTabRef.current({ title: got.app.name });
         return;
       }
@@ -187,7 +210,7 @@ function CanvasView({ path, title, target: here, from, active, setTab }: { path:
       setMissing(false);
       if (!force && st.mtime === mtime.current) return;
       const text = await (await fetchRaw(target, path)).text();
-      mtime.current = st.mtime; setHtml(text); setError("");
+      mtime.current = st.mtime; setInstalled(false); setHtml(text); setError("");
       const meta = appMeta(text);
       const named = meta?.name || htmlTitle(text);
       if (named && named !== titleRef.current) setTabRef.current({ title: named });
@@ -198,7 +221,7 @@ function CanvasView({ path, title, target: here, from, active, setTab }: { path:
       else setError(e instanceof Error ? e.message : String(e));
     }
   }, [target, path, appRef]);
-  useEffect(() => { mtime.current = 0; setHtml(null); setApp(null); setGone(false); void load(true); }, [load]);
+  useEffect(() => { mtime.current = 0; setHtml(null); setInstalled(false); setApp(null); setGone(false); void load(true); }, [load]);
   useEffect(() => {
     if (!active) return;
     const timer = setInterval(() => { if (document.visibilityState === "visible") void load(); }, busy || html === null ? FAST_POLL : appRef ? SLOW_POLL * 2 : SLOW_POLL);
@@ -309,6 +332,8 @@ function CanvasView({ path, title, target: here, from, active, setTab }: { path:
           const Icon = appIcon(app.icon);
           return <span className="flex min-w-0 flex-1 items-center gap-2 px-1.5 text-[13px] font-medium text-ink" data-testid="canvas-app-name">
             <Icon size={15} strokeWidth={1.8} className="shrink-0 text-ink/70" /><span className="truncate">{app.name}</span>
+            {v3 && app.installed && <span className="shrink-0 truncate rounded-full bg-ink/[.06] px-2 py-0.5 text-[11px] font-normal text-ink/60" data-testid="canvas-app-installed"
+              title={`installed from ${app.installed.source.startsWith("builtin:") ? "bos" : app.installed.source}`}>v{app.installed.version}</span>}
             {app.sharedRoomIds.length > 0 && <span className="shrink-0 rounded-full bg-ink/[.06] px-2 py-0.5 text-[11px] font-normal text-ink/60">shared</span>}
           </span>;
         })() : <span className="min-w-0 flex-1 truncate px-1.5 text-[13px] font-medium text-ink">{title || "Blank tab"}</span>}

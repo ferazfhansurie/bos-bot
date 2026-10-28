@@ -303,6 +303,9 @@ process.stdin.on("data", (chunk) => {
                   ? [{ id: "gpt-6-astra", displayName: "GPT-6 Astra", hidden: false, isDefault: true }]
                   : []),
                 { id: "gpt-fake-default", displayName: "GPT Fake Default", hidden: false, isDefault: !hasAstra },
+                ...(process.env.FAKE_CODEX_TERRA === "1"
+                  ? [{ id: "gpt-6.1-terra", displayName: "GPT-6.1 Terra", hidden: false, isDefault: false }]
+                  : []),
               ],
               nextCursor: "page-2",
             },

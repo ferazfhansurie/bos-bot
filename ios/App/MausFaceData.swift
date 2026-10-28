@@ -9,7 +9,7 @@ enum MausState: String, CaseIterable {
     /// lists animate only for these; a resting bot earns a resting face.
     var showsActivity: Bool {
         switch self {
-        case .listening, .thinking, .searching, .working: return true
+        case .listening, .thinking, .searching, .working, .reading, .writing: return true
         default: return false
         }
     }
@@ -48,6 +48,7 @@ enum MausState: String, CaseIterable {
     case sending = "sending"
     case receiving = "receiving"
     case uploading = "uploading"
+    case reading = "reading"
     case writing = "writing"
     case notifying = "notifying"
     case alerting = "alerting"
@@ -424,6 +425,7 @@ enum MausFaceData {
         .dictating: [1, 10, 19],
         .sending: [6, 0, 8],
         .receiving: [19, 0, 8],
+        .reading: [19, 0, 8],
         .uploading: [15, 9, 8],
         .writing: [15, 9],
         .notifying: [21, 3, 0],
@@ -467,6 +469,7 @@ enum MausFaceData {
         .dictating: (4000, 8000),
         .sending: (4000, 8000),
         .receiving: (4000, 8000),
+        .reading: (4000, 8000),
         .uploading: (4000, 8000),
         .writing: (4000, 8000),
         .notifying: (1500, 2600),
@@ -535,6 +538,7 @@ enum MausFaceData {
         .dictating: MausBodyMotion(bob: (2, 2000)),
         .sending: MausBodyMotion(),
         .receiving: MausBodyMotion(),
+        .reading: MausBodyMotion(),
         .uploading: MausBodyMotion(bob: (3, 1000)),
         .writing: MausBodyMotion(bob: (1.6, 1100)),
         .notifying: MausBodyMotion(bob: (4, 700), sway: (2.5, 700)),

@@ -12,7 +12,7 @@ struct BosPressStyle: ButtonStyle {
     }
 }
 
-private struct SkeletonBlock: View {
+struct SkeletonBlock: View {
     var width: CGFloat? = nil
     var height: CGFloat
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -95,5 +95,17 @@ struct PendingThreadComposer: View {
         .glassCapsule(interactive: false)
         .padding(.horizontal, 16).padding(.bottom, 12)
         .accessibilityLabel("Composer available when the new thread is ready")
+    }
+}
+
+/// A pinned face gives under the thumb and springs back, like a home-screen icon.
+struct PinnedPressStyle: ButtonStyle {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .scaleEffect(!reduceMotion && configuration.isPressed ? 0.92 : 1)
+            .opacity(reduceMotion && configuration.isPressed ? 0.7 : 1)
+            .animation(reduceMotion ? nil : .spring(response: 0.25, dampingFraction: configuration.isPressed ? 0.9 : 0.55),
+                       value: configuration.isPressed)
     }
 }

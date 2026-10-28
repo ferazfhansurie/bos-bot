@@ -102,4 +102,57 @@ final class VoiceCallWorkTests: XCTestCase {
         XCTAssertTrue(RealtimeVoice.callBackOpener(botName: "bos", result: " 3 bots online ").hasSuffix("What you finished: 3 bots online"))
         XCTAssertTrue(RealtimeVoice.ringOpener(reason: "deploy failed").hasSuffix("Why you called: deploy failed"))
     }
+
+    func testCallBackRingCarriesPurposeAndLeadsWithTheResult() throws {
+        let payload = ["type": "voice_ring", "ringId": "r1", "botId": "b1", "threadId": "t1",
+                       "reason": "it stopped: whatsapp is signed out", "purpose": "job_done"]
+        guard case let .ring(ring)? = VoicePush(payload: payload) else { return XCTFail("no ring") }
+        XCTAssertEqual(ring.purpose, VoiceRing.jobDone)
+        let opener = RealtimeVoice.opener(for: ring)
+        XCTAssertTrue(opener.contains("want the details?"))
+        XCTAssertTrue(opener.hasSuffix("The result: it stopped: whatsapp is signed out"))
+        XCTAssertTrue(RealtimeVoice.jobDoneOpener(result: "").hasSuffix("the work they asked for is done"))
+        // an ordinary ring, and an older computer's frame, keep the ring opener
+        guard case let .ring(plain)? = VoicePush(payload: ["type": "voice_ring", "ringId": "r2", "botId": "b1", "reason": "hi"])
+        else { return XCTFail("no ring") }
+        XCTAssertNil(plain.purpose)
+        XCTAssertEqual(RealtimeVoice.opener(for: plain), RealtimeVoice.ringOpener(reason: "hi"))
+        let frame = try JSONDecoder().decode(VoiceRing.self, from: Data(#"{"ringId":"r3","botId":"b1","reason":"done","purpose":"job_done"}"#.utf8))
+        XCTAssertEqual(frame.purpose, "job_done")
+    }
+
+    func testSettledUpdateAndCallBackSwitchDecode() throws {
+        XCTAssertTrue(RealtimeVoice.settledUpdate(botName: "oracle", result: "Screenshots are on FCA-179.")
+            .hasPrefix("Work they gave you on a call just came back from oracle: Screenshots are on FCA-179."))
+        let credential = #""credential":{"clientSecret":"s","expiresAt":1,"model":"m","websocketUrl":"wss://api.x.ai/"},"plan":{"instructions":"x"}"#
+        let off = try JSONDecoder().decode(VoiceCallStart.self, from: Data("{\(credential),\"callBack\":false}".utf8))
+        XCTAssertEqual(off.callBack, false)
+        let old = try JSONDecoder().decode(VoiceCallStart.self, from: Data("{\(credential)}".utf8))
+        XCTAssertNil(old.callBack)
+    }
+
+    func testCallSummaryDecodesWithAndWithoutCredits() throws {
+        let json = """
+        {"rm":1.68,"rmPerMinute":0.336,"month":{"calls":12,"seconds":3600.5,"rm":20.16},
+         "credits":{"remainingCents":1240,"usedCents":760,"purchasedCents":2000,"fetchedAt":null},
+         "creditsConfigured":true,
+         "jobs":[{"jobId":"job-1","text":"check prod errors","botId":"b-oracle","botName":"oracle","threadId":"t1","state":"working"},
+                 {"jobId":"job-2","text":"draft partner a reply","botName":"bos","threadId":"t2","state":"needs_you","last":"drafted it"},
+                 {"jobId":"job-3","text":"ad e","botName":"cash","threadId":"t3","state":"someday"}]}
+        """
+        let summary = try JSONDecoder().decode(VoiceCallSummary.self, from: Data(json.utf8))
+        XCTAssertEqual(summary.jobs.map(\.state), [.working, .needsYou, .done])
+        XCTAssertEqual(summary.jobs[0].botId, "b-oracle")
+        XCTAssertNil(summary.jobs[1].botId)
+        XCTAssertEqual(summary.jobs[1].last, "drafted it")
+        XCTAssertTrue(summary.anyWorking)
+        XCTAssertEqual(VoiceCallSummary.usd(cents: summary.credits!.remainingCents), "$12.40")
+        XCTAssertEqual(VoiceCallSummary.rm(summary.rm), "RM 1.68")
+
+        let bare = try JSONDecoder().decode(VoiceCallSummary.self, from: Data("""
+        {"rm":0,"rmPerMinute":0.336,"month":{"calls":0,"seconds":0,"rm":0},"credits":null,"creditsConfigured":false,"jobs":[]}
+        """.utf8))
+        XCTAssertNil(bare.credits)
+        XCTAssertFalse(bare.anyWorking)
+    }
 }

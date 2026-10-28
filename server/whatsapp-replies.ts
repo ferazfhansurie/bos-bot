@@ -8,7 +8,11 @@ import type { WhatsAppStore, WhatsAppStoredMessage } from "./whatsapp-store.ts";
 // readAll: the bot may read every captured chat on the account (summaries),
 // while replies and outreach stay limited to chatIds, which may be empty.
 // readOnly: chatIds only widen reading; no reply, outreach or auto-dispatch.
-export interface ReplyPolicy { accountId: string; chatIds: string[] | null; autoDispatch: boolean; enabledAt: number; outreach?: boolean; readAll?: boolean; readOnly?: boolean }
+// draft: auto-dispatch prepares a reply for the owner instead of sending it;
+// the bot sends only from a turn the owner started (server/index.ts). A save
+// that leaves it out (an older app) keeps it: dropping it silently would turn
+// prepared replies back into sent ones.
+export interface ReplyPolicy { accountId: string; chatIds: string[] | null; autoDispatch: boolean; enabledAt: number; outreach?: boolean; readAll?: boolean; readOnly?: boolean; draft?: boolean }
 export interface SendInput { account_id: string; chat_id: string; text: string; send_key: string }
 export interface ReplyInput { account_id: string; chat_id: string; message_id: string; text: string }
 export interface ReplyReceipt { state: "sending" | "submitted" | "outcome_unknown"; messageId?: string; fingerprint: string }
@@ -60,11 +64,13 @@ export class WhatsAppReplies {
     if (value === null) { if (policies[botId]) policies[botId] = { ...policies[botId], chatIds: [], readAll: false, enabledAt: this.now() }; }
     else {
       const p = value as ReplyPolicy;
-      if (!p || !individual.test(p.accountId) || (p.chatIds !== null && (!Array.isArray(p.chatIds) || p.chatIds.length > 200 || p.chatIds.some(id => typeof id !== "string" || !chat.test(id) || id === p.accountId))) || (p.autoDispatch !== undefined && typeof p.autoDispatch !== "boolean") || (p.chatIds === null && p.autoDispatch === true) || (p.outreach !== undefined && typeof p.outreach !== "boolean") || (p.chatIds === null && p.outreach === true) || (p.readAll !== undefined && typeof p.readAll !== "boolean") || (p.readOnly !== undefined && typeof p.readOnly !== "boolean") || (p.readOnly === true && (p.autoDispatch === true || p.outreach === true))) throw new Error("accountId required; chatIds is an explicit list or null for owner-granted shared access. automatic dispatch and outreach require a named chat list");
-      policies[botId] = { accountId: p.accountId, chatIds: p.chatIds === null ? null : [...new Set(p.chatIds)], autoDispatch: p.autoDispatch === true, enabledAt: this.now(), ...(p.outreach === true ? { outreach: true } : {}), ...(p.readAll === true ? { readAll: true } : {}), ...(p.readOnly === true ? { readOnly: true } : {}) };
+      if (!p || !individual.test(p.accountId) || (p.chatIds !== null && (!Array.isArray(p.chatIds) || p.chatIds.length > 200 || p.chatIds.some(id => typeof id !== "string" || !chat.test(id) || id === p.accountId))) || (p.autoDispatch !== undefined && typeof p.autoDispatch !== "boolean") || (p.chatIds === null && p.autoDispatch === true) || (p.outreach !== undefined && typeof p.outreach !== "boolean") || (p.chatIds === null && p.outreach === true) || (p.readAll !== undefined && typeof p.readAll !== "boolean") || (p.readOnly !== undefined && typeof p.readOnly !== "boolean") || (p.draft !== undefined && typeof p.draft !== "boolean") || (p.readOnly === true && (p.autoDispatch === true || p.outreach === true))) throw new Error("accountId required; chatIds is an explicit list or null for owner-granted shared access. automatic dispatch and outreach require a named chat list");
+      policies[botId] = { accountId: p.accountId, chatIds: p.chatIds === null ? null : [...new Set(p.chatIds)], autoDispatch: p.autoDispatch === true, enabledAt: this.now(), ...(p.outreach === true ? { outreach: true } : {}), ...(p.readAll === true ? { readAll: true } : {}), ...(p.readOnly === true ? { readOnly: true } : {}), ...((p.draft ?? policies[botId]?.draft) === true ? { draft: true } : {}) };
     }
     this.write("reply-policies.json", policies);
   }
+  /** Draft mode: nothing reaches the client until the owner says so. */
+  drafts(botId: string): boolean { return this.policy(botId)?.draft === true; }
   /** Chat ids the bot may read: undefined = every chat on the policy account. */
   readScope(botId: string): string[] | undefined {
     const p = this.policy(botId);

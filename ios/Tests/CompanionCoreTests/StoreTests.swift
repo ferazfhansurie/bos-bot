@@ -733,6 +733,27 @@ final class StoreTests: XCTestCase {
         state.apply(.unknown(kind: "routine.run"))
         XCTAssertEqual(state.bots.count, before)
     }
+
+    func testV3FollowsTheDesktopLabsSwitch() throws {
+        let decoder = JSONDecoder()
+        // an older desktop: no flag anywhere, config frames stay plain
+        let old = try decoder.decode(Fleet.self, from: Data(#"{"bots":[],"groups":[]}"#.utf8))
+        XCTAssertNil(old.v3)
+        let plain = try decoder.decode(Frame.self, from: Data(#"{"kind":"config","features":{"browser":true}}"#.utf8))
+        guard case .config = plain else { return XCTFail("expected .config, got \(plain)") }
+
+        var state = CompanionState()
+        state.hydrate(old)
+        XCTAssertFalse(state.v3)
+        state.hydrate(try decoder.decode(Fleet.self, from: Data(#"{"bots":[],"groups":[],"v3":true}"#.utf8)))
+        XCTAssertTrue(state.v3)
+        let off = try decoder.decode(Frame.self, from: Data(#"{"kind":"config","features":{"v3":false}}"#.utf8))
+        guard case .labs(v3: false) = off else { return XCTFail("expected .labs(false), got \(off)") }
+        state.apply(off)
+        XCTAssertFalse(state.v3)
+        state.apply(.labs(v3: true))
+        XCTAssertTrue(state.v3)
+    }
 }
 
 // MARK: - Live text

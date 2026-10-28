@@ -1,15 +1,17 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { ArchiveRestore, CircleCheck, Columns2, FolderInput, Link2, Loader2, MoreHorizontal, Pencil, Pin, PinOff, RotateCcw, Trash2 } from "lucide-react";
+import { ArchiveRestore, CircleCheck, Columns2, FolderInput, Link2, Loader2, MoreHorizontal, Pencil, Phone, Pin, PinOff, RotateCcw, Trash2 } from "lucide-react";
 import type { BotProject, Task } from "@/state/store";
 import { cn } from "@/lib/cn";
 import { t } from "@/lib/i18n";
 import { nextRename } from "@/lib/rename";
 import { threadRefUrl } from "@/lib/thread-refs";
 import { SPLIT_DRAG_TYPE } from "@/lib/split-view";
+import { useV3 } from "@/lib/v3";
+import { showUndo, usePendingUndo } from "@/lib/v3-undo";
 import { ConfirmDialog } from "./ConfirmDialog";
 
-type ThreadRowTask = Pick<Task, "threadId" | "title" | "projectId" | "busy" | "activity" | "unread" | "openedBy" | "closedBy" | "archivedAt" | "state"> & { queued?: boolean };
+type ThreadRowTask = Pick<Task, "threadId" | "title" | "projectId" | "busy" | "activity" | "unread" | "openedBy" | "closedBy" | "archivedAt" | "state" | "voiceCalls"> & { queued?: boolean };
 
 /** "opened by Scout" for a thread a bot started, null for the person's own.
  * Shared by the sidebar row and the All-threads picker so both say it the
@@ -47,7 +49,7 @@ const isWorking = (task: Pick<Task, "activity" | "busy">): boolean => task.activ
 /** Whether a row must stay on screen regardless of age or closed state:
  * the person is looking at it, it needs them, or it has something new. */
 const demandsAttention = (task: ThreadRowTask, activeId: string) =>
-  task.threadId === activeId || task.activity === "waiting-on-you" || task.state === "waiting-on-you" || isWorking(task) || task.state === "running"
+  task.threadId === activeId || (Boolean(task.voiceCalls) && !isArchived(task)) || task.activity === "waiting-on-you" || task.state === "waiting-on-you" || isWorking(task) || task.state === "running"
   || Boolean(task.queued) || task.state === "queued" || (Boolean(task.unread) && !markedDone(task));
 
 /** The person pressed Done (the server stamps the closer with an empty
@@ -83,6 +85,8 @@ const attentionRank = (task: ThreadRowTask, activeId: string): number => {
   if (task.busy || task.activity === "working") return 1;
   if (task.queued) return 2;
   if (task.unread) return 3;
+  // the calls thread sits on top of the quiet ones, like a pin
+  if (task.voiceCalls && !isArchived(task)) return 3.5;
   if (task.threadId === activeId) return 4;
   return 5;
 };
@@ -129,6 +133,9 @@ export function SidebarThreadRow({ task, ownerId, current, compact, dense, trail
   const [renaming, setRenaming] = useState(false);
   const [draft, setDraft] = useState(task.title);
   const [deleting, setDeleting] = useState(false);
+  const v3 = useV3();
+  // 3.0: a delete hides the row and only goes through when its undo runs out
+  const pendingDelete = usePendingUndo(`thread:${ownerId}:${task.threadId}`);
   const finishing = useRef(false);
   const warm = useRef<number | undefined>(undefined);
   useEffect(() => () => window.clearTimeout(warm.current), []);
@@ -163,6 +170,18 @@ export function SidebarThreadRow({ task, ownerId, current, compact, dense, trail
     window.addEventListener("mousedown", outside);
     return () => window.removeEventListener("mousedown", outside);
   }, [menu]);
+  const markDone = () => {
+    setMenu(null);
+    const next = isArchived(task) ? null : Date.now();
+    onArchive?.(next);
+    if (v3) showUndo(next === null ? t("v3.undo.reopened", { title: task.title }) : t("v3.undo.done", { title: task.title }), { undo: () => onArchive?.(next === null ? task.archivedAt ?? Date.now() : null) });
+  };
+  const askDelete = () => {
+    setMenu(null);
+    if (!v3) { setDeleting(true); return; }
+    showUndo(t("v3.undo.deleted", { title: task.title }), { pending: `thread:${ownerId}:${task.threadId}`, commit: onDelete });
+  };
+  if (pendingDelete) return null;
   return <>
     <div className={cn("group/thread relative flex min-w-0 items-center rounded-[10px]", current ? "bg-raised" : "hover:bg-raised/50")}>
       {renaming ? <input autoFocus value={draft} maxLength={80} aria-label={t("task.renameAria")}
@@ -178,6 +197,7 @@ export function SidebarThreadRow({ task, ownerId, current, compact, dense, trail
         onContextMenu={(event) => { event.preventDefault(); openMenu(event.clientX, event.clientY); }}
         onKeyDown={(event) => { if (event.key === "ContextMenu" || event.shiftKey && event.key === "F10") { event.preventDefault(); const rect = event.currentTarget.getBoundingClientRect(); openMenu(rect.left, rect.bottom); } }}
         className={cn("flex min-w-0 flex-1 items-center gap-2 rounded-[10px] pl-3 pr-1 text-left font-medium outline-none focus-visible:ring-1 focus-visible:ring-hairline", dense ? "text-[12px]" : "text-[13px]", compact || dense ? "min-h-7 py-1" : "min-h-8 py-1.5", dimRunning && "opacity-50", current ? "font-semibold text-ink" : "text-ink-secondary hover:text-ink")}>
+        {task.voiceCalls && <Phone size={11} className="shrink-0 text-accent" aria-hidden />}
         <span className="flex min-w-0 flex-1 flex-col">
           <span className={cn("min-w-0 truncate", task.unread && "font-semibold text-ink", (closed || archived) && !current && "text-ink-secondary/70")}>{task.title}</span>
           {byline && <span className="min-w-0 truncate text-[12px] leading-tight text-ink-secondary/80">{byline}</span>}
@@ -207,8 +227,8 @@ export function SidebarThreadRow({ task, ownerId, current, compact, dense, trail
         </select>
       </label>}
       {onReopen && closed && !archived && <button type="button" onClick={() => { setMenu(null); onReopen(); }} className="flex w-full items-center gap-2 rounded px-2.5 py-2 text-left text-[12px] text-ink hover:bg-raised"><RotateCcw size={12} />{t("task.reopen")}</button>}
-      {onArchive && <button type="button" disabled={isWorking(task)} onClick={() => { setMenu(null); onArchive(isArchived(task) ? null : Date.now()); }} className="flex w-full items-center gap-2 rounded px-2.5 py-2 text-left text-[12px] text-ink hover:bg-raised disabled:opacity-40">{archived ? <ArchiveRestore size={12} /> : <CircleCheck size={12} />}{archived ? t("task.unarchive") : t("task.done")}</button>}
-      <button type="button" disabled={isWorking(task)} onClick={() => { setMenu(null); setDeleting(true); }} className="flex w-full items-center gap-2 rounded px-2.5 py-2 text-left text-[12px] text-danger hover:bg-raised disabled:opacity-40"><Trash2 size={12} />{t("task.deleteAria")}</button>
+      {onArchive && <button type="button" disabled={isWorking(task)} onClick={markDone} className="flex w-full items-center gap-2 rounded px-2.5 py-2 text-left text-[12px] text-ink hover:bg-raised disabled:opacity-40">{archived ? <ArchiveRestore size={12} /> : <CircleCheck size={12} />}{archived ? t("task.unarchive") : t("task.done")}</button>}
+      <button type="button" disabled={isWorking(task)} onClick={askDelete} className="flex w-full items-center gap-2 rounded px-2.5 py-2 text-left text-[12px] text-danger hover:bg-raised disabled:opacity-40"><Trash2 size={12} />{t("task.deleteAria")}</button>
     </div>, document.body)}
     <ConfirmDialog open={deleting} title={t("task.deleteConfirm")} body={t("task.deleteBody", { title: task.title })} confirmLabel={t("task.deleteAria")}
       onCancel={() => setDeleting(false)} onConfirm={() => { if (!isWorking(task)) onDelete(); setDeleting(false); }} returnFocusRef={actionRef} />

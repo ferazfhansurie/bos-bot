@@ -98,6 +98,18 @@ const ALLOWED: ReadonlyArray<{ method: string; path: RegExp }> = [
   { method: "GET", path: /^\/api\/digest$/ },
   // Paired-device subscription meters; no credentials or write operations.
   { method: "GET", path: /^\/api\/provider-usage$/ },
+  // The owner's bosbot.my numbers. The server answers only the computer's
+  // owner and keeps the site's token to itself; everyone else gets 404.
+  { method: "GET", path: /^\/api\/site-data(\/available)?$/ },
+  // Mini apps on the phone: the grid, one app's page, its records, writes
+  // from the page's bridge, and adding one from a link. The harness keeps
+  // these to the owner (or people in a room the app is shared into).
+  // Rename, delete, duplicate, export and ensure stay desktop-only.
+  { method: "GET", path: /^\/api\/apps$/ },
+  { method: "GET", path: /^\/api\/apps\/[\w-]+\/page$/ },
+  { method: "GET", path: /^\/api\/apps\/[\w-]+\/data\/[\w-]+(?:\/[\w-]+)?$/ },
+  { method: "POST", path: /^\/api\/apps\/[\w-]+\/data$/ },
+  { method: "POST", path: /^\/api\/apps\/install(?:\/preview)?$/ },
   // Sidecar-owned, authenticated endpoint metadata. The proxy terminates it
   // locally; it never becomes a newly exposed harness route.
   { method: "GET", path: /^\/api\/companion\/endpoints$/ },
@@ -242,6 +254,9 @@ const ALLOWED: ReadonlyArray<{ method: string; path: RegExp }> = [
   // Realtime voice call: the computer mints a short-lived xAI secret; the
   // raw key never crosses the companion boundary.
   { method: "POST", path: /^\/api\/voice\/call$/ },
+  // v3 call work: counters, confirmed jobs, read tools, the end report.
+  // server/index.ts keeps these to the owner.
+  { method: "POST", path: /^\/api\/voice\/(?:call\/(?:event|end|usage|summary)|jobs|tool|callback)$/ },
 
   // Routines create ordinary tasks using an existing agent configuration.
   // Webhook management remains explicitly denied below.

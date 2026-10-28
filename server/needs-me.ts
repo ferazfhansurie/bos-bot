@@ -8,7 +8,7 @@
 //
 // Pure on purpose: the harness (server/index.ts) gathers each thread's live
 // signals and a bounded tail of its transcript, and these functions decide.
-import type { DigestMove, DigestResponse, InboxItem, OptionCardData, TaskClosedBy } from "../shared/wire.ts";
+import type { ConnectorCardData, DigestMove, DigestResponse, InboxItem, OptionCardData, TaskClosedBy } from "../shared/wire.ts";
 import { parseChoices } from "../shared/ask-question.ts";
 import { summarize } from "./notify.ts";
 
@@ -22,6 +22,7 @@ export interface NeedsMeMessage {
   card?: Pick<OptionCardData, "title" | "subtitle" | "answered" | "dismissed"> &
     Partial<Pick<OptionCardData, "options" | "requestId" | "tool" | "skillRequest" | "routineRequest" | "profileRequest" | "teamSetupRequest" | "questionRequest">>;
   tool?: { name: string; ok?: boolean };
+  connector?: Pick<ConnectorCardData, "slug" | "label" | "status"> & Partial<Pick<ConnectorCardData, "reconnect" | "dismissed" | "resumed">>;
   turnTerminal?: boolean;
   turnOutcome?: { ok: boolean; stopReason?: string };
 }
@@ -45,9 +46,20 @@ export interface NeedsMeThread {
   working: boolean;
   /** newest messages, oldest first; a bounded tail is enough */
   messages: readonly NeedsMeMessage[];
+  /** v3: an open connect card is the person's to do, like a question */
+  connectCards?: boolean;
 }
 
 const PREVIEW_CHARS = 140;
+
+/** The newest connect card still waiting on the person: not connected,
+ * dismissed or already resumed. */
+export function pendingConnector(messages: readonly NeedsMeMessage[]): NeedsMeMessage | undefined {
+  return messages.findLast((message) => {
+    const connector = message.connector;
+    return Boolean(connector && message.kind === "connector" && connector.status !== "connected" && !connector.dismissed && !connector.resumed);
+  });
+}
 
 export function pendingCard(messages: readonly NeedsMeMessage[]): NeedsMeMessage | undefined {
   return messages.findLast((message) => message.card && !message.card.answered && !message.card.dismissed);
@@ -110,6 +122,15 @@ export function inboxItemFor(thread: NeedsMeThread): InboxItem | null {
     return { id: `failed:${thread.threadId}`, kind: "failed", ...base,
       preview: summarize(failed.turnOutcome?.stopReason || messagePreview(failed) || "The run failed", PREVIEW_CHARS), at: failed.at };
   }
+  // after a failed run (that is the newer news), before a plain unread reply;
+  // clearing it dismisses the card, like the card's own dismiss
+  const connect = thread.connectCards ? pendingConnector(thread.messages) : undefined;
+  if (connect?.connector) {
+    const { slug, label, reconnect } = connect.connector;
+    return { id: `question:${thread.threadId}`, kind: "question", ...base,
+      preview: summarize(reconnect ? `Sign in to ${label} again` : `Connect ${label}`, PREVIEW_CHARS), at: connect.at,
+      messageId: connect.id, connect: { slug, label, ...(reconnect ? { reconnect: true } : {}) } };
+  }
   if (thread.unread) {
     const reply = thread.messages.findLast((message) => message.role === "bot" && message.kind === "text" && message.text);
     return { id: `unread:${thread.threadId}`, kind: "unread", ...base,
@@ -129,8 +150,9 @@ export function buildInbox(threads: Iterable<NeedsMeThread>): { items: InboxItem
 }
 
 /** A row clearing can settle: an unread reply, a failed run, or a card
- * nobody is blocked on. A live ask is only settled by answering it —
- * clearing must never allow, deny or answer on the person's behalf. */
+ * nobody is blocked on (a connect card included: clearing dismisses it).
+ * A live ask is only settled by answering it — clearing must never allow,
+ * deny or answer on the person's behalf. */
 export function inboxItemClearable(item: InboxItem): boolean {
   return !item.leadAction && item.kind !== "waiting-on-you" && !item.requestId;
 }

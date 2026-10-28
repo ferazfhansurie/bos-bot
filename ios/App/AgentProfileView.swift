@@ -47,6 +47,7 @@ struct AgentProfileView: View {
     @State private var previewColor: String?
     @State private var previewBody: String?
     @State private var previewEyes: MascotEyeStyle?
+    @State private var previewAccessories: MascotAccessories?
 
     init(bot: Bot) {
         self.bot = bot
@@ -129,7 +130,7 @@ struct AgentProfileView: View {
 
     var body: some View {
         NavigationStack {
-            Form {
+            ScrollViewReader { scroller in Form {
                 if session.canAdminister && !current.isRemote {
                     BotComputerSettings(bot: current)
                     BotPermissionsSettings(bot: current)
@@ -213,7 +214,8 @@ struct AgentProfileView: View {
                         ProfileLiveMascot(color: previewColor ?? current.color,
                                           bodyId: previewBody ?? current.mascotBody,
                                           eyeStyle: previewEyes ?? MascotEyeStyle(stored: current.mascotEyes),
-                                          size: 112, name: current.name)
+                                          size: 112, name: current.name,
+                                          accessories: session.state.v3 ? wornAccessories : nil)
                             .listRowBackground(Color.clear)
                     } else {
                         HStack {
@@ -289,6 +291,34 @@ struct AgentProfileView: View {
                     Text("PNG, JPEG, GIF, or WebP, up to 10 MB. Images are stored on your paired computer and loaded with this device's pairing token.")
                 }
 
+                // bos bot 3.0: dress the mascot, one piece per slot
+                if session.state.v3 && crop == .mascot {
+                    Section("Accessories") {
+                        // one glass card: the whole look, live, over the slots
+                        VStack(alignment: .leading, spacing: 4) {
+                            HStack(spacing: 14) {
+                                FlatBotMark(color: previewColor ?? current.color, bodyId: previewBody ?? current.mascotBody,
+                                            eyeStyle: previewEyes ?? MascotEyeStyle(stored: current.mascotEyes),
+                                            accessories: wornAccessories)
+                                    .frame(width: 56, height: 56)
+                                    .padding(.top, 14)
+                                Text(wornSummary).font(.subheadline).foregroundStyle(.secondary)
+                                Spacer(minLength: 0)
+                            }
+                            .accessibilityElement(children: .combine)
+                            MascotAccessoryPicker(worn: wornAccessories, color: previewColor ?? current.color,
+                                                  bodyId: previewBody ?? current.mascotBody,
+                                                  eyeStyle: previewEyes ?? MascotEyeStyle(stored: current.mascotEyes),
+                                                  disabled: busy) { slot, id in
+                                Task { await selectAccessory(slot, id) }
+                            }
+                        }
+                        .padding(.vertical, 6)
+                        .id("profile-accessories")
+                    }
+                    .listRowBackground(Color.clear.glassSheet(cornerRadius: 22))
+                }
+
                 if session.canAdminister {
                     Section {
                         TextField("Art direction", text: $prompt, axis: .vertical)
@@ -321,7 +351,16 @@ struct AgentProfileView: View {
                     TextField("Title", text: $title)
                     TextField("Description", text: $description, axis: .vertical)
                         .lineLimit(3...8)
-                    Toggle("Notifications", isOn: $notifications)
+                    Toggle(isOn: $notifications) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Notifications")
+                            if !notifications {
+                                Text("Muted. Approvals and questions still come through.")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                    }
                 }
 
                 if session.canAdminister && !current.isRemote {
@@ -465,6 +504,15 @@ struct AgentProfileView: View {
                     Button("Save profile changes") { Task { await save() } }
                         .disabled(busy || !canSaveProfile)
                 }
+            }
+#if DEBUG
+            // `-open-accessories`: land on the avatar section, for screenshots
+            .task {
+                guard ProcessInfo.processInfo.arguments.contains("-open-accessories") else { return }
+                try? await Task.sleep(for: .milliseconds(600))
+                scroller.scrollTo("profile-accessories", anchor: .top)
+            }
+#endif
             }
             .navigationTitle("Bot settings")
             .alert("Switch with Ask permissions?", isPresented: $confirmingModelReset) {
@@ -682,6 +730,26 @@ struct AgentProfileView: View {
         busy = true
         defer { busy = false; previewEyes = nil }
         _ = await session.updateProfile(BotProfilePatch(mascotEyes: eyes.rawValue), for: current)
+    }
+
+    private var wornAccessories: MascotAccessories {
+        previewAccessories ?? current.mascotAccessories ?? MascotAccessories()
+    }
+
+    private var wornSummary: String {
+        let names = MascotAccessorySlot.allCases.compactMap { wornAccessories[$0] }
+            .compactMap { MascotAccessoryCatalog.accessory($0)?.name }
+        return names.isEmpty ? "Nothing on" : names.joined(separator: ", ")
+    }
+
+    private func selectAccessory(_ slot: MascotAccessorySlot, _ id: String?) async {
+        var next = wornAccessories
+        next[slot] = id
+        guard next != (current.mascotAccessories ?? MascotAccessories()) else { return }
+        previewAccessories = next
+        busy = true
+        defer { busy = false; previewAccessories = nil }
+        _ = await session.updateProfile(BotProfilePatch(mascotAccessories: next), for: current)
     }
 
     private func selectColor(_ color: String) async {

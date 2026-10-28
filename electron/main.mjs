@@ -15,7 +15,7 @@ import { attachLaunchSplash, readSplashSquad, saveSplashSquad } from "./launch-s
 import { createSharedBrowser } from "./shared-browser.mjs";
 import { authorizeAgentNetwork, authorizeAgentDownload } from './browser-agent-policy.mjs';
 import { registerAttentionNotifications } from "./attention-notifications.mjs";
-import { registerNotch } from "./notch.mjs";
+import { isNotchWindow, registerNotch } from "./notch.mjs";
 import { createPrimaryBrowserController } from "./primary-browser-controller.mjs";
 import { createWorkspaceBrowserRegistry } from "./workspace-browser.mjs";
 import { TOOLS_BROWSER_PARTITION, chromeUserAgent, noteBrowserKeyInput, attachToolsBrowserGuest, configureToolsBrowserSession, hardenWebviewAttach, toolsBrowserUrlAllowed } from "./tools-browser.mjs";
@@ -144,6 +144,8 @@ let desktopWorkspaceManager = null;
 let desktopWorkspaceOwner = null;
 let pendingPackageInstallUrl = packageUrlFromCommandLine(process.argv);
 let mainWindow = null;
+// Windows a person can be brought back to: everything but the notch panel.
+const appWindows = () => BrowserWindow.getAllWindows().filter((win) => !isNotchWindow(win));
 // Windows only: closing the main window hides it to the tray (close-to-tray.mjs).
 let closeToTray = null;
 const serverUnavailableWindows = new WeakSet();
@@ -275,8 +277,8 @@ function queuePackageInstall(rawLink) {
   const packageUrl = packageUrlFromDeepLink(rawLink);
   if (!packageUrl) return false;
   pendingPackageInstallUrl = packageUrl;
-  activateExistingWindow(BrowserWindow.getAllWindows());
-  const target = BrowserWindow.getAllWindows().find((win) => !win.isDestroyed());
+  activateExistingWindow(appWindows());
+  const target = appWindows().find((win) => !win.isDestroyed());
   deliverPackageInstall(target);
   return true;
 }
@@ -311,8 +313,8 @@ function queueMarketerLink(raw) {
   if (!isMarketerLink(raw)) return false;
   pendingMarketerLink = true;
   if (app.isReady()) { try { marketerIntent().remember(); } catch {} }
-  activateExistingWindow(BrowserWindow.getAllWindows());
-  deliverMarketerLink(BrowserWindow.getAllWindows().find(win => !win.isDestroyed()));
+  activateExistingWindow(appWindows());
+  deliverMarketerLink(appWindows().find(win => !win.isDestroyed()));
   return true;
 }
 for (const arg of process.argv.slice(1)) queueMarketerLink(arg);
@@ -325,7 +327,7 @@ function queuePresetLink(raw) {
   const token = presetTokenFromLink(raw);
   if (!token) return false;
   pendingPresetToken = token;
-  activateExistingWindow(BrowserWindow.getAllWindows());
+  activateExistingWindow(appWindows());
   void runPendingPreset();
   return true;
 }
@@ -355,7 +357,7 @@ async function runPendingPreset() {
     // the greeting is rewritten in place and an open chat keeps its first
     // copy (seen on Windows 2.1.3): reload so the person sees what was set up
     if (mainWindowShowsLocalUi()) mainWindow.webContents.reload();
-    activateExistingWindow(BrowserWindow.getAllWindows());
+    activateExistingWindow(appWindows());
   } catch (error) {
     slog(`setup preset failed: ${error?.message ?? error}`);
   } finally {
@@ -373,7 +375,7 @@ function queueInviteLink(raw) {
   const token = inviteTokenFromLink(raw);
   if (!token) return false;
   pendingInviteToken = token;
-  activateExistingWindow(BrowserWindow.getAllWindows());
+  activateExistingWindow(appWindows());
   void runPendingInvite();
   return true;
 }
@@ -398,7 +400,7 @@ async function runPendingInvite() {
     if (roomId && mainWindowShowsLocalUi()) {
       await mainWindow.webContents.executeJavaScript(`window.dispatchEvent(new CustomEvent("people-hub:joined", { detail: ${JSON.stringify(roomId)} }))`).catch(() => {});
     }
-    activateExistingWindow(BrowserWindow.getAllWindows());
+    activateExistingWindow(appWindows());
   } catch (error) {
     slog(`friend invite failed: ${error?.message ?? error}`);
   } finally {
@@ -411,7 +413,7 @@ app.on("open-url", (event, url) => {
   if (queueMarketerLink(url)) { event.preventDefault(); return; }
   if (queuePresetLink(url)) { event.preventDefault(); return; }
   if (queueInviteLink(url)) { event.preventDefault(); return; }
-  if (queueBrowserLink(url)) { event.preventDefault(); activateExistingWindow(BrowserWindow.getAllWindows()); return; }
+  if (queueBrowserLink(url)) { event.preventDefault(); activateExistingWindow(appWindows()); return; }
   if (!queuePackageInstall(url)) return;
   event.preventDefault();
 });
@@ -422,8 +424,8 @@ app.on("second-instance", (_event, commandLine) => {
   for (const arg of commandLine) { queueMarketerLink(arg); queuePresetLink(arg); queueInviteLink(arg); queueBrowserLink(arg); }
   const packageUrl = packageUrlFromCommandLine(commandLine);
   if (packageUrl) pendingPackageInstallUrl = packageUrl;
-  activateExistingWindow(BrowserWindow.getAllWindows());
-  const target = BrowserWindow.getAllWindows().find((win) => !win.isDestroyed());
+  if (!activateExistingWindow(appWindows()) && app.isReady() && process.platform === "darwin") createWindow();
+  const target = appWindows().find((win) => !win.isDestroyed());
   deliverPackageInstall(target);
 });
 
@@ -2358,7 +2360,8 @@ registerNotch({
   pageUrl: () => new URL("/notch.html", rendererOrigin()).toString(),
   focusMain: () => {
     const win = mainWindow;
-    if (!win || win.isDestroyed()) return;
+    // the main window was closed but the notch lives on: open a fresh one
+    if (!win || win.isDestroyed()) return void createWindow();
     if (win.isMinimized()) win.restore();
     if (!win.isVisible()) win.show();
     win.focus();
@@ -3885,7 +3888,9 @@ app.whenReady().then(async () => {
   startUpdater({ prepareInstall: updateLifecycle.prepareInstall, dataDir: desktopDataDir() });
   refreshApplicationMenu();
   app.on("activate", () => {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow();
+    // the notch panel always exists, so "no windows" never happens once it is
+    // on: bring the main window back whenever it is gone
+    if (!mainWindow || mainWindow.isDestroyed()) createWindow();
   });
 });
 

@@ -11,15 +11,20 @@ import type { ModelCatalog } from "../contracts.ts";
 import { killCliTree, spawnCli } from "../procs.ts";
 import { mergeLocalInject } from "./local-inject.ts";
 
+/** ChatGPT bots start on Terra 6.1 when the account lists it, not Sol (firaz,
+ *  2026-10-28). A model set in ~/.codex/config.toml still wins. */
+export const PREFERRED_CODEX_MODEL = "gpt-6.1-terra";
+
 // Recent releases can precede the installed CLI's model/list catalog.
 export const RECENT_CODEX_MODELS = [
+  { id: "gpt-6.1-terra", label: "GPT-6.1 Terra" },
   { id: "gpt-6.1-sol", label: "GPT-6.1 Sol" },
   { id: "gpt-6-sol", label: "GPT-6 Sol" },
   { id: "gpt-6-luna", label: "GPT-6 Luna" },
 ];
 
 export const STATIC_CODEX_MODELS: ModelCatalog = {
-  default: "gpt-5.6-sol",
+  default: PREFERRED_CODEX_MODEL,
   options: [
     ...RECENT_CODEX_MODELS,
     { id: "gpt-5.6-sol", label: "GPT-5.6 Sol" },
@@ -369,6 +374,9 @@ export async function readCodexModelCatalog(
 ): Promise<ModelCatalog> {
   const account = cli ? await readCodexAppServerModelCatalog(cli, env) : null;
   const official = account ?? structuredClone(STATIC_CODEX_MODELS);
+  if (official.options.some((option) => option.id === PREFERRED_CODEX_MODEL)) {
+    official.default = PREFERRED_CODEX_MODEL;
+  }
   // model/list is the signed-in account's own list: a free ChatGPT plan has no
   // Sol models, and offering them anyway makes every turn fail with "not
   // supported when using Codex with a ChatGPT account". Recent rows only fill

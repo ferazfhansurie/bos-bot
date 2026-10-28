@@ -34,6 +34,8 @@ vi.mock("react", async (importOriginal) => {
     useState: rowHooks.useState as unknown as typeof actual.useState,
     useRef: ((initial: unknown) => ({ current: initial })) as unknown as typeof actual.useRef,
     useEffect: (() => undefined) as unknown as typeof actual.useEffect,
+    // 3.0 flag and undo toast read external stores; outside a render, read them once
+    useSyncExternalStore: ((_subscribe: unknown, snapshot: () => unknown) => snapshot()) as unknown as typeof actual.useSyncExternalStore,
   };
 });
 

@@ -159,3 +159,15 @@ it("a takeover mid-send revokes the transport's authorization", async () => {
   expect(await replies.reply("money", input)).toMatchObject({ state: "outcome_unknown" });
   expect(checked).toBe(false);
 });
+it("keeps draft mode until the owner turns it off explicitly", () => {
+  expect(() => replies.configure("bos", { accountId: account, chatIds: [client], autoDispatch: true, draft: "yes" })).toThrow();
+  replies.configure("bos", { accountId: account, chatIds: [client], autoDispatch: true, draft: true });
+  expect(replies.policy("bos")).toMatchObject({ autoDispatch: true, draft: true });
+  expect(replies.drafts("bos")).toBe(true);
+  expect(replies.claimInbound("bos", store.message("incoming")!)).toBe(true);
+  replies.configure("bos", { accountId: account, chatIds: [client], autoDispatch: true });
+  expect(replies.drafts("bos")).toBe(true);
+  replies.configure("bos", { accountId: account, chatIds: [client], autoDispatch: true, draft: false });
+  expect(replies.drafts("bos")).toBe(false);
+  expect(replies.policy("bos")).not.toHaveProperty("draft");
+});

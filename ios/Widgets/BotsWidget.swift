@@ -78,7 +78,7 @@ extension BotGlance {
             return .listening
         case "working":
             // start on what it is really doing, then drift through the work
-            let loop: [MausState] = [.thinking, .searching, .working]
+            let loop: [MausState] = [.thinking, .searching, .reading, .writing, .working]
             let start = loop.firstIndex(of: current) ?? 2
             return beat == 0 ? current : loop[(start + beat) % loop.count]
         case "done":
@@ -172,7 +172,9 @@ private struct RingFace: View {
     var body: some View {
         let ring = max(2, size * 0.05)
         ZStack {
-            if bot.isBusy || bot.isDone {
+            if bot.isWorking, let count = bot.stepCount, count >= 2, let index = bot.stepIndex {
+                PlanSegments(index: index, count: count, color: bot.accent, lineWidth: ring)
+            } else if bot.isBusy || bot.isDone {
                 Circle().stroke(bot.accent.opacity(bot.needsYou ? 1 : 0.55), lineWidth: ring)
             }
             BeatFace(bot: bot, entry: entry, size: size * 0.74)
@@ -217,9 +219,15 @@ private struct SmallBots: View {
     let entry: BotsEntry
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        // big face, then name, one state word and one line: this size is
+        // also the one CarPlay's widgets screen draws, so it must read at
+        // a glance and nothing wraps
+        let team = [lead] + others
+        let waiting = team.filter(\.needsYou).count
+        let summary = CarGlance.summary(working: team.filter(\.isWorking).count, needsYou: waiting)
+        VStack(alignment: .leading, spacing: 1) {
             HStack(alignment: .top) {
-                RingFace(bot: lead, entry: entry, size: 58)
+                RingFace(bot: lead, entry: entry, size: 64)
                 Spacer(minLength: 0)
                 // the rest of the team, small, in a row
                 HStack(spacing: -4) {
@@ -228,19 +236,23 @@ private struct SmallBots: View {
                     }
                 }
             }
-            Spacer(minLength: 0)
-            StatusText(bot: lead)
-            if !lead.line.isEmpty {
-                Text(lead.line)
-                    .font(.system(size: 12))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(2)
-            } else {
-                Text(others.contains(where: \.isBusy) ? "\(others.filter(\.isBusy).count) busy" : "all quiet")
-                    .font(.system(size: 12))
-                    .foregroundStyle(.secondary)
+            Spacer(minLength: 4)
+            HStack(spacing: 4) {
+                Text(lead.fraction.map { "\(lead.name) · \($0)" } ?? lead.name)
+                Spacer(minLength: 2)
+                Elapsed(bot: lead)
             }
+            .font(.system(size: 13, weight: .semibold))
+            .foregroundStyle(.secondary)
+            Text(lead.statusWord.isEmpty ? "free" : lead.statusWord)
+                .font(.system(size: 20, weight: .bold))
+                .foregroundStyle(lead.needsYou || lead.isDone ? lead.accent : .primary)
+            Text(summary ?? CarGlance.shortTitle(lead.threadTitle) ?? (lead.line.isEmpty ? "all quiet" : lead.line))
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(.secondary)
         }
+        .lineLimit(1)
+        .minimumScaleFactor(0.8)
         .padding(14)
     }
 }
@@ -271,11 +283,22 @@ private struct MediumBots: View {
             if let lead = bots.first, lead.isBusy || lead.isDone, !lead.line.isEmpty {
                 HStack(spacing: 6) {
                     Circle().fill(lead.accent).frame(width: 6, height: 6)
+                    if let title = lead.threadTitle {
+                        Text(title)
+                            .font(.system(size: 12, weight: .semibold))
+                            .lineLimit(1)
+                            .layoutPriority(1)
+                    }
                     Text(lead.line)
                         .font(.system(size: 12))
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                     Spacer(minLength: 4)
+                    if let fraction = lead.fraction {
+                        Text(fraction)
+                            .font(.system(size: 12, weight: .semibold).monospacedDigit())
+                            .foregroundStyle(.secondary)
+                    }
                     Elapsed(bot: lead)
                 }
             }
@@ -316,11 +339,17 @@ private struct RectangularBot: View {
                     if !bot.statusWord.isEmpty {
                         Text(bot.statusWord).font(.system(size: 13)).opacity(0.7)
                     }
+                    if let fraction = bot.fraction {
+                        Text(fraction).font(.system(size: 13).monospacedDigit()).opacity(0.7)
+                    }
                 }
                 .lineLimit(1)
+                if let title = bot.threadTitle, bot.isBusy || bot.isDone {
+                    Text(title).font(.system(size: 13, weight: .medium)).lineLimit(1)
+                }
                 Text(bot.line.isEmpty ? (others > 0 ? "+\(others) busy" : "all quiet") : bot.line)
                     .font(.system(size: 13))
-                    .lineLimit(2)
+                    .lineLimit(bot.threadTitle == nil ? 2 : 1)
                     .opacity(0.8)
             }
             Spacer(minLength: 0)

@@ -142,7 +142,7 @@ export function ServerPairingCard({ initialSession = null }: { initialSession?: 
   return (
     <Card title={t("remote.serverPairing.title")} subtitle={t("remote.serverPairing.subtitle")}>
       <div className="mt-3 flex flex-wrap items-center gap-3">
-        <button type="button" onClick={() => void create()} disabled={busy} className={button}>
+        <button type="button" data-v3-nod="pair-phone" onClick={() => void create()} disabled={busy} className={button}>
           {busy ? t("remote.serverPairing.creating") : t("remote.serverPairing.create")}
         </button>
       </div>

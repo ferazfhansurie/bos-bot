@@ -653,19 +653,42 @@ function ShelfRow({ bot, now, drop, target, look, onOpen, reduced, asking }: {
       data-drop-bot={bot.id} data-drop-thread={bot.threadId} onClick={() => onOpen(bot.id, bot.threadId)}
       style={target ? ({ ["--row" as string]: dotColor(bot.color) } as CSSProperties) : undefined}>
       <span className={target && !reduced ? "notch-row-face notch-gesture-hop" : "notch-row-face"}>
-        <NotchMascot color={bot.color} body={bot.body} face={target ? "happy" : face} size={26} pixels={26}
+        {bot.plan && !asking && <PlanRing plan={bot.plan} color={dotColor(bot.color)} />}
+        <NotchMascot color={bot.color} body={bot.body} face={target ? "happy" : face} size={bot.plan && !asking ? 20 : 26} pixels={26}
           look={drop ? look : 0} animated={!reduced} />
       </span>
-      <span className="notch-row-text">
-        <span className="notch-name">{bot.name}</span>
-        {bot.title && <span className="notch-sub">{bot.title}</span>}
+      <span className={bot.step && !asking && !resting ? "notch-row-text notch-row-stack" : "notch-row-text"}>
+        <span className="notch-row-line">
+          <span className="notch-name">{bot.name}</span>
+          {bot.title && <span className="notch-sub">{bot.title}</span>}
+        </span>
+        {bot.step && !asking && !resting && <span key={bot.step} className="notch-step">{bot.step}</span>}
       </span>
       {!drop && word && (
         <span className={asking ? "notch-state notch-state-ask" : "notch-state"}>
-          {word}{!resting && !asking && bot.since ? ` ${elapsed(bot.since, now)}` : ""}
+          {bot.plan && !asking ? `${bot.plan.index}/${bot.plan.count}` : word}
+          {!resting && !asking && (bot.jobSince ?? bot.since) ? ` ${elapsed(bot.jobSince ?? bot.since, now)}` : ""}
         </span>
       )}
     </button>
+  );
+}
+
+/** The plan as a ring of segments round the face: steps done are solid, the
+ * one in progress half lit, the rest faint. The phone's live card draws the
+ * same ring (ios/Shared/LiveCard.swift PlanSegments). */
+function PlanRing({ plan, color }: { plan: { index: number; count: number }; color: string }) {
+  const r = 14, c = 2 * Math.PI * r, gap = plan.count > 8 ? c * 0.012 : c * 0.028, seg = c / plan.count;
+  return (
+    <svg className="notch-plan" width={32} height={32} viewBox="0 0 32 32" aria-hidden="true">
+      {Array.from({ length: plan.count }, (_, i) => (
+        <circle key={i} cx={16} cy={16} r={r} fill="none" strokeWidth={2} strokeLinecap="round"
+          stroke={i < plan.index - 1 ? color : i === plan.index - 1 ? color : "rgba(255,255,255,.14)"}
+          strokeOpacity={i === plan.index - 1 ? 0.45 : 1}
+          strokeDasharray={`${Math.max(0.5, seg - gap)} ${c}`} strokeDashoffset={-(i * seg + gap / 2)}
+          transform="rotate(-90 16 16)" />
+      ))}
+    </svg>
   );
 }
 

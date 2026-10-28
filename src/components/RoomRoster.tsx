@@ -3,18 +3,25 @@ import { cn } from "@/lib/cn";
 import { normalizeState } from "@/lib/mascot";
 import { roomMemberStatus, roomMemberStatusLabel, roomRosterPreview, type RoomViewFields } from "@/lib/room-view";
 import type { Bot } from "@/state/store";
+import "./v3/alive.css";
 
 // Static profile avatars, stacked: working bots first with a ring + dot,
 // the rest folded into a "+n" count so a big room stays one tidy chip.
-export function RoomRoster({ room, members, max, showWorking = true }: { room: RoomViewFields & { busyBotId?: string | null }; members: Bot[]; max?: number; showWorking?: boolean }) {
+// 3.0 (alive): the bot talking bounces and the idle ones glance its way;
+// css only, so it costs nothing while nobody talks.
+export function RoomRoster({ room, members, max, showWorking = true, alive = false }: { room: RoomViewFields & { busyBotId?: string | null }; members: Bot[]; max?: number; showWorking?: boolean; alive?: boolean }) {
   const roster = roomRosterPreview(members, (member) => roomMemberStatus(room, member), max);
   const workingCount = members.filter((member) => roomMemberStatus(room, member) === "working").length;
+  const talker = alive ? roster.visible.findIndex((member) => roomMemberStatus(room, member) === "working") : -1;
   return (
     <span className="flex items-center -space-x-1.5">
       {roster.visible.map((member, index) => {
         const status = roomMemberStatus(room, member);
         return <span key={member.id} title={`${member.name} — ${roomMemberStatusLabel(status, member)}`} aria-label={`${member.name}: ${roomMemberStatusLabel(status, member)}`} style={{ zIndex: roster.visible.length - index }} className={cn("relative inline-flex rounded-full ring-2 ring-app", status === "working" && "bot-morph ring-accent/60", status === "offline" && "opacity-50")}>
-          <BotAvatar bot={member} state={normalizeState(member.mascotExpression) ?? undefined} size={24} animated={false} />
+          {talker < 0 ? <BotAvatar bot={member} state={normalizeState(member.mascotExpression) ?? undefined} size={24} animated={false} />
+            : <span className={cn("inline-flex", status === "working" ? "v3-talking" : index < talker ? "v3-glance-right" : "v3-glance-left")} data-testid={status === "working" ? "v3-talking" : undefined}>
+              <BotAvatar bot={member} state={normalizeState(member.mascotExpression) ?? undefined} size={24} animated={false} />
+            </span>}
           {status === "working" && <span className="absolute -right-0.5 -top-0.5 size-2 animate-pulse rounded-full border border-app bg-accent" />}
         </span>;
       })}

@@ -19,13 +19,24 @@ public enum MascotMood: String, CaseIterable, Sendable {
 }
 
 /// A mood's face: two eyes and an accent beside the body. There is no mouth,
-/// ever: the eyes, the lids and the body say all of it. Glyph ids resolve
+/// ever: the eyes, the lids and the body say all of it. Each eye is layered
+/// glyph parts at their weights, the same as the shared table; ids resolve
 /// through `EmptyMascotBrain.path`.
 public struct MascotMoodFace: Equatable, Sendable {
-    public let left: String
-    public let right: String
+    public let leftParts: [GlyphEyePart]
+    public let rightParts: [GlyphEyePart]
     public let accent: String?
     public let anchor: GlyphAccentAnchor?
+    /// The main glyph of each eye.
+    public var left: String { leftParts.first?.glyph ?? "" }
+    public var right: String { rightParts.first?.glyph ?? "" }
+
+    public init(leftParts: [GlyphEyePart], rightParts: [GlyphEyePart], accent: String?, anchor: GlyphAccentAnchor?) {
+        self.leftParts = leftParts
+        self.rightParts = rightParts
+        self.accent = accent
+        self.anchor = anchor
+    }
 }
 
 /// How the draft being typed reads to the mascot.
@@ -55,25 +66,7 @@ public enum EmptyMascotBrain {
 
     /// The glyphs the shared table does not have. 24 box, absolute M/L/C/Z.
     static let extraPaths: [String: String] = [
-        // open eye, a touch smaller than `ring` so the idle face reads soft
-        "open": "M12 7C14.76 7 17 9.24 17 12C17 14.76 14.76 17 12 17C9.24 17 7 14.76 7 12C7 9.24 9.24 7 12 7Z",
-        // scared: wide ring with a pin pupil
-        "wide": "M12 4C16.42 4 20 7.58 20 12C20 16.42 16.42 20 12 20C7.58 20 4 16.42 4 12C4 7.58 7.58 4 12 4ZM11.9 12L12.1 12",
-        // closed happy eye, ^
-        "arc": "M5 15C7.2 8.5 16.8 8.5 19 15",
-        // closed sleeping eye, u
-        "lid": "M5 10C7.2 16.5 16.8 16.5 19 10",
-        // heavy lid: flat top, half an eye below
-        "half": "M4.5 11L19.5 11M6.5 11C6.5 14.8 9 17 12 17C15 17 17.5 14.8 17.5 11",
-        // suspicious squint, each eye sloping in
-        "squintL": "M5 10.5L19 13.5",
-        "squintR": "M5 13.5L19 10.5",
-        // dizzy spiral
-        "spiral": "M12 12C12 11 13.1 10.6 13.8 11.3C14.7 12.2 14.1 13.9 12.7 14.3C10.9 14.8 9.3 13.4 9.3 11.6C9.3 9.4 11.3 7.9 13.4 8.2C16.1 8.6 17.6 11.1 17.1 13.6C16.5 16.6 13.4 18.3 10.5 17.6C7.2 16.8 5.4 13.4 6.2 10.2",
-        // accents
-        "zz": "M3 4.5L9 4.5L3 10.5L9 10.5M13 12.5L19 12.5L13 18.5L19 18.5",
         "moon": "M15.5 3.8C11.4 4.6 8.4 8 8.4 12C8.4 16 11.4 19.4 15.5 20.2C10.6 21.6 4.5 18 4.5 12C4.5 6 10.6 2.4 15.5 3.8Z",
-        "sweat": "M12 4C12 4 7.5 10 7.5 13.5C7.5 16 9.5 18 12 18C14.5 18 16.5 16 16.5 13.5C16.5 10 12 4 12 4Z",
     ]
 
     private static let parsedExtras: [String: CGPath] = extraPaths.mapValues(GlyphFaces.parsePath)
@@ -83,31 +76,35 @@ public enum EmptyMascotBrain {
         parsedExtras[id] ?? GlyphFaces.path(id)
     }
 
+    /// Every mood wears a face from the shared table, so the empty thread
+    /// has the same B eyes as everywhere else: dots at rest, never - -.
     public static func face(_ mood: MascotMood) -> MascotMoodFace {
         switch mood {
-        case .idle: MascotMoodFace(left: "dash", right: "dash", accent: nil, anchor: nil)
-        case .listening: MascotMoodFace(left: "dash", right: "dash", accent: nil, anchor: nil)
+        case .idle: shared(.idle)
+        case .listening: shared(.listening)
         case .thinking: shared(.thinking)
-        case .scared: MascotMoodFace(left: "wide", right: "wide", accent: "sweat", anchor: .topRight)
+        case .scared: shared(.scared)
         case .alert: shared(.waiting)
-        case .happy: MascotMoodFace(left: "arc", right: "arc", accent: "heart", anchor: .topRight)
-        case .nodding: MascotMoodFace(left: "arc", right: "arc", accent: nil, anchor: nil)
-        case .suspicious: MascotMoodFace(left: "squintL", right: "squintR", accent: "query", anchor: .left)
-        case .drowsy: MascotMoodFace(left: "half", right: "half", accent: nil, anchor: nil)
-        case .asleep: MascotMoodFace(left: "lid", right: "lid", accent: "zz", anchor: .topRight)
-        case .surprised: MascotMoodFace(left: "wide", right: "wide", accent: "bang", anchor: .left)
-        case .dizzy: MascotMoodFace(left: "spiral", right: "spiral", accent: "star", anchor: .topRight)
-        case .purr: MascotMoodFace(left: "arc", right: "arc", accent: "heart", anchor: .topRight)
-        case .pose: MascotMoodFace(left: "arc", right: "star", accent: "spark", anchor: .split)
-        case .yawn: MascotMoodFace(left: "lid", right: "lid", accent: nil, anchor: nil)
-        case .excited: MascotMoodFace(left: "star", right: "star", accent: "spark", anchor: .split)
-        case .late: MascotMoodFace(left: "half", right: "half", accent: "moon", anchor: .topRight)
+        case .happy, .purr: shared(.happy)
+        case .nodding: shared(.happy, accent: false)
+        case .suspicious: shared(.skeptical)
+        case .drowsy: shared(.drowsy)
+        case .asleep: shared(.asleep)
+        case .surprised: shared(.surprised)
+        case .dizzy: shared(.dizzy)
+        case .pose: shared(.wink)
+        case .yawn: shared(.yawn)
+        case .excited: shared(.excited)
+        case .late:
+            MascotMoodFace(leftParts: GlyphFaces.face(.drowsy).leftParts, rightParts: GlyphFaces.face(.drowsy).rightParts,
+                           accent: "moon", anchor: .topRight)
         }
     }
 
-    private static func shared(_ state: GlyphFaceState) -> MascotMoodFace {
+    private static func shared(_ state: GlyphFaceState, accent: Bool = true) -> MascotMoodFace {
         let face = GlyphFaces.face(state)
-        return MascotMoodFace(left: face.left, right: face.right, accent: face.accent, anchor: face.anchor)
+        return MascotMoodFace(leftParts: face.leftParts, rightParts: face.rightParts,
+                              accent: accent ? face.accent : nil, anchor: accent ? face.anchor : nil)
     }
 
     // MARK: - The draft

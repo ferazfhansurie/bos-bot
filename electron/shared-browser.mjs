@@ -1,4 +1,6 @@
 import { randomUUID } from 'node:crypto';
+import { lstatSync } from 'node:fs';
+import { isAbsolute, normalize as normalizePath, sep } from 'node:path';
 // One browser for the person and the bot. On the desktop the bot drives the
 // person's own PrimaryBrowser tabs through webContents.debugger (CDP), under
 // the same agent_browser_* names the headless engine serves, so prompts and
@@ -32,6 +34,7 @@ export const desktopBrowserTools = [
   { name: 'agent_browser_type', description: 'Type text into an element by @ref or CSS selector.', inputSchema: S({ selector, text: { type: 'string', maxLength: 10000 }, clear: { type: 'boolean', default: false } }, ['selector', 'text']) },
   { name: 'agent_browser_press', description: 'Press a key at the current focus, such as Enter, Tab, Escape or Control+a.', inputSchema: S({ key: { type: 'string' } }, ['key']) },
   { name: 'agent_browser_scroll', description: 'Scroll the page or an element.', inputSchema: S({ direction: { type: 'string', enum: ['up', 'down', 'left', 'right'], default: 'down' }, amount: { type: 'integer', default: 600 }, selector: { type: 'string' } }) },
+  { name: 'agent_browser_upload', description: 'Attach local files to a file input (<input type=file>) by @ref or CSS selector, without opening a file picker. Pass absolute paths of files you made or the person gave you. Sites often hide the input: try the selector input[type=file] after opening their upload dialog, instead of clicking the upload button.', inputSchema: S({ selector, files: { type: 'array', items: { type: 'string', maxLength: 4096 }, minItems: 1, maxItems: 10, description: 'Absolute paths of regular files.' } }, ['selector', 'files']) },
   { name: 'agent_browser_select', description: 'Select options in a select element by value or label.', inputSchema: S({ selector, values: { type: 'array', items: { type: 'string' }, minItems: 1 } }, ['selector', 'values']) },
   { name: 'agent_browser_check', description: 'Check a checkbox or switch.', inputSchema: S({ selector }, ['selector']) },
   { name: 'agent_browser_uncheck', description: 'Uncheck a checkbox or switch.', inputSchema: S({ selector }, ['selector']) },
@@ -58,7 +61,7 @@ const TOOL_NAMES = new Set(desktopBrowserTools.map(t => t.name));
 // Raw CDP never leaves this file; this is the complete command surface.
 const ALLOWED = new Set([
   'Accessibility.getFullAXTree', 'DOM.getDocument', 'DOM.querySelector', 'DOM.describeNode', 'DOM.resolveNode',
-  'DOM.getContentQuads', 'DOM.getBoxModel', 'DOM.scrollIntoViewIfNeeded', 'DOM.focus',
+  'DOM.getContentQuads', 'DOM.getBoxModel', 'DOM.scrollIntoViewIfNeeded', 'DOM.focus', 'DOM.setFileInputFiles',
   'Runtime.callFunctionOn', 'Runtime.evaluate', 'Runtime.releaseObject',
   'Page.captureScreenshot', 'Page.getLayoutMetrics', 'Page.navigate',
   'Input.dispatchMouseEvent', 'Input.dispatchKeyEvent', 'Input.insertText',
@@ -75,6 +78,22 @@ const SKIP = new Set(['InlineTextBox', 'none', 'generic', 'LineBreak', 'presenta
 const KEYS = { Enter: [13, '\r'], Tab: [9], Escape: [27], Backspace: [8], Delete: [46], ArrowUp: [38], ArrowDown: [40], ArrowLeft: [37], ArrowRight: [39], Home: [36], End: [35], PageUp: [33], PageDown: [34], Space: [32, ' '], ' ': [32, ' '] };
 const MODIFIERS = { Alt: 1, Control: 2, Ctrl: 2, Meta: 4, Command: 4, Cmd: 4, Shift: 8 };
 const EDIT_COMMANDS = { a: 'selectAll', c: 'copy', v: 'paste', x: 'cut', z: 'undo' };
+
+// Secrets a page must never receive, even from a bot with shell access.
+const SECRET_PATH = /(^|[\\/])(\.ssh|\.gnupg|\.aws|\.kube|\.docker|Keychains|\.env(\.[\w-]+)?|\.netrc|\.npmrc|\.pgpass|id_[a-z0-9]+)([\\/]|$)/i;
+const MAX_UPLOAD = 200 * 1024 * 1024;
+export function checkUploadFiles(files) {
+  if (!Array.isArray(files) || !files.length || files.length > 10) throw new Error('Pass 1 to 10 absolute file paths.');
+  return files.map(f => {
+    if (typeof f !== 'string' || !isAbsolute(f)) throw new Error('File paths must be absolute.');
+    const path = normalizePath(f);
+    if (SECRET_PATH.test(path)) throw new Error(`That file cannot be uploaded: ${path.split(sep).pop()}.`);
+    let st; try { st = lstatSync(path); } catch { throw new Error(`No file at ${path}.`); }
+    if (st.isSymbolicLink() || !st.isFile()) throw new Error(`${path.split(sep).pop()} is not a regular file.`);
+    if (st.size > MAX_UPLOAD) throw new Error(`${path.split(sep).pop()} is over 200 MB.`);
+    return path;
+  });
+}
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const text = value => ({ content: [{ type: 'text', text: value }] });
@@ -414,6 +433,17 @@ export function createSharedBrowser({ contentsFromId, urlAllowed = () => true, g
         return true;
       }`, [args.text, name === 'agent_browser_fill' || args.clear === true]);
       return text(name === 'agent_browser_fill' ? 'Filled.' : 'Typed.');
+    }
+    if (name === 'agent_browser_upload') {
+      const files = checkUploadFiles(args.files);
+      await on(run, id, `function(){if(!this.isConnected)throw new Error('That element is no longer on the page. Take a fresh snapshot.');if(this.tagName!=='INPUT'||this.type!=='file')throw new Error('That element is not a file input. Try the selector input[type=file].');if(this.disabled)throw new Error('That file input is disabled.');return true;}`);
+      if (files.length > 1 && !(await on(run, id, 'function(){return this.multiple;}'))) throw new Error('That file input takes one file.');
+      await host.authorize?.({ profileId: t.profileId, guestId: c.id, url: c.getURL(), action: 'upload', scope: JSON.stringify([t.key, t.generation]), fullAccess: t.fullAccess === true });
+      assertCurrent(t);
+      await run('DOM.setFileInputFiles', { files, backendNodeId: id });
+      const n = await on(run, id, 'function(){return this.files?this.files.length:0;}');
+      if (n !== files.length) throw new Error('The page did not take the files. Take a snapshot before trying again.');
+      return text(`Attached ${n} file${n === 1 ? '' : 's'}. Take a fresh snapshot to see what the page did with ${n === 1 ? 'it' : 'them'}.`);
     }
     if (name === 'agent_browser_select') {
       if (!Array.isArray(args.values) || !args.values.length) throw new Error('Pass values to select.');

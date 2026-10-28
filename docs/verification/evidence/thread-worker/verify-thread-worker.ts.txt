@@ -1,0 +1,65 @@
+// Kept as evidence, not in scripts/: the updater treats any scripts/ change as a
+// native shell change. To rerun, copy to scripts/verify-thread-worker.ts.
+// 3.0 thread worker acceptance: a fake bot runs three steps, then holds one
+// open so the row at the end of the thread can be seen working, hearing a
+// mid-turn send, going quiet and finishing. Real server + App renderer, only a
+// disposable fake engine. --smoke checks the fixture and exits.
+//   POST /__steer  sends a mid-turn message (the fake reads it as a step)
+//   POST /__finish lets the held step end
+//   /__skin?s=<id>&v3=<0|1> sets the skin and 3.0 switch, then opens the app
+import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
+import { rmSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { launchVerificationServer, runControlOmb } from "./control-omb.ts";
+import { fixtureApi, mountPreview, parkUntilSignal, type MountedPreview } from "./testing/preview-fixture.ts";
+
+const gate = join("/tmp", `thread-worker-${randomUUID()}.gate`);
+const fixture = await launchVerificationServer({
+  ...process.env,
+  FAKE_CLAUDE_MODE: "slow-tool",
+  FAKE_CLAUDE_SLOW_TOOL_GATE: gate,
+  FAKE_CLAUDE_STEER_STEP: "1",
+  FAKE_CLAUDE_TOOL_CALLS: JSON.stringify([
+    { name: "Read", input: { file_path: "pricing.md" }, output: "ok" },
+    { name: "WebSearch", input: { query: "saas pricing pages" }, output: "ok" },
+    { name: "Write", input: { file_path: "pricing.html" }, output: "ok" },
+  ]),
+});
+let ui: MountedPreview | undefined;
+try {
+  const api = fixtureApi(fixture.info.url);
+  const control = (args: string[]) => runControlOmb([...args, "--url", fixture.info.url]);
+  await control(["new-bot", "--name", "Pepper"]);
+  const { bots } = await api("GET", "/api/bots?messages=0");
+  const bot = bots.find((item: { name: string }) => item.name === "Pepper");
+  await api("PATCH", `/api/bots/${bot.id}`, { color: "orange", mascotBody: "bear" });
+  await api("PATCH", "/api/config", { language: "en" });
+  await control(["send", "--bot", bot.id, "--text", "Build me a pricing page"]);
+  const page = "/__thread-worker.html";
+  ui = await mountPreview(fixture, { entry: "/scripts/testing/threads-preview.tsx", route: page, title: "Thread worker acceptance",
+    extraRoutes: [
+      { path: "/__finish", method: "POST", handler: (_req, res) => { writeFileSync(gate, "finish"); res.end("ok"); } },
+      { path: "/__steer", method: "POST", handler: (_req, res) => {
+        void control(["send", "--bot", bot.id, "--text", "Make the annual plan the default"]).then(() => res.end("ok"), (error) => { res.statusCode = 500; res.end(String(error)); });
+      } },
+      { path: "/__skin", method: "GET", handler: (req, res) => {
+        const query = new URL(req.url ?? "", "http://x").searchParams;
+        const skin = JSON.stringify(query.get("s") ?? "midnight");
+        const v3 = JSON.stringify(query.get("v3") ?? "1");
+        res.setHeader("content-type", "text/html");
+        res.end(`<script>localStorage.setItem("omb-skin",${skin});localStorage.setItem("bos-v3-flat-skin",${skin});localStorage.setItem("bos-v3",${v3});location.replace(${JSON.stringify(page)})</script>`);
+      } },
+    ] });
+  const html = await fetch(ui.previewUrl);
+  assert.equal(html.status, 200);
+  console.log(JSON.stringify({ previewUrl: ui.previewUrl, fixtureUrl: fixture.info.url, botId: bot.id,
+    steerUrl: new URL("/__steer", ui.previewUrl).href, finishUrl: new URL("/__finish", ui.previewUrl).href,
+    skinUrl: new URL("/__skin", ui.previewUrl).href }));
+  if (!process.argv.includes("--smoke")) await parkUntilSignal();
+} finally {
+  writeFileSync(gate, "finish");
+  await ui?.close();
+  await fixture.close();
+  rmSync(gate, { force: true });
+}

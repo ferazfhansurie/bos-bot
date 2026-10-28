@@ -27,6 +27,11 @@ struct VoiceCallOverlay: View {
                         ? .asymmetric(insertion: .identity, removal: .opacity)
                         : .scale(scale: 0.1, anchor: .bottomTrailing).combined(with: .opacity))
             }
+            if center.call == nil, let ending = center.ending {
+                VoiceCallSummaryView(ending: ending, center: center)
+                    .id(ending.id)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
             if let incoming = center.incoming {
                 IncomingVoiceCallView(incoming: incoming, center: center)
                     .transition(.move(edge: .top).combined(with: .opacity))
@@ -37,6 +42,7 @@ struct VoiceCallOverlay: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .animation(.easeIn(duration: 0.25), value: center.call?.id)
         .animation(.spring(duration: 0.35), value: center.incoming?.id)
+        .animation(.spring(duration: 0.35), value: center.ending?.id)
     }
 }
 
@@ -225,7 +231,9 @@ private struct VoiceCallFullScreen: View {
         case .reconnecting: return "Reconnecting…"
         case .failed: return "Call failed"
         case .ended: return "Call ended"
-        case .live: return RealtimeVoice.formatDuration(call.elapsed)
+        case .live:
+            if call.recordingMemo { return "recording a memo · \(RealtimeVoice.formatDuration(call.elapsed))" }
+            return RealtimeVoice.formatDuration(call.elapsed)
         }
     }
 
@@ -432,6 +440,21 @@ struct VoiceCallSettingsCard: View {
                     }
                 }
             }
+            divider
+            row("Mic", value: Self.micName(call.settings.mic)) {
+                ForEach(VoiceMic.allCases, id: \.self) { mic in
+                    Button { call.setMic(mic) } label: { checked(Self.micName(mic), call.settings.mic == mic) }
+                }
+            }
+            if let callBack = call.callBack {
+                divider
+                // Work given on a call rings back with its result when it
+                // finishes; off keeps the banner only.
+                row("Call me back", value: callBack ? "When jobs finish" : "Off") {
+                    Button { call.setCallBack(true) } label: { checked("When jobs finish", callBack) }
+                    Button { call.setCallBack(false) } label: { checked("Off", !callBack) }
+                }
+            }
         }
         .background(RoundedRectangle(cornerRadius: 14, style: .continuous)
             .fill(scheme == .dark ? CallColors.card : Color(hex: "#f2f2f7")))
@@ -479,6 +502,14 @@ struct VoiceCallSettingsCard: View {
     static func languageName(_ code: String) -> String {
         if code == VoiceCallSettings.autoLanguage { return "Auto" }
         return Locale(identifier: "en").localizedString(forLanguageCode: code) ?? code
+    }
+
+    /// Phone: the phone's own mic, even in the car. Car: whatever iOS picks.
+    static func micName(_ mic: VoiceMic) -> String {
+        switch mic {
+        case .phone: return "Phone"
+        case .car: return "Car"
+        }
     }
 }
 
@@ -695,6 +726,218 @@ struct VoiceCallEndedRow: View {
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { showingTranscript = false } } }
             }
+        }
+    }
+}
+
+/// The screen a call ends on: how long it ran, what it cost, what's left to
+/// spend, and the jobs it gave out with where each one is now. Jobs still
+/// working are re-read every 5 s for two minutes.
+private struct VoiceCallSummaryView: View {
+    let ending: EndedVoiceCall
+    @ObservedObject var center: VoiceCallCenter
+    @Environment(\.colorScheme) private var scheme
+    @State private var summary: VoiceCallSummary?
+    @State private var failed = false
+
+    private var dark: Bool { scheme == .dark }
+    private var foreground: Color { dark ? .white : .black }
+    private var tile: Color { dark ? CallColors.card : Color.black.opacity(0.05) }
+
+    var body: some View {
+        ZStack {
+            (dark ? Color.black : Color.white).ignoresSafeArea()
+            VStack(spacing: 0) {
+                ScrollView {
+                    VStack(spacing: 20) {
+                        header
+                        money
+                        jobs
+                    }
+                    .padding(.horizontal, 20)
+                    .padding(.top, 24)
+                    .padding(.bottom, 16)
+                }
+                Button { center.dismissEnding() } label: {
+                    Text("Done")
+                        .font(.system(size: 17, weight: .semibold))
+                        .foregroundStyle(dark ? .black : .white)
+                        .frame(maxWidth: .infinity, minHeight: 52)
+                        .background(Capsule().fill(foreground))
+                }
+                .buttonStyle(.plain)
+                .padding(.horizontal, 20)
+                .padding(.bottom, 12)
+            }
+        }
+        .gesture(DragGesture(minimumDistance: 30).onEnded { value in
+            if value.translation.height > 100 { center.dismissEnding() }
+        })
+        .task { await load() }
+    }
+
+    private var header: some View {
+        VStack(spacing: 6) {
+            BotAvatarView(bot: ending.bot, size: 72)
+            Text("call with \(ending.bot.name) ended")
+                .font(.system(size: 17, weight: .semibold))
+                .foregroundStyle(foreground)
+                .lineLimit(1)
+            Text(RealtimeVoice.formatDuration(ending.seconds))
+                .font(.system(size: 13).monospacedDigit())
+                .foregroundStyle(CallColors.secondary)
+        }
+    }
+
+    private var money: some View {
+        HStack(spacing: 10) {
+            stat("this call", summary.map { "≈ " + VoiceCallSummary.rm($0.rm) }, summary.map { "\(VoiceCallSummary.rm($0.rmPerMinute)) a minute" })
+            if let credits = summary?.credits {
+                stat("xai credits left", VoiceCallSummary.usd(cents: credits.remainingCents),
+                     "\(VoiceCallSummary.usd(cents: credits.usedCents)) used")
+            } else {
+                stat("voice this month", summary.map { VoiceCallSummary.rm($0.month.rm) },
+                     summary.map { $0.creditsConfigured ? "credits unreadable right now" : "\($0.month.calls) calls · add an xai management key for credits left" })
+            }
+        }
+    }
+
+    private func stat(_ label: String, _ value: String?, _ hint: String?) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(label)
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(CallColors.secondary)
+            if let value {
+                Text(value)
+                    .font(.system(size: 22, weight: .semibold).monospacedDigit())
+                    .foregroundStyle(foreground)
+                    .minimumScaleFactor(0.7)
+                    .lineLimit(1)
+            } else if failed {
+                Text("—").font(.system(size: 22, weight: .semibold)).foregroundStyle(CallColors.secondary)
+            } else {
+                ProgressView().frame(height: 27)
+            }
+            if let hint {
+                Text(hint)
+                    .font(.system(size: 11))
+                    .foregroundStyle(CallColors.secondary)
+                    .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(14)
+        .background(RoundedRectangle(cornerRadius: 16, style: .continuous).fill(tile))
+    }
+
+    @ViewBuilder
+    private var jobs: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(jobsTitle)
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(CallColors.secondary)
+            if let summary {
+                if summary.jobs.isEmpty {
+                    Text("no jobs on this call")
+                        .font(.system(size: 15))
+                        .foregroundStyle(CallColors.secondary)
+                } else {
+                    ForEach(summary.jobs) { job in jobRow(job) }
+                }
+            } else if failed {
+                Text("couldn't reach the computer. the jobs are in their chats.")
+                    .font(.system(size: 15))
+                    .foregroundStyle(CallColors.secondary)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var jobsTitle: String {
+        guard let summary, !summary.jobs.isEmpty else { return "jobs" }
+        let done = summary.jobs.filter { $0.state == .done }.count
+        return "jobs · \(done) of \(summary.jobs.count) done"
+    }
+
+    private func jobRow(_ job: VoiceCallSummary.Job) -> some View {
+        Button {
+            let session = ending.session
+            center.dismissEnding()
+            Task { await session.openThreadLink(botId: botId(for: job), threadId: job.threadId) }
+        } label: {
+            HStack(alignment: .top, spacing: 12) {
+                badge(job.state)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(job.text)
+                        .font(.system(size: 15, weight: .medium))
+                        .foregroundStyle(foreground)
+                        .lineLimit(2)
+                        .multilineTextAlignment(.leading)
+                    Text(stateLine(job))
+                        .font(.system(size: 12))
+                        .foregroundStyle(CallColors.secondary)
+                    if let last = job.last, !last.isEmpty {
+                        Text(last)
+                            .font(.system(size: 13))
+                            .foregroundStyle(foreground.opacity(0.75))
+                            .lineLimit(3)
+                            .multilineTextAlignment(.leading)
+                    }
+                }
+                Spacer(minLength: 0)
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(CallColors.secondary)
+                    .padding(.top, 4)
+            }
+            .padding(14)
+            .background(RoundedRectangle(cornerRadius: 16, style: .continuous).fill(tile))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func stateLine(_ job: VoiceCallSummary.Job) -> String {
+        switch job.state {
+        case .working: return "\(job.botName) · working"
+        case .needsYou: return "\(job.botName) · needs you"
+        case .done: return "\(job.botName) · done"
+        }
+    }
+
+    @ViewBuilder
+    private func badge(_ state: VoiceCallSummary.Job.State) -> some View {
+        switch state {
+        case .working:
+            ProgressView().controlSize(.small).frame(width: 22, height: 22)
+        case .needsYou:
+            Image(systemName: "exclamationmark.circle.fill")
+                .font(.system(size: 20)).foregroundStyle(.orange).frame(width: 22, height: 22)
+        case .done:
+            Image(systemName: "checkmark.circle.fill")
+                .font(.system(size: 20)).foregroundStyle(.green).frame(width: 22, height: 22)
+        }
+    }
+
+    private func botId(for job: VoiceCallSummary.Job) -> String {
+        job.botId ?? ending.bot.id
+    }
+
+    private func load() async {
+        let request = VoiceCallSummaryRequest(callId: ending.callId, botId: ending.bot.id, seconds: ending.seconds)
+        let until = Date().addingTimeInterval(120)
+        // the end report lands a moment after hang-up; give it that moment
+        try? await Task.sleep(for: .milliseconds(800))
+        while !Task.isCancelled {
+            if let fresh = try? await ending.session.voiceCallSummary(request) {
+                summary = fresh
+                failed = false
+            } else if summary == nil {
+                failed = true
+            }
+            guard summary?.anyWorking == true, Date() < until else { return }
+            try? await Task.sleep(for: .seconds(5))
         }
     }
 }

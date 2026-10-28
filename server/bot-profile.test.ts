@@ -136,6 +136,23 @@ describe("mascotBody", () => {
   });
 });
 
+describe("mascotAccessories", () => {
+  it("accepts one accessory per slot through the paired boundary", () => {
+    const worn = { head: "top-hat", eyes: "round-glasses", mouth: "mustache", neck: "bow-tie" };
+    expect(parseBotProfilePatch({ mascotAccessories: worn } as never, true)).toEqual({ ok: true, patch: { mascotAccessories: worn } });
+  });
+
+  it("reads an empty set as wearing nothing", () => {
+    expect(parseBotProfilePatch({ mascotAccessories: {} } as never)).toEqual({ ok: true, patch: { mascotAccessories: null } });
+    expect(parseBotProfilePatch({ mascotAccessories: null } as never)).toEqual({ ok: true, patch: { mascotAccessories: null } });
+  });
+
+  it("refuses a piece in the wrong slot or an unknown slot", () => {
+    expect(parseBotProfilePatch({ mascotAccessories: { head: "mustache" } } as never).ok).toBe(false);
+    expect(parseBotProfilePatch({ mascotAccessories: { tail: "bow" } } as never).ok).toBe(false);
+  });
+});
+
 describe("soul (standing instructions)", () => {
   it("accepts soul on both the strict and broad boundaries", () => {
     expect(parseBotProfilePatch({ soul: "Be brief." }, true)).toEqual({ ok: true, patch: { soul: "Be brief." } });
