@@ -41,12 +41,25 @@ describe("marketplace catalog", () => {
     expect(bos.price.download).toBeTruthy();
   });
 
+  it("lists cash with his hard lines in the soul, because imported skills arrive disabled", () => {
+    const cash = bundledMarketplace().bots.find((bot) => bot.slug === "cash")!;
+    const pkg = cash.package.package;
+    const soul = pkg.agents[0]!.soul!;
+    expect(soul).toContain("free ad check");
+    expect(soul).toContain("https://meta-ads.mcp.pipeboard.co/");
+    expect(soul).toContain("never pause anything on your own");
+    expect(pkg.skills?.entries.map((skill) => skill.name)).toEqual(["cash-ad-check", "cash-ad-rules"]);
+    expect(pkg.routines?.every((routine) => routine.enabledAfterInstall === false)).toBe(true);
+    expect(pkg.agents[0]!.appearance.color).toBe("#034F2E");
+    expect(cash.price.rent).toBeTruthy();
+  });
+
   it("drops a broken entry without emptying the shelf", () => {
     const catalog = parseMarketplaceCatalog({
       ...bundled,
       bots: [...bundled.bots, { ...bundled.bots[0], slug: "broken", package: { format: "openmaus.package", version: 1, package: {} } }, bundled.bots[0]],
     });
-    expect(catalog.bots.map((bot) => bot.slug)).toEqual(["bos"]);
+    expect(catalog.bots.map((bot) => bot.slug)).toEqual(bundled.bots.map((bot) => bot.slug));
   });
 
   it("rejects a document that is not a catalog", () => {
@@ -113,12 +126,12 @@ describe("publishing", () => {
     expect(entry.package.package.author.name).toBe("BOS Bot");
     expect(entry.avatar).toEqual({ color: "blue", body: "star" });
     const merged = withCatalogEntry(catalog, entry, "2026-10-13");
-    expect(merged.bots.map((bot) => bot.slug)).toEqual(["bos", "closer"]);
+    expect(merged.bots.map((bot) => bot.slug)).toEqual([...bundled.bots.map((bot) => bot.slug), "closer"]);
     expect(withCatalogEntry(merged, { ...entry, tagline: "v2" }, "2026-10-14").bots.at(-1)!.tagline).toBe("v2");
 
     const file = await writePublishedCatalog(dir, merged);
     const reread = parseMarketplaceCatalog(JSON.parse(readFileSync(file, "utf8")));
-    expect(reread.bots.map((bot) => bot.slug)).toEqual(["bos", "closer"]);
+    expect(reread.bots.map((bot) => bot.slug)).toEqual([...bundled.bots.map((bot) => bot.slug), "closer"]);
     expect(reread.updatedAt).toBe("2026-10-13");
   });
 
