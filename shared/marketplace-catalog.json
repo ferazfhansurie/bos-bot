@@ -110,7 +110,7 @@
       "slug": "cash",
       "name": "cash",
       "tagline": "Your ads manager. Reads your Meta ads every day, says what to change, and never spends without your ok.",
-      "summary": "cash runs your Facebook and Instagram ads with you. Send your Facebook page and he checks your public ads and your competitors' ads, with no login. Connect your ad account and he reports each day, drafts new ads and tells you what to change. He only changes an ad or spends after you say ok to that exact change.\n\nSee a free demo first. Send your Facebook page and he shows you what he finds on your own ads.\n\nThen we build him for your business: his instructions, skills, daily report and price are all made to fit. We connect your ad account, set your stop rules and write your first ads with you, then keep him running.\n\nOr download this base version free and set him up yourself. You need a Claude plan, because the free BOS AI can't use the computer. Your computer must be on for the daily report.",
+      "summary": "cash runs your Facebook and Instagram ads with you. Send your Facebook page and he checks your public ads and your competitors' ads, with no login. Connect your ad account and he reports each day, drafts new ads and tells you what to change. He only changes an ad or spends after you say ok to that exact change.\n\nRent him and we build him for your business: his instructions, skills, daily report and price are all made to fit. We connect your ad account, set your stop rules and write your first ads with you, then keep him running.\n\nWant to see him on your own ads first? Ask for a demo in your request.\n\nOr download this base version free and set him up yourself. You need a Claude plan, because the free BOS AI can't use the computer. Your computer must be on for the daily report.",
       "category": "Ads",
       "avatar": {
         "color": "#034F2E",
@@ -118,9 +118,9 @@
       },
       "price": {
         "download": "Free",
-        "rent": "Custom, free demo first"
+        "rent": "Custom, demo on request"
       },
-      "terms": "Download: free for your own business; you can edit his instructions and skills. You pay for your own Claude plan, any Pipeboard plan and your ad spend. Rent: here this means a free demo, then we build cash for your business and keep him running. Add your Facebook page to the request. The price and scope are agreed by email before anything is charged. Your ad spend is separate and stays on your account. No result is promised.",
+      "terms": "Download: free for your own business; you can edit his instructions and skills. You pay for your own Claude plan, any Pipeboard plan and your ad spend. Rent: here this means we build cash for your business and keep him running. A demo is available if you ask for one. Add your Facebook page to the request. The price and scope are agreed by email before anything is charged. Your ad spend is separate and stays on your account. No result is promised.",
       "model": {
         "driverKind": "claude",
         "model": "claude-sonnet-5-5"
