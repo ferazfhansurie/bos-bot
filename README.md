@@ -4,6 +4,8 @@
 
 **Your own AI team in a group chat. Open source, any model, runs on your own computer.**
 
+BOS Bot ([bosbot.my](https://bosbot.my)) gives non-technical business owners named AI staff that answer WhatsApp, run ads and follow up leads, [on the ChatGPT or Claude plan they already pay for](https://bosbot.my/use-your-chatgpt-or-claude-plan/). Not the Bitcoin Lightning bosbot.
+
 ![TypeScript](https://img.shields.io/badge/TypeScript-strict-3178C6?logo=typescript&logoColor=white)
 ![Electron](https://img.shields.io/badge/Electron-macOS%20%C2%B7%20Windows%20%C2%B7%20Ubuntu-2B2E3A?logo=electron&logoColor=9FEAF9)
 ![Agents](https://img.shields.io/badge/agents-Claude%20·%20Codex%20·%20Grok-d97757)
