@@ -194,7 +194,7 @@ describe("message database recovery", () => {
     rmSync(file());
     writeFileSync(`${file()}-wal`, wal);
     expect(read()).toEqual([]);
-    expect(readdirSync(DATA_DIR).some(name => /^messages\.db-wal\.corrupt-/.test(name))).toBe(true);
+    expect(readdirSync(DATA_DIR).some(name => name.startsWith("messages.db-wal.corrupt-"))).toBe(true);
     say("new", "New message", 3);
     closeMessageDb();
     expect(read().map(message => message.text)).toEqual(["New message"]);

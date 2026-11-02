@@ -14,7 +14,7 @@ ipcMain.handle('desktop:skin',()=>true);
 ipcMain.handle('remote-full:status',()=>({enabled:false,targets:[]}));
 ipcMain.handle('primary-browser:action',()=>false);
 const headers={'x-openmausbot-desktop-owner':token,origin:serverURL,'content-type':'application/json'};
-const call=async(method,url,body)=>{const r=await fetch(serverURL+url,{method,headers,body:body?JSON.stringify(body):undefined});const j=await r.json().catch(()=>({}));if(!r.ok)throw new Error(`${method} ${url} ${r.status} ${JSON.stringify(j)}`);return j;};
+const call=async(method,url,body)=>{const init={method,headers};if(body)init.body=JSON.stringify(body);const r=await fetch(serverURL+url,init);const j=await r.json().catch(()=>({}));if(!r.ok)throw new Error(`${method} ${url} ${r.status} ${JSON.stringify(j)}`);return j;};
 const current=async()=>{const j=await call('GET','/api/bots');const b=(j.bots??j).find(b=>b.id===botId);return b.threadId;};
 const folder=async threadId=>(await call('GET',`/api/workspace-files/list?${new URLSearchParams({botId,threadId,path:'.'})}`)).root;
 const page=(title,body)=>`<!doctype html><html><head><title>${title}</title></head><body style="font:32px system-ui;padding:40px"><h1 data-pin-check>${body}</h1></body></html>`;

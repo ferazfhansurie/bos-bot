@@ -30,7 +30,7 @@ const ask = async (
   path: string,
   init: { method?: string; origin?: string | null; token?: string | null; headers?: Record<string, string>; body?: string } = {},
 ) => {
-  const headers: Record<string, string> = { ...(init.headers ?? {}) };
+  const headers: Record<string, string> = { ...init.headers };
   if (init.origin !== null) headers.origin = init.origin ?? WEB_COMPANION_ORIGIN;
   if (init.token !== null) headers.authorization = `Bearer ${init.token ?? TOKEN}`;
   if (init.body !== undefined) headers["content-type"] = "application/json";

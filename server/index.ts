@@ -1054,7 +1054,7 @@ function messageMember(auth: RequestAuth): TurnMember | undefined {
 /** One line before the member's text so a shared bot knows who is talking. */
 function memberLine(member: TurnMember | undefined): string {
   if (!member) return "";
-  const clean = (value: string) => value.replace(/[\[\]\r\n]/g, " ").trim().slice(0, 160);
+  const clean = (value: string) => value.replace(/[[\]\r\n]/g, " ").trim().slice(0, 160);
   const who = [member.name && clean(member.name), member.email && `(${clean(member.email)})`].filter(Boolean).join(" ") || clean(member.userId);
   const roles = member.roles?.length ? ` · roles: ${member.roles.map(clean).join(", ")}` : "";
   return `[sent by ${who}${roles}]\n`;

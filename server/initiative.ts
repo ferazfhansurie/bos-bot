@@ -146,7 +146,7 @@ export function recordKindAnswer(
   answer: "yes" | "no" | "ignored",
   now: number,
 ): NudgeLedger {
-  const kinds = { ...(ledger.kinds ?? {}) };
+  const kinds = { ...ledger.kinds };
   const current: KindLedger = { ...(kinds[kind] ?? { no: 0 }) };
   if (current.mutedUntil != null && now >= current.mutedUntil) delete current.mutedUntil;
   if (answer === "yes") current.no = 0;

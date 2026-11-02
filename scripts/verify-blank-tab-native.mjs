@@ -6,7 +6,7 @@ const root=fileURLToPath(new URL('..',import.meta.url));
 const { app, BrowserWindow, session, ipcMain } = await import('electron');
 process.on('uncaughtException', error => { console.error('fixture uncaught error:', error.stack || error); app.exit(1); });
 process.on('unhandledRejection', error => { console.error('fixture unhandled rejection:', error?.stack || error); app.exit(1); });
-const [uiURL, data, output, serverURL, promptsFile] = process.argv.slice(2);
+const [uiURL, data, output, serverURL] = process.argv.slice(2);
 const token='wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww';
 fs.mkdirSync(output,{recursive:true});
 app.setPath('userData', path.join(data, 'electron')); app.setPath('sessionData', path.join(data, 'electron')); app.commandLine.appendSwitch('disable-background-networking'); app.dock?.hide();

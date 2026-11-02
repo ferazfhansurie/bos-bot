@@ -6,7 +6,7 @@ import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 export function desktopFeedVersion(text) {
-  const lines = text.replace(/^\uFEFF/, '').split(/\r?\n/).filter(line => /^version:/.test(line));
+  const lines = text.replace(/^\uFEFF/, '').split(/\r?\n/).filter(line => line.startsWith('version:'));
   assert.equal(lines.length, 1, 'feed must contain exactly one top-level version');
   const match = lines[0].match(/^version:\s*(?:"(\d+\.\d+\.\d+)"|'(\d+\.\d+\.\d+)'|(\d+\.\d+\.\d+))\s*(?:#.*)?$/);
   assert.ok(match, 'feed version must be a stable semantic version');

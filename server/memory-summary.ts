@@ -52,8 +52,8 @@ export function memoryEntries(raw: string): string[] {
   const entries: string[] = [];
   let fence = false;
   for (const line of raw.split("\n")) {
-    if (!fence && /^- /.test(line)) entries.push(line);
-    else if (entries.length && (fence || (line.trim() && !/^#/.test(line)))) entries[entries.length - 1] += `\n${line}`;
+    if (!fence && line.startsWith("- ")) entries.push(line);
+    else if (entries.length && (fence || (line.trim() && !line.startsWith("#")))) entries[entries.length - 1] += `\n${line}`;
     if ((line.match(/```/g)?.length ?? 0) % 2 === 1) fence = !fence;
   }
   return entries.map((e) => e.replace(/\s+$/, "")).filter((e) => e.length > 2 && !STRUCK.test(e));

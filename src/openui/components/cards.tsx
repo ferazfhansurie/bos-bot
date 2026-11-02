@@ -350,7 +350,7 @@ export const Steps = defineComponent({
 export function amountOf(value: unknown): number | null {
   if (typeof value === "number") return Number.isFinite(value) ? value : null;
   if (typeof value !== "string") return null;
-  const cleaned = value.replace(/[^\d.\-]/g, "");
+  const cleaned = value.replace(/[^\d.-]/g, "");
   if (!/\d/.test(cleaned)) return null;
   const n = Number(cleaned);
   return Number.isFinite(n) ? n : null;

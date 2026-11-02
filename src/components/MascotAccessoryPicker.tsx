@@ -21,7 +21,7 @@ const SLOT_LABEL = {
 } satisfies Record<MascotAccessorySlot, string>;
 
 function wearing(current: MascotAccessories | null, slot: MascotAccessorySlot, id: string | null): MascotAccessories | null {
-  const next: Record<string, string> = { ...(current ?? {}) };
+  const next: Record<string, string> = { ...current };
   if (id) next[slot] = id;
   else delete next[slot];
   return botMascotAccessories(next);

@@ -119,7 +119,7 @@ describe("Chat MCP session", () => {
     const anonymous = await mountChatTools({ custom: { audit: server } }, f.controller.signal);
     sessions.push(anonymous);
     expect((await anonymous.execute("audit_write", { value: "x" }, f.controller.signal)).text).toBe("undefined");
-    expect((f.read().calls.at(-1)?.params as { _meta?: unknown })._meta).toBeUndefined();
+    expect((f.read().calls.at(-1)!.params as { _meta?: unknown })._meta).toBeUndefined();
   });
 
   it("discovers without executing, preserves schemas and validates before forwarding original arguments", async () => {

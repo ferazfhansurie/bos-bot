@@ -56,7 +56,7 @@ it("starts a new thread for every run, hidden while it works and shown once it h
     const currentBot = async () => (await api("GET", "/api/bots")).bots.find((candidate: any) => candidate.id === bot.id);
     const savedBot = await currentBot();
     expect(savedBot.threadId).toBe(originalThread);
-    expect(savedBot.tasks.some((task: any) => /· Results$/.test(task.title))).toBe(false);
+    expect(savedBot.tasks.some((task: any) => task.title?.endsWith("· Results"))).toBe(false);
     // the main chat plus one thread per run
     expect(savedBot.tasks.filter((task: any) => !task.routineRunId)).toHaveLength(3);
     for (const run of completed) expect(savedBot.tasks.find((task: any) => task.threadId === run.threadId))

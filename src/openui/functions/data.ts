@@ -196,7 +196,7 @@ export const Histogram = defineFunction({
     if (hi <= lo) hi = lo + 1;
     const width = (hi - lo) / n;
     const decimals = Math.max(0, 1 - Math.floor(Math.log10(width)));
-    const counts = new Array<number>(n).fill(0);
+    const counts = Array.from({ length: n }, () => 0);
     for (const v of values) {
       if (v < lo || v > hi) continue;
       counts[Math.min(n - 1, Math.floor((v - lo) / width))]!++;
