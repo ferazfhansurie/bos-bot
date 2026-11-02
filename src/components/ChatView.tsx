@@ -2217,7 +2217,7 @@ export function ChatView({ bot: profile, shared }: { bot: Bot; shared?: SharedCh
       {/* the live island lives in the header's name pill now, not here */}
       {alive && <PointingMascot bot={bot} target={pointAt} caption={teach?.caption} onDismiss={teach ? dismissTeach : undefined} />}
       {v3 && <WalkHomeLayer />}
-      {fastStart && <FastStart key={bot.threadId} variant="chat" />}
+      {fastStart && <FastStart key={`faststart:${bot.threadId}`} variant="chat" />}
       {/* the composer never folds into the island: firaz wants to keep
           typing while it works, with the status on top (the composer has stop) */}
       {composer}
