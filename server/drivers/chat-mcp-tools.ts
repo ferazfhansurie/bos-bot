@@ -206,6 +206,11 @@ const validatorOptions = {
   // or describe an open tuple. Ajv still enforces every constraint.
   strictRequired: false, strictTypes: false, strictTuples: false,
 };
+const INTEGER_FORMATS: Array<[string, number, number]> = [
+  ["int8", -128, 127], ["uint8", 0, 255], ["int16", -32768, 32767], ["uint16", 0, 65535],
+  ["uint32", 0, 4294967295], ["uint64", 0, Number.MAX_SAFE_INTEGER], // int32/int64 come from ajv-formats
+  ["uint", 0, Number.MAX_SAFE_INTEGER],
+];
 function compileSchema(schema: Record<string, unknown>): ValidateFunction {
   const dialect = schema.$schema;
   if (dialect !== undefined && dialect !== "http://json-schema.org/draft-07/schema#" && dialect !== "https://json-schema.org/draft/2020-12/schema") {
@@ -218,6 +223,12 @@ function compileSchema(schema: Record<string, unknown>): ValidateFunction {
   // ajv-formats is CommonJS and exports the plugin as both module.exports
   // and .default; the latter also matches its NodeNext declaration.
   formats.default(compiler);
+  // Rust (schemars) and OpenAPI servers tag integers with these width formats;
+  // cua-driver's computer tools use uint32. Enforce the real range instead of
+  // refusing the whole schema, which failed every api-key turn with a computer.
+  for (const [name, min, max] of INTEGER_FORMATS) {
+    compiler.addFormat(name, { type: "number", validate: (n: number) => Number.isInteger(n) && n >= min && n <= max });
+  }
   try { return compiler.compile(schema); }
   catch { throw new Error("MCP tool schema could not be validated; check its constraints, formats, and references"); }
 }

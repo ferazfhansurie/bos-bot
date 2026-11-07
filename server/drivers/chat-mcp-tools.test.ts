@@ -321,6 +321,14 @@ describe("Chat MCP schema validation", () => {
     expect(() => session.validate("audit_write", {value:invalid})).toThrow("input schema");
   });
 
+  it("accepts integer width formats like cua-driver's uint32 and enforces the range", async () => {
+    const f = fixture("", {type:"object",properties:{pid:{type:"integer",format:"uint32",minimum:0}},required:["pid"]});
+    const session = await f.mount();
+    expect(() => session.validate("audit_write", {pid:4242})).not.toThrow();
+    expect(() => session.validate("audit_write", {pid:4294967296})).toThrow("input schema");
+    expect(() => session.validate("audit_write", {pid:1.5})).toThrow("input schema");
+  });
+
   it.each([
     { type: "object", properties: {value:{type:"string",format:"unregistered-format"}} },
     { type: "object", properties: {value:{$ref:"https://example.invalid/private-schema"}} },
