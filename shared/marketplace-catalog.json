@@ -23,7 +23,8 @@
         "rent": "Priced per request",
         "monthly": {
           "amount": 99,
-          "currency": "MYR"
+          "currency": "MYR",
+          "checkoutUrl": "https://buy.stripe.com/fZuaEY9eg8yD5pcaCv67S08"
         }
       },
       "terms": "Download: free for your own business; you can edit its instructions and skills. Rent: firaz runs and tunes bos for you on BOS-managed models; the price and scope are agreed by email before anything is charged.",
@@ -322,7 +323,8 @@
         "rent": "Custom, demo on request",
         "monthly": {
           "amount": 49,
-          "currency": "MYR"
+          "currency": "MYR",
+          "checkoutUrl": "https://buy.stripe.com/28EaEY2PSdSX18W11V67S09"
         }
       },
       "terms": "Download: free for your own business; you can edit his instructions and skills. You pay for your own Claude plan, any Pipeboard plan and your ad spend. Rent: here this means we build cash for your business and keep him running. A demo is available if you ask for one. Add your Facebook page to the request. The price and scope are agreed by email before anything is charged. Your ad spend is separate and stays on your account. No result is promised.",
