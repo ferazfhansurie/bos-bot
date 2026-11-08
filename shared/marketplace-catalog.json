@@ -6,7 +6,7 @@
     "contact": "ferazfhansurie@gmail.com",
     "url": "https://github.com/ferazfhansurie/bos-bot"
   },
-  "updatedAt": "2026-11-01",
+  "updatedAt": "2026-11-08",
   "bots": [
     {
       "slug": "bos",
@@ -20,7 +20,11 @@
       },
       "price": {
         "download": "Free",
-        "rent": "Priced per request"
+        "rent": "Priced per request",
+        "monthly": {
+          "amount": 99,
+          "currency": "MYR"
+        }
       },
       "terms": "Download: free for your own business; you can edit its instructions and skills. Rent: firaz runs and tunes bos for you on BOS-managed models; the price and scope are agreed by email before anything is charged.",
       "model": {
@@ -104,6 +108,203 @@
             ]
           }
         }
+      },
+      "profile": {
+        "cover": {
+          "from": "#2b3a8f",
+          "to": "#0e1016"
+        },
+        "stats": [
+          {
+            "label": "builds shipped",
+            "value": "9"
+          },
+          {
+            "label": "live on servers",
+            "value": "7"
+          },
+          {
+            "label": "skills",
+            "value": "13"
+          }
+        ],
+        "ledgerTitle": "built",
+        "ledger": [
+          {
+            "id": "bos-bot-3",
+            "date": "2026-11",
+            "title": "bos bot 3.0 desktop app",
+            "business": "ai team software, our own product",
+            "outcome": "free desktop ai team on the person's own claude or chatgpt login, with google and whatsapp sign-in; shipped for mac and windows",
+            "proof": {
+              "kind": "link",
+              "url": "https://bosbot.my"
+            },
+            "source": {
+              "kind": "commit",
+              "ref": "v3.0.1-mac"
+            },
+            "verified": true,
+            "skills": [
+              "custom-dmg",
+              "done-check"
+            ]
+          },
+          {
+            "id": "hosted-workspaces",
+            "date": "2026-11",
+            "title": "hosted bos workspaces",
+            "business": "small businesses and solo operators, malaysia",
+            "outcome": "each customer gets an isolated bos server with its own https address; one paying rm90/mo done-for-you client was live within 24h",
+            "proof": {
+              "kind": "metric",
+              "metric": "3 hosted workspaces running"
+            },
+            "source": {
+              "kind": "deploy",
+              "ref": "babajas-bos.service"
+            },
+            "verified": true,
+            "skills": [
+              "client-bot-fix"
+            ]
+          },
+          {
+            "id": "clinic-crm-booking",
+            "date": "2026-10",
+            "title": "clinic crm with whatsapp booking ai",
+            "business": "aesthetic clinic, klang valley",
+            "outcome": "a whatsapp ai consultant answers treatment questions, offers a consult, takes day, time and name, then books the lead into the crm",
+            "proof": {
+              "kind": "metric",
+              "metric": "36 treatments, 5 lead stages"
+            },
+            "source": {
+              "kind": "commit",
+              "ref": "48a53e7"
+            },
+            "verified": true,
+            "skills": [
+              "client-bot-fix"
+            ]
+          },
+          {
+            "id": "training-crm-staff-bot",
+            "date": "2026-10",
+            "title": "staff ai inside a training centre crm",
+            "business": "engineering training centre, malaysia",
+            "outcome": "staff ask the crm's bot about leads and it only changes records after a staff member taps approve; imported years of old whatsapp history onto the leads",
+            "proof": {
+              "kind": "metric",
+              "metric": "41,733 messages imported onto 3,958 leads"
+            },
+            "source": {
+              "kind": "deploy",
+              "ref": "crm staff bot"
+            },
+            "verified": false,
+            "skills": [
+              "client-bot-fix",
+              "data-case"
+            ]
+          },
+          {
+            "id": "settle-ai",
+            "date": "2026-10",
+            "title": "settle ai site and public sales bot",
+            "business": "ai consultancy, co-owned, malaysia",
+            "outcome": "the hero is a live ask box into a public bot that answers visitors, draws charts in its replies and emails each lead",
+            "proof": {
+              "kind": "link",
+              "url": "https://aihlete.com/settle"
+            },
+            "source": {
+              "kind": "deploy",
+              "ref": "settle-bot-gateway"
+            },
+            "verified": true
+          },
+          {
+            "id": "free-web-bos",
+            "date": "2026-10",
+            "title": "free bos in the browser",
+            "business": "ai team software, our own product",
+            "outcome": "sign up on the web and get a cloud machine running codex on your own free chatgpt login, claimed instantly from a warm pool",
+            "proof": {
+              "kind": "link",
+              "url": "https://bosbot.my/free/"
+            },
+            "source": {
+              "kind": "commit",
+              "ref": "3c97e72"
+            },
+            "verified": true
+          },
+          {
+            "id": "bos-web",
+            "date": "2026-10",
+            "title": "bos web chat and phone link",
+            "business": "ai team software, our own product",
+            "outcome": "web chat with bos bots, login by email or whatsapp code, plus a phone page that pairs with your own desktop bos",
+            "proof": {
+              "kind": "link",
+              "url": "https://app.bosbot.my"
+            },
+            "source": {
+              "kind": "deploy",
+              "ref": "bos-web"
+            },
+            "verified": true
+          },
+          {
+            "id": "bridal-admin-ai",
+            "date": "2026-10",
+            "title": "bridal studio admin ai",
+            "business": "bridal studio, malaysia",
+            "outcome": "read-only admin ai over bookings, payments and packages inside the studio's existing site; telegram voice notes transcribed on our own machine",
+            "proof": {
+              "kind": "metric",
+              "metric": "about 20s per voice note, no cloud"
+            },
+            "source": {
+              "kind": "deploy",
+              "ref": "senira-bot-gateway"
+            },
+            "verified": true,
+            "skills": [
+              "client-bot-fix"
+            ]
+          },
+          {
+            "id": "agency-finance-chat",
+            "date": "2026-10",
+            "title": "finance chat in an agency dashboard",
+            "business": "influencer marketing agency, malaysia",
+            "outcome": "admin-only chat that answers spend and payment questions from a read-only database role, as stat cards, tables and charts",
+            "proof": {
+              "kind": "metric",
+              "metric": "read-only role, admin only"
+            },
+            "source": {
+              "kind": "deploy",
+              "ref": "alist-bos-crm-gateway"
+            },
+            "verified": true,
+            "skills": [
+              "data-case"
+            ]
+          }
+        ],
+        "pinned": [
+          "bos-bot-3",
+          "clinic-crm-booking",
+          "settle-ai"
+        ],
+        "pack": {
+          "version": "1.0.0",
+          "updatedAt": "2026-11-08",
+          "notes": "skills and playbooks learned from the builds above. client code and data never ship."
+        }
       }
     },
     {
@@ -118,7 +319,11 @@
       },
       "price": {
         "download": "Free",
-        "rent": "Custom, demo on request"
+        "rent": "Custom, demo on request",
+        "monthly": {
+          "amount": 49,
+          "currency": "MYR"
+        }
       },
       "terms": "Download: free for your own business; you can edit his instructions and skills. You pay for your own Claude plan, any Pipeboard plan and your ad spend. Rent: here this means we build cash for your business and keep him running. A demo is available if you ask for one. Add your Facebook page to the request. The price and scope are agreed by email before anything is charged. Your ad spend is separate and stays on your account. No result is promised.",
       "model": {
@@ -250,6 +455,200 @@
               "output": "made-up example, not a real result.\n\nnot yet. 2 leads is too few to judge, and neither has bought.\nmy pick: stay at rm40 a day until 10 leads, then look at sales.\nif you still want to raise it, tell me the exact daily amount and i'll show you the change first."
             }
           ]
+        }
+      },
+      "profile": {
+        "cover": {
+          "from": "#0b5a36",
+          "to": "#0e1612"
+        },
+        "stats": [
+          {
+            "label": "ad spend run",
+            "value": "rm906"
+          },
+          {
+            "label": "leads",
+            "value": "32"
+          },
+          {
+            "label": "sales",
+            "value": "1"
+          },
+          {
+            "label": "campaigns",
+            "value": "5"
+          }
+        ],
+        "ledgerTitle": "ads run",
+        "ledger": [
+          {
+            "id": "ai-team-rm299",
+            "date": "2026-10",
+            "title": "ai team rm299: 5 questions",
+            "business": "our own product, bos bot team plan",
+            "outcome": "lead ad for the paid team plan. leads came in, but only 3 reached checkout and 1 bought, so the drop is at the price step, not the ad",
+            "proof": {
+              "kind": "metric",
+              "metric": "rm567.67 spent, 1 sale (rm90)"
+            },
+            "source": {
+              "kind": "ads",
+              "ref": "120254392906070754"
+            },
+            "verified": true,
+            "numbers": [
+              {
+                "label": "spent",
+                "value": "rm567.67"
+              },
+              {
+                "label": "reach",
+                "value": "6,216"
+              },
+              {
+                "label": "leads",
+                "value": "16 at rm35.48"
+              },
+              {
+                "label": "checkouts",
+                "value": "3"
+              },
+              {
+                "label": "sales",
+                "value": "1 (rm90)"
+              }
+            ]
+          },
+          {
+            "id": "free-setup-ad-e",
+            "date": "2026-10",
+            "title": "bos bot free setup: ad e",
+            "business": "our own product, free bos bot setup",
+            "outcome": "the best lead cost of the four real tests: 11 leads and 8 sign-ups",
+            "proof": {
+              "kind": "metric",
+              "metric": "11 leads at rm21.57"
+            },
+            "source": {
+              "kind": "ads",
+              "ref": "120254162878160754"
+            },
+            "verified": true,
+            "numbers": [
+              {
+                "label": "spent",
+                "value": "rm237.28"
+              },
+              {
+                "label": "reach",
+                "value": "4,673"
+              },
+              {
+                "label": "leads",
+                "value": "11 at rm21.57"
+              },
+              {
+                "label": "sign-ups",
+                "value": "8 at rm29.66"
+              }
+            ]
+          },
+          {
+            "id": "free-ad-check",
+            "date": "2026-11",
+            "title": "cash: free ad check",
+            "business": "our own product, cash ads manager",
+            "outcome": "offer: a free check of your public ads. cheapest leads so far, few turned into sign-ups",
+            "proof": {
+              "kind": "metric",
+              "metric": "5 leads at rm19.30"
+            },
+            "source": {
+              "kind": "ads",
+              "ref": "120254372252370754"
+            },
+            "verified": true,
+            "numbers": [
+              {
+                "label": "spent",
+                "value": "rm96.52"
+              },
+              {
+                "label": "reach",
+                "value": "1,796"
+              },
+              {
+                "label": "leads",
+                "value": "5 at rm19.30"
+              },
+              {
+                "label": "sign-ups",
+                "value": "1"
+              }
+            ]
+          },
+          {
+            "id": "ad-f-hooks",
+            "date": "2026-10",
+            "title": "bos bot free: ad f hooks",
+            "business": "our own product, free bos bot",
+            "outcome": "landing page view test, stopped early after a few ringgit",
+            "proof": {
+              "kind": "metric",
+              "metric": "10 page views at rm0.37"
+            },
+            "source": {
+              "kind": "ads",
+              "ref": "120254175955780754"
+            },
+            "verified": true,
+            "numbers": [
+              {
+                "label": "spent",
+                "value": "rm3.69"
+              },
+              {
+                "label": "page views",
+                "value": "10"
+              }
+            ]
+          },
+          {
+            "id": "tracking-test",
+            "date": "2026-10",
+            "title": "first tracking test",
+            "business": "our own product",
+            "outcome": "a cents-sized test to check clicks and page views were counted before real spend",
+            "proof": {
+              "kind": "metric",
+              "metric": "40 clicks for rm0.72"
+            },
+            "source": {
+              "kind": "ads",
+              "ref": "120254071312270754"
+            },
+            "verified": true,
+            "numbers": [
+              {
+                "label": "spent",
+                "value": "rm0.72"
+              },
+              {
+                "label": "clicks",
+                "value": "40"
+              }
+            ]
+          }
+        ],
+        "pinned": [
+          "ai-team-rm299",
+          "free-setup-ad-e"
+        ],
+        "pack": {
+          "version": "1.0.0",
+          "updatedAt": "2026-11-08",
+          "notes": "every number here comes from meta through pipeboard, wins and losses both."
         }
       }
     }
